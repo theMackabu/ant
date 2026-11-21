@@ -625,7 +625,7 @@ static inline ant_value_t object_test_integrity(ant_t *js, ant_value_t obj, ant_
   uint16_t flags = ptr->flags.raw;
   uint16_t settled = frozen ? ANT_OBJECT_FLAG_FROZEN : ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED;
   
-  if (flags & settled) return Ant_Value_True;
+  if (flags & settled) return Ant_Value_FromBool(!ant_array_is_shared(ptr));
   if ((flags & (ANT_OBJECT_FLAG_SEALED | ANT_OBJECT_FLAG_EXTENSIBLE)) == ANT_OBJECT_FLAG_EXTENSIBLE) return Ant_Value_False;
   
   return object_scan_integrity(js, obj, frozen);
@@ -663,6 +663,7 @@ ant_value_t builtin_object_freeze(ant_params_t) {
       ant_shape_set_attrs_interned(js, ptr->shape, key, attrs);
     } else ant_shape_set_attrs_symbol(js, ptr->shape, prop->key.sym_off, attrs);
   }
+  if (!Ant_Array_Unshare(js, ptr)) return js_mkerr(js, "oom");
   
   ptr->flags.frozen = 1;
   ptr->flags.sealed = 1;
@@ -704,6 +705,7 @@ static ant_value_t builtin_object_seal(ant_params_t) {
   ant_object_t *ptr = js_obj_ptr(as_obj);
   if (!ptr || !ptr->shape) return obj;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
+  if (!Ant_Array_Unshare(js, ptr)) return js_mkerr(js, "oom");
   
   ptr->flags.sealed = 1;
   ptr->flags.extensible = 0;
@@ -953,8 +955,8 @@ static ant_value_t object_get_own_property_descriptor_keyed(
   } else if (has_arr_index) {
     prop_val = arr_index_val;
     ant_object_t *arr_ptr = js_obj_ptr(as_obj);
-    if (arr_ptr && (arr_ptr->flags.frozen || arr_ptr->flags.sealed)) configurable = false;
-    if (arr_ptr && arr_ptr->flags.frozen) writable = false;
+    if (arr_ptr && ant_object_is_sealed_or_frozen(arr_ptr)) configurable = false;
+    if (arr_ptr && ant_object_is_frozen(arr_ptr)) writable = false;
   } else if (is_arr_length) {
     prop_val = Ant_Value_FromNumber((double)get_array_length(js, as_obj));
     writable = !array_length_readonly(js, as_obj);
@@ -1022,10 +1024,10 @@ static ant_value_t builtin_object_getOwnPropertyNames(ant_params_t) {
     for (ant_offset_t i = 0; i < slen; i++) {
       char idxstr[16];
       size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
-      arr_set(js, arr, idx++, js_mkstr(js, idxstr, idxlen));
+      arr_set_owned(js, arr, idx++, js_mkstr(js, idxstr, idxlen));
     }
     
-    arr_set(js, arr, idx++, js->length_str);
+    arr_set_owned(js, arr, idx++, js->length_str);
     return mkval(kTypeArray, vdata(arr));
   }
 
@@ -1037,10 +1039,10 @@ static ant_value_t builtin_object_getOwnPropertyNames(ant_params_t) {
   if (vtype(obj) == kTypeBuiltin) {
     ant_value_t arr = Ant_Array_Create(js);
     ant_offset_t idx = 0;
-    arr_set(js, arr, idx++, js->length_str);
+    arr_set_owned(js, arr, idx++, js->length_str);
     
-    if (vtype(js_cfunc_name_value(js, obj)) == kTypeString) arr_set(js, arr, idx++, Ant_String_FromLiteral(js, "name"));
-    if (js_cfunc_has_prototype(obj)) arr_set(js, arr, idx++, Ant_String_FromLiteral(js, "prototype"));
+    if (vtype(js_cfunc_name_value(js, obj)) == kTypeString) arr_set_owned(js, arr, idx++, Ant_String_FromLiteral(js, "name"));
+    if (js_cfunc_has_prototype(obj)) arr_set_owned(js, arr, idx++, Ant_String_FromLiteral(js, "prototype"));
     
     return mkval(kTypeArray, vdata(arr));
   }
@@ -1068,7 +1070,7 @@ static ant_value_t builtin_object_getOwnPropertyNames(ant_params_t) {
     if (is_empty_slot(v)) continue;
     
     char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-    arr_set(js, arr, idx++, js_mkstr(js, idxstr, idxlen));
+    arr_set_owned(js, arr, idx++, js_mkstr(js, idxstr, idxlen));
   }}
   
   uint32_t count = ant_shape_count(ptr->shape);
@@ -1079,10 +1081,10 @@ static ant_value_t builtin_object_getOwnPropertyNames(ant_params_t) {
     ant_offset_t klen = (ant_offset_t)intern_length(key);
 
     if (is_arr_obj && own_prop_names_is_dense_shadow(js, obj, key, klen)) continue;
-    arr_set(js, arr, idx++, js_mkstr(js, key, (size_t)klen));
+    arr_set_owned(js, arr, idx++, js_mkstr(js, key, (size_t)klen));
   }
   
-  if (is_arr_obj && !ptr->flags.arguments_object) arr_set(js, arr, idx++, js->length_str);
+  if (is_arr_obj && !ptr->flags.arguments_object) arr_set_owned(js, arr, idx++, js->length_str);
   return mkval(kTypeArray, vdata(arr));
 }
 
@@ -1128,7 +1130,7 @@ static ant_value_t builtin_object_getOwnPropertySymbols(ant_params_t) {
   for (uint32_t i = 0; i < count; i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
     if (!prop || prop->type != ANT_SHAPE_KEY_SYMBOL) continue;
-    arr_set(js, arr, idx++, mkval(kTypeSymbol, prop->key.sym_off));
+    arr_set_owned(js, arr, idx++, mkval(kTypeSymbol, prop->key.sym_off));
   }
 
   return mkval(kTypeArray, vdata(arr));
@@ -1208,8 +1210,6 @@ static ant_value_t builtin_object_isExtensible(ant_params_t) {
   
   ant_object_t *ptr = js_obj_ptr(as_obj);
   if (!ptr) return Ant_Value_True;
-  if (ptr->flags.frozen || ptr->flags.sealed) return Ant_Value_False;
-  
   return Ant_Value_FromBool(ptr->flags.extensible);
 }
 
@@ -1237,6 +1237,7 @@ static ant_value_t builtin_object_preventExtensions(ant_params_t) {
   }
   
   ant_object_t *ptr = js_obj_ptr(as_obj);
+  if (!Ant_Array_UnshareValue(js, as_obj)) return js_mkerr(js, "oom");
   if (ptr) ptr->flags.extensible = 0;
   return obj;
 }

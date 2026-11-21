@@ -143,7 +143,8 @@ static bool pass_is_defined_before(const pass_definitions_t *definitions, ir_nod
 
 static uint32_t pass_branch_input_reprs(ir_condition_t condition, opt_repr_t *reprs) {
   switch (condition.kind) {
-    case IR_COND_GLOBAL_EVAL_INTACT: return 0;
+    case IR_COND_GLOBAL_EVAL_INTACT:
+    case IR_COND_ARRAY_ITERATION_INTACT: return 0;
     case IR_COND_BOOL: reprs[0] = OPT_REPR_BOOL; return 1;
     case IR_COND_INT32:
     case IR_COND_INDEX_IN_BOUNDS: reprs[0] = reprs[1] = OPT_REPR_INT32; return 2;
@@ -167,6 +168,7 @@ static uint32_t pass_branch_input_reprs(ir_condition_t condition, opt_repr_t *re
     case IR_COND_ASCII_STRING:
     case IR_COND_MAGICAL_LENGTH:
     case IR_COND_EXTENSIBLE:
+    case IR_COND_NO_SIDECAR:
     case IR_COND_ARRAY_ITERATOR:
     case IR_COND_BINDING_MUTABLE:
     case IR_COND_NEXT_BINDING_OF_SHAPE: reprs[0] = OPT_REPR_POINTER; return 1;

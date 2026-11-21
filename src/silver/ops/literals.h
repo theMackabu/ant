@@ -3,6 +3,7 @@
 #include "ant.h"
 #include "modules/regex.h"
 #include "silver/engine.h"
+#include "silver/literal_sites.h"
 
 static inline void sv_op_const(sv_vm_t *vm, sv_func_t *func, uint8_t *ip) {
   uint32_t idx = sv_get_u32(ip + 1);
@@ -155,15 +156,16 @@ static inline ant_value_t sv_op_array(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   return Ant_Value_FromNumber(0);
 }
 
-static inline ant_value_t sv_op_array_const(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip) {
-  uint32_t start = sv_get_u32(ip + 1);
-  uint32_t count = sv_get_u32(ip + 5);
-  
-  ant_value_t arr = js_mkarr_dense_literal(js, func->constants + start, count);
+static inline ant_value_t sv_op_array_literal(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip) {
+  ant_value_t arr = Silver_Literal_Create(js, func, sv_get_u32(ip + 1));
   if (__builtin_expect(is_err(arr), 0)) return arr;
-  
   vm->stack[vm->sp++] = arr;
   return Ant_Value_FromNumber(0);
+}
+
+static inline void sv_op_array_init(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+  ant_value_t value = vm->stack[--vm->sp];
+  Silver_Literal_InitElement(js, vm->stack[vm->sp - 1], sv_get_u32(ip + 1), value);
 }
 
 static inline void sv_op_set_brand(sv_vm_t *vm, uint8_t *ip) {

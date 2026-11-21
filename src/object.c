@@ -435,8 +435,10 @@ ant_value_t js_mkobj_with_proto_slots(ant_t *js, ant_value_t proto, uint8_t inob
   }
   
   ant_object_t *obj = NULL;
-  if (inobj_limit == ANT_INOBJ_BASE_SLOTS) obj = obj_alloc_with_proto(js, kTypeObject, proto);
-  else {
+  if (inobj_limit == ANT_INOBJ_BASE_SLOTS) {
+    [[clang::always_inline]]
+    obj = obj_alloc_with_proto(js, kTypeObject, proto);
+  } else {
     ant_shape_t *root = object_proto_root_wide(js, proto, inobj_limit);
     if (root) {
       ant_shape_retain(root);
@@ -767,5 +769,6 @@ void js_set_finalizer(ant_value_t obj, js_finalizer_fn fn) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr) return;
   
+  Ant_Assert(!ant_array_is_shared(ptr), "shared array elements are released by the array finalizer");
   ptr->finalizer = fn;
 }

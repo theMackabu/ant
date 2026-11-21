@@ -277,8 +277,9 @@ static void opt_cg_lay_out_frame(opt_cg_t *cg) {
   uint32_t call_slots = 0;
   for (ir_node_id_t node = 0; node < ir_node_count(cg->graph); node++) {
     const ir_op_t *op = &ir_node(cg->graph, node)->op;
-    if (op->code == IR_OP_CALL_DIRECT || op->code == IR_OP_CALL_NATIVE || op->code == IR_OP_CALL_CONSTRUCT)
-      call_slots = call_slots > 2u + op->call.argc ? call_slots : 2u + op->call.argc;
+    if (op->code != IR_OP_CALL_DIRECT && op->code != IR_OP_CALL_NATIVE && op->code != IR_OP_CALL_CONSTRUCT) continue;
+    uint32_t slots = 2u + op->call.argc + op->call.spare_slots;
+    call_slots = call_slots > slots ? call_slots : slots;
   }
   cg->entry_off = OPT_OUTGOING_BYTES;
   cg->index_off = (uint32_t)((cg->entry_off + sizeof(opt_entry_t) + 7) & ~(size_t)7);
@@ -390,9 +391,9 @@ static uint32_t opt_cg_intern_frames(opt_cg_t *cg, uint32_t start, uint32_t coun
 }
 
 static asm_label_t opt_cg_intern_site(opt_cg_t *cg, const opt_site_t *site) {
-  uint64_t key[4] = {
+  uint64_t key[5] = {
     (uint64_t)site->bc_off << 32 | site->depth, (uint64_t)site->kind << 56 | (uint64_t)(site->handler & 0xffffff) << 32 | site->slot,
-    (uint64_t)site->values.first << 32 | site->values.count, (uint64_t)site->frame_start << 32 | site->frame_count,
+    (uint64_t)site->values.first << 32 | site->values.count, (uint64_t)site->frame_start << 32 | site->frame_count, site->site_off,
   };
   bool inserted = false;
   uint64_t *known = opt_map_entry(&cg->site_index, key, &inserted);
@@ -453,11 +454,14 @@ static asm_label_t opt_cg_exit_site(opt_cg_t *cg, ir_node_id_t node) {
   opt_exit_list_t values = opt_cg_site_values(cg, node);
   bool phi_check = data->op.code == IR_OP_CHECK_INT32 || data->op.code == IR_OP_CHECK_NUMBER;
   uint32_t slot = phi_check && kind != OPT_EXIT_HOISTED ? data->op.slot : 0;
-  if (kind == OPT_EXIT_BAD_SHAPE) {
-    uint32_t learned = opt_learned_shapes(state->func ? state->func : cg->graph->func, state->bc_off);
+  if (kind == OPT_EXIT_BAD_SHAPE || kind == OPT_EXIT_BAD_CALL_TARGET) {
+    const sv_func_t *func = state->func ? state->func : cg->graph->func;
+    uint32_t learned = kind == OPT_EXIT_BAD_SHAPE ? opt_learned_shapes(func, state->site_off) : opt_call_targets_seen(func, state->site_off);
     if (learned) slot = learned + 1;
+    else if (kind == OPT_EXIT_BAD_SHAPE && opt_is_super_call(func, state->site_off))
+      slot = ir_exit_sites_count(cg->graph, state->func, state->site_off, kind) + 1;
   }
-  opt_site_t site = {.bc_off = state->bc_off, .kind = kind, .slot = slot, .values = values, .handler = UINT32_MAX};
+  opt_site_t site = {.bc_off = state->bc_off, .site_off = state->site_off, .kind = kind, .slot = slot, .values = values, .handler = UINT32_MAX};
   if (state->parent == IR_NONE) {
     site.depth = opt_cg_resume_depth(state, cg->layout);
   } else {
@@ -480,6 +484,7 @@ static asm_label_t opt_cg_exit_site(opt_cg_t *cg, ir_node_id_t node) {
         .argc = frame->passed_argument_count,
         .mode = frame->mode,
         .construct = frame->construct,
+        .takes_rest = frame->takes_rest,
       };
       next += frame->values.len;
       opt_vec_push(&cg->arena, &cg->site_frames, entry);
@@ -493,10 +498,13 @@ static asm_label_t opt_cg_exit_site(opt_cg_t *cg, ir_node_id_t node) {
 static asm_label_t opt_cg_catch_site(opt_cg_t *cg, ir_node_id_t node) {
   const ir_node_t *data = ir_node(cg->graph, node);
   const ir_handler_t *handler = &cg->graph->handlers.items[data->handler];
+  uint32_t resume = handler->catch_off + (handler->finally ? 0 : sv_op_size[OP_CATCH]);
   opt_site_t site = {
-    .bc_off = handler->catch_off + (handler->finally ? 0 : sv_op_size[OP_CATCH]),
+    .bc_off = resume,
+    .site_off = resume,
     .depth = handler->depth + 1,
     .kind = OPT_EXIT_SLOW_PATH,
+    .slot = data->op.code == IR_OP_THROW && data->op.own,
     .values = opt_cg_site_values(cg, node),
     .handler = data->handler,
   };
@@ -1117,11 +1125,19 @@ static void opt_cg_branch(opt_cg_t *cg, ir_node_id_t node, ir_condition_t condit
       opt_cg_jump_to(cg, if_true);
       return;
     }
-    case IR_COND_GLOBAL_EVAL_INTACT: {
+    case IR_COND_NO_SIDECAR: {
       asm_gpr_t scratch = cg->pinned.scratch;
+      masm_load64(m, scratch, asm_addr(opt_cg_input(cg, node, 0), (int32_t)offsetof(ant_object_t, extra_slots)));
+      masm_branch_test64(m, invert ? ASM_COND_NON_ZERO : ASM_COND_ZERO, scratch, (int64_t)ant_sidecar, target);
+      break;
+    }
+    case IR_COND_GLOBAL_EVAL_INTACT:
+    case IR_COND_ARRAY_ITERATION_INTACT: {
+      asm_gpr_t scratch = cg->pinned.scratch;
+      uint32_t protector = condition.kind == IR_COND_GLOBAL_EVAL_INTACT ? ANT_PROTECTOR_GLOBAL_EVAL : ANT_PROTECTOR_ARRAY_ITERATION;
       masm_load64(m, scratch, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
       masm_load32(m, scratch, asm_addr(scratch, (int32_t)offsetof(ant_t, protectors_invalid)));
-      masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, (int32_t)ANT_PROTECTOR_GLOBAL_EVAL, opt_cg_label(cg, if_false));
+      masm_branch_test32(m, ASM_COND_NON_ZERO, scratch, (int32_t)protector, opt_cg_label(cg, if_false));
       opt_cg_jump_to(cg, if_true);
       return;
     }
@@ -1263,6 +1279,10 @@ static void opt_cg_store_slot(opt_cg_t *cg, ir_node_id_t node_id, uint32_t slot)
     default: value = opt_cg_input(cg, node_id, 0); break;
   }
   const ir_frame_layout_t *layout = cg->layout;
+  if (slot == OPT_THIS_SLOT) {
+    masm_store64(m, opt_cg_entry_field(cg, offsetof(opt_entry_t, this_val)), value);
+    return;
+  }
   if (slot >= ir_layout_arguments_base(layout)) {
     masm_store64(m, asm_addr(cg->pinned.frame, (int32_t)(8 * (slot - ir_layout_arguments_base(layout)))), value);
     return;
@@ -2767,7 +2787,7 @@ static void opt_cg_string_builder_append(opt_cg_t *cg, ir_node_id_t node) {
 
 static void opt_cg_allocate_array(opt_cg_t *cg, ir_node_id_t node) {
   masm_t *m = &cg->masm;
-  uint32_t count_elements = ir_node(cg->graph, node)->op.count;
+  uint32_t count_elements = ir_node(cg->graph, node)->op.allocate_array.count, reserve = ir_node(cg->graph, node)->op.allocate_array.reserve;
   asm_gpr_t out = opt_cg_output(cg, node), count = opt_cg_temp(cg, node, 0), temp = opt_cg_temp(cg, node, 1);
   asm_gpr_t data = opt_cg_temp(cg, node, 2), js = cg->pinned.scratch;
   opt_cg_allocation_t allocation = {.label = masm_new_label(m), .resume = masm_new_label(m), .node = node};
@@ -2777,8 +2797,9 @@ static void opt_cg_allocate_array(opt_cg_t *cg, ir_node_id_t node) {
   masm_bind(m, allocation.resume);
   return;
 #endif
-  int cls = gc_array_storage_fit_class(count_elements);
-  uint32_t capacity = gc_array_storage_fit(count_elements);
+  uint32_t reserved = reserve > count_elements ? reserve : count_elements ? count_elements : MAX_DENSE_INITIAL_CAP;
+  int cls = gc_array_storage_fit_class(reserved);
+  uint32_t capacity = gc_array_storage_fit(reserved);
   const int32_t head = (int32_t)(offsetof(ant_t, array_storage.head) + sizeof(ant_value_t *) * (size_t)cls);
   ant_value_t array_proto = cg->js->sym.array_proto;
   masm_load64(m, js, asm_addr(cg->pinned.vm, (int32_t)offsetof(sv_vm_t, js)));
@@ -2817,7 +2838,7 @@ static void opt_cg_allocate_array(opt_cg_t *cg, ir_node_id_t node) {
   image->u.array.len = count_elements;
   image->u.array.cap = capacity;
   image->type_tag = kTypeArray;
-  image->flags = (ant_object_flags_t){.extensible = 1, .fast_array = 1, .dense_length_fits = 1, .may_have_dense_elements = 1};
+  image->flags = (ant_object_flags_t){.extensible = 1, .fast_array = 1, .dense_length_fits = 1, .may_have_dense_elements = count_elements > 0};
   uint64_t words[ANT_OBJECT_SIZE / 8];
   memcpy(words, bytes, sizeof words);
   bool stored[ANT_OBJECT_SIZE / 8] = {0};
@@ -2875,7 +2896,8 @@ static void opt_cg_emit_allocations(opt_cg_t *cg) {
     opt_cg_dump_caller_saved_gprs(cg);
     masm_move64(m, a[0], cg->pinned.vm);
     if (op->code == IR_OP_ALLOCATE_ARRAY) {
-      masm_move_imm64(m, a[1], op->count);
+      masm_move_imm64(m, a[1], op->allocate_array.count);
+      masm_move_imm64(m, a[2], op->allocate_array.reserve);
       masm_call_absolute(m, (uint64_t)(uintptr_t)opt_rt_allocate_array);
     } else if (op->code == IR_OP_CONCATENATE_STRINGS) {
       opt_cg_slow_argument(cg, a[1], allocation->node, 0);
@@ -3047,7 +3069,8 @@ static void opt_cg_call_runtime(opt_cg_t *cg, ir_node_id_t node, uint64_t helper
   masm_load64(m, a[2], opt_cg_call_slot(cg, 1));
   masm_load_effective_address(m, a[3], opt_cg_call_slot(cg, 2));
   masm_move_imm64(m, a[4], op->call.argc);
-  if (op->code == IR_OP_CALL_NATIVE) masm_move_imm64(m, a[5], op->call.extra);
+  if (op->code == IR_OP_CALL_NATIVE && op->call.passes_entry) masm_load_effective_address(m, a[5], opt_cg_entry_field(cg, 0));
+  else if (op->code == IR_OP_CALL_NATIVE) masm_move_imm64(m, a[5], op->call.extra);
   masm_call_absolute(m, helper);
   opt_cg_record_call(cg, ir_node(cg->graph, node)->frame_state, -1);
 }
@@ -3116,6 +3139,59 @@ static void opt_cg_call_known(opt_cg_t *cg, ir_node_id_t node_id) {
   masm_bind(m, done);
   opt_vec_push(&cg->arena, &cg->call_slows, ((opt_cg_call_slow_t){.label = slow, .done = done, .node = node_id, .this_stored = this_stored}));
   opt_cg_branch_error(cg, node_id);
+}
+
+static void opt_cg_call_super(opt_cg_t *cg, ir_node_id_t node_id) {
+  masm_t *m = &cg->masm;
+  const ir_node_t *node = ir_node(cg->graph, node_id);
+  const ir_op_t *op = &node->op;
+  const asm_gpr_t *a = MASM_ARGUMENT_GPRS;
+  asm_gpr_t scratch = cg->pinned.scratch, result = MASM_RETURN_GPRS[0];
+  const sv_closure_t *parent = (const sv_closure_t *)op->call.extra;
+  asm_label_t slow = masm_new_label(m), returned = masm_new_label(m), other = masm_new_label(m), done = masm_new_label(m);
+  for (uint32_t i = 0; i < node->inputs.len; i++) opt_cg_store_input(cg, node_id, i, opt_cg_call_slot(cg, i));
+  masm_move_imm64(m, scratch, (uint64_t)(uintptr_t)parent->func);
+  masm_load64(m, scratch, asm_addr(scratch, (int32_t)offsetof(sv_func_t, jit_code)));
+  masm_branch64_imm(m, ASM_COND_EQUAL, scratch, 0, slow);
+  masm_move_imm64(m, a[4], (uint64_t)(uintptr_t)parent);
+  masm_load64(m, a[3], asm_addr(a[4], (int32_t)offsetof(sv_closure_t, super_val)));
+#if defined(__aarch64__)
+  masm_move64(m, a[6], a[4]);
+#else
+  masm_store64(m, opt_cg_local(cg, 0), a[4]);
+#endif
+  masm_load64(m, a[1], opt_cg_call_slot(cg, 1));
+  masm_load64(m, a[2], opt_cg_call_slot(cg, 2));
+  masm_load_effective_address(m, a[4], opt_cg_call_slot(cg, 3));
+  masm_move_imm32(m, a[5], op->call.argc - 1u);
+  masm_move64(m, a[0], cg->pinned.vm);
+  masm_call_register(m, scratch);
+  opt_cg_record_call(cg, node->frame_state, -1);
+  masm_jump(m, returned);
+  masm_bind(m, slow);
+  opt_cg_call_runtime(cg, node_id, (uint64_t)(uintptr_t)opt_rt_super_parent);
+  masm_bind(m, returned);
+  opt_cg_branch_error(cg, node_id);
+  masm_move_imm64(m, scratch, -(NANBOX_PREFIX + 1));
+  masm_add64(m, scratch, result, scratch);
+  masm_branch64_imm(m, ASM_COND_BELOW, scratch, (int64_t)NANBOX_DATA_MASK, done);
+  masm_sar64_imm(m, scratch, result, NANBOX_TYPE_SHIFT);
+  masm_branch64_imm(m, ASM_COND_NOT_EQUAL, scratch, OPT_UNDEFINED_TAG_SIGNED, other);
+  masm_load64(m, result, opt_cg_call_slot(cg, 1));
+  masm_jump(m, done);
+  masm_bind(m, other);
+  masm_move64(m, a[0], result);
+  masm_load64(m, a[1], opt_cg_call_slot(cg, 1));
+  masm_call_absolute(m, (uint64_t)(uintptr_t)opt_rt_super_result);
+  opt_cg_record_call(cg, node->frame_state, -1);
+  masm_bind(m, done);
+  if (cg->has_frame) {
+    asm_label_t frameless = masm_new_label(m);
+    masm_load64(m, scratch, opt_cg_entry_field(cg, offsetof(opt_entry_t, frame)));
+    masm_branch64_imm(m, ASM_COND_EQUAL, scratch, 0, frameless);
+    masm_store64(m, asm_addr(scratch, (int32_t)offsetof(sv_frame_t, this)), result);
+    masm_bind(m, frameless);
+  }
 }
 
 static void opt_cg_emit_call_slows(opt_cg_t *cg) {
@@ -3228,6 +3304,10 @@ static void opt_cg_call(opt_cg_t *cg, ir_node_id_t node_id) {
   const asm_gpr_t *a = MASM_ARGUMENT_GPRS;
   asm_gpr_t scratch = cg->pinned.scratch;
   if (op->code == IR_OP_CALL_NATIVE && op->call.slow_path) opt_cg_count_slow_path(cg, op->call.func, op->call.bc_off);
+  if (op->code == IR_OP_CALL_DIRECT && op->call.construct_super) {
+    opt_cg_call_super(cg, node_id);
+    return;
+  }
   if (op->code == IR_OP_CALL_DIRECT && op->call.target) {
     opt_cg_call_known(cg, node_id);
     return;
@@ -4049,8 +4129,14 @@ static ant_value_t opt_cg_materialize_objects(sv_vm_t *vm, const opt_code_t *cod
 }
 
 static ant_value_t opt_cg_materialize_arguments(sv_vm_t *vm, ant_value_t *slots, uint32_t count, ant_value_t callee, ant_value_t *args, uint32_t argc) {
-  ant_value_t arguments = Ant_Value_Undefined;
+  ant_value_t arguments = Ant_Value_Undefined, rest = Ant_Value_Undefined;
   for (uint32_t i = 0; i < count; i++) {
+    int start = ir_value_virtual_rest_start(slots[i]);
+    if (start >= 0) {
+      if (!is_object_type(rest)) rest = opt_rt_rest_array(vm, args, argc, (uint32_t)start);
+      slots[i] = rest;
+      continue;
+    }
     int kind = ir_value_virtual_arguments_kind(slots[i]);
     if (kind < 0) continue;
     if (!is_object_type(arguments)) arguments = opt_rt_arguments_object(vm, callee, args, (int)argc, kind == 0);
@@ -4060,7 +4146,7 @@ static ant_value_t opt_cg_materialize_arguments(sv_vm_t *vm, ant_value_t *slots,
 }
 
 static bool opt_cg_completion_value(const opt_site_value_t *value) {
-  return value->slot >= OPT_COMPLETION_SLOT && value->slot < OPT_CALLEE_SLOT && value->repr != OPT_REPR_POINTER;
+  return value->slot >= OPT_COMPLETION_SLOT && value->slot < OPT_NEW_TARGET_SLOT && value->repr != OPT_REPR_POINTER;
 }
 
 static uint32_t opt_cg_site_finally_count(const opt_code_t *code, const opt_site_t *site) {
@@ -4128,7 +4214,7 @@ static ant_value_t opt_cg_exit_frames(sv_vm_t *vm, const opt_site_t *site, opt_c
     uint32_t room = root || params > at->argc ? params : at->argc;
     uint32_t stack_slots = (uint32_t)(func->max_stack > 0 ? func->max_stack : 0);
     opt_exit_frame_t *frame = &frames[k];
-    *frame = (opt_exit_frame_t){.func = func, .callee = Ant_Value_Undefined, .this_val = Ant_Value_Undefined, .params = cursor, .arguments = Ant_Value_Undefined, .site = at};
+    *frame = (opt_exit_frame_t){.func = func, .callee = Ant_Value_Undefined, .this_val = Ant_Value_Undefined, .new_target = Ant_Value_Undefined, .params = cursor, .arguments = Ant_Value_Undefined, .site = at};
     frame->locals = frame->params + room;
     frame->stack = frame->locals + locals;
     cursor = frame->stack + depth;
@@ -4141,6 +4227,7 @@ static ant_value_t opt_cg_exit_frames(sv_vm_t *vm, const opt_site_t *site, opt_c
       ant_value_t *to = NULL;
       if (slot == OPT_THIS_SLOT) frame->this_val = boxed;
       else if (slot == OPT_CALLEE_SLOT) frame->callee = boxed;
+      else if (slot == OPT_NEW_TARGET_SLOT) frame->new_target = boxed;
       else if (slot <= stack_slots) {
         if (slot - 1 < depth) to = &frame->stack[slot - 1];
       } else if (slot <= stack_slots + locals) to = &frame->locals[slot - stack_slots - 1];
@@ -4183,8 +4270,9 @@ static bool opt_cg_site_values_plain(const opt_code_t *code, const opt_site_t *s
   opt_exit_cursor_t cursor = opt_exit_cursor((opt_exit_view_t){code->values, code->chunks, code->refs}, site->values);
   for (const opt_site_value_t *value; (value = opt_exit_next(&cursor));) {
     if (value->kind == OPT_SITE_VIRTUAL || value->kind == OPT_SITE_OBJECT) return false;
-    if (value->repr != OPT_REPR_POINTER && ir_value_virtual_arguments_kind(ir_value_boxed_constant(opt_cg_site_bits(value, dump, spills), (opt_repr_t)value->repr)) >= 0)
-      return false;
+    if (value->repr == OPT_REPR_POINTER) continue;
+    uint64_t bits = ir_value_boxed_constant(opt_cg_site_bits(value, dump, spills), (opt_repr_t)value->repr);
+    if (ir_value_virtual_arguments_kind(bits) >= 0 || ir_value_virtual_rest_start(bits) >= 0) return false;
   }
   return true;
 }
@@ -4224,7 +4312,7 @@ static ant_value_t opt_cg_catch_in_place(sv_vm_t *vm, uint8_t *locals, const opt
   entry->frame->completion.kind = SV_COMPLETION_NONE;
   entry->frame->completion.value = Ant_Value_Undefined;
   *(uint32_t *)(void *)(locals + code->index_offset) = site->handler;
-  opt_rt_caught(vm, code, handler, true);
+  opt_rt_caught(vm, code, handler, NULL, false);
   return OPT_CAUGHT;
 }
 
@@ -4272,7 +4360,7 @@ static ant_value_t opt_cg_catch(sv_vm_t *vm, uint8_t *locals, const opt_site_t *
     ant_value_t *to = opt_cg_site_slot(code, value->slot, depth, frame, frame_locals, stack);
     if (to) opt_rt_reopen_box(vm, (sv_upvalue_t *)(uintptr_t)opt_cg_site_bits(value, dump, spills), to);
   }
-  opt_rt_caught(vm, code, handler, false);
+  opt_rt_caught(vm, code, handler, entry, site->slot != 0);
   uint32_t finally_count = opt_cg_site_finally_count(code, site);
   sv_jit_finally_t finally[finally_count ? finally_count : 1];
   sv_jit_finally_t *pending = opt_cg_site_finally(code, site, dump, spills, objects, finally, finally_count);
@@ -4474,7 +4562,7 @@ static void *opt_cg_dup_array(const void *items, uint32_t len, size_t elem) {
 opt_code_t *opt_cg_generate(ant_t *js, const ir_graph_t *graph, const ir_frame_layout_t *layout, asm_code_heap_t *heap, bool verify, opt_text_t *dump, const char **failure) {
   opt_cg_t cg = {.graph = graph, .layout = layout, .js = js, .marks_wanted = dump != NULL};
   opt_arena_init(&cg.arena);
-  opt_map_init(&cg.site_index, &cg.arena, 4);
+  opt_map_init(&cg.site_index, &cg.arena, 5);
   opt_map_init(&cg.frames_index, &cg.arena, 1);
   opt_target_registers(OPT_TARGET_HOST, &cg.registers, &cg.pinned);
   ra_allocation_t allocation;

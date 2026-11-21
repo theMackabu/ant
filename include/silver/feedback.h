@@ -19,6 +19,20 @@ static constexpr uint8_t SV_TFB_SPEC_COUNT_MASK = 7u << SV_TFB_SPEC_COUNT_SHIFT;
 static constexpr uint8_t SV_TFB_SPEC_MISMATCH = 1u << 7;
 static constexpr uint8_t SV_TFB_DOUBLE = 1u << 4;
 
+static constexpr uint8_t SV_TFB_SPREAD_UNSEEN = 0;
+static constexpr uint8_t SV_TFB_SPREAD_OTHER = 0xff;
+static constexpr int SV_TFB_SPREAD_MAX_LENGTH = 64;
+
+static_assert(SV_TFB_SPREAD_MAX_LENGTH + 1 < SV_TFB_SPREAD_OTHER, "spread lengths encode below the other marker");
+
+static inline uint8_t sv_tfb_spread_encode(uint32_t length) {
+  return length <= (uint32_t)SV_TFB_SPREAD_MAX_LENGTH ? (uint8_t)(length + 1) : SV_TFB_SPREAD_OTHER;
+}
+
+static inline int sv_tfb_spread_length(uint8_t seen) {
+  return seen == SV_TFB_SPREAD_UNSEEN || seen == SV_TFB_SPREAD_OTHER ? -1 : (int)seen - 1;
+}
+
 static constexpr int SV_CALL_FB_MAX_SLOTS = 32;
 static constexpr uint8_t SV_JIT_BAILOUT_LIMIT = 5;
 static constexpr uint8_t SV_CALL_FB_MISS_DISABLE = 4;
@@ -611,9 +625,14 @@ static inline void sv_tfb_record_native_call(sv_func_t *func, uint8_t *ip, ant_v
   func->tfb_version++;
 }
 
+static inline bool sv_op_records_spread(uint8_t op) {
+  return op == OP_SPREAD || op == OP_CALL_SPREAD || op == OP_NEW_SPREAD || op == OP_SUPER_SPREAD;
+}
+
 static inline bool sv_tfb_call_site_called_native_closure(sv_func_t *func, int bc_off) {
   uint8_t *type_feedback = sv_func_type_feedback(func);
-  return type_feedback && (type_feedback[bc_off] & SV_TFB_CALLED_NATIVE_CLOSURE);
+  if (!type_feedback || sv_op_records_spread(func->code[bc_off])) return false;
+  return (type_feedback[bc_off] & SV_TFB_CALLED_NATIVE_CLOSURE) != 0;
 }
 
 static inline bool sv_tfb_call_site_may_call_builtin(sv_func_t *func, int bc_off) {

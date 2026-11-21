@@ -20,6 +20,14 @@ void emit_u16(sv_compiler_t *c, uint16_t val) {
   emit(c, (uint8_t)(val >> 8));
 }
 
+void emit_argc(sv_compiler_t *c, int argc) {
+  if (argc > UINT16_MAX && !Ant_Exception_Pending(c->js)) js_mkerr_typed(
+    c->js, JS_ERR_SYNTAX,
+    "Too many arguments in function call (only %d allowed)", UINT16_MAX
+  );
+  emit_u16(c, (uint16_t)argc);
+}
+
 void emit_u32(sv_compiler_t *c, uint32_t val) {
   emit(c, (uint8_t)(val & 0xFF));
   emit(c, (uint8_t)((val >> 8) & 0xFF));

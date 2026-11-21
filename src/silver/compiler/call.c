@@ -130,6 +130,14 @@ int capture_field_local(sv_compiler_t *c, sv_compiler_t *owner, int local) {
   return add_upvalue(c, (uint16_t)uv, false, false);
 }
 
+static bool field_key_is_atom(const sv_ast_t *m) {
+  const sv_ast_t *key = m->left;
+  if ((m->flags & FN_COMPUTED) || !key) return false;
+  if (key->type != N_IDENT && key->type != N_STRING) return false;
+  if (key->type == N_IDENT && is_quoted_ident_key(key)) return !ant_key_may_be_numeric(key->str + 1, key->len - 2);
+  return !ant_key_may_be_numeric(key->str, key->len);
+}
+
 void emit_field_inits(
   sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count
 ) {
@@ -185,6 +193,13 @@ void emit_field_inits(
     if (m->right) compile_field_initializer(c, m->right, field_static_key(m));
     else emit_op(c, OP_UNDEF);
     c->inferred_key_upval = 0;
+    if (field_key_is_atom(m)) {
+      sv_ast_t *key = m->left;
+      if (key->type == N_STRING) emit_atom_op(c, OP_INIT_FIELD, key->str ? key->str : "", key->len);
+      else if (is_quoted_ident_key(key)) emit_atom_op(c, OP_INIT_FIELD, key->str + 1, key->len - 2);
+      else emit_atom_op(c, OP_INIT_FIELD, key->str, key->len);
+      continue;
+    }
     if (m->flags & FN_COMPUTED) {
       emit_op(c, OP_GET_UPVAL);
       emit_u16(c, (uint16_t)key_upval);
@@ -230,13 +245,18 @@ static void compile_call_emit_invoke(
     if (kind == SV_CALL_METHOD) emit_op(c, OP_SWAP);
     else if (kind == SV_CALL_DIRECT) emit_op(c, OP_UNDEF);
     
-    if (kind != SV_CALL_SUPER && call_spread_is_last_only(node)) {
+    if (call_spread_is_last_only(node)) {
       for (int i = 0; i < argc - 1; i++) compile_expr(c, node->args.items[i]);
       compile_expr(c, node->args.items[argc - 1]->right);
       
       emit_call_srcpos(c, node);
-      emit_op(c, OP_CALL_SPREAD);
-      emit_u16(c, (uint16_t)argc);
+      emit_op(c, kind == SV_CALL_SUPER ? OP_SUPER_SPREAD : OP_CALL_SPREAD);
+      emit_argc(c, argc);
+      
+      if (kind == SV_CALL_SUPER) {
+        emit_this_store(c);
+        emit_derived_field_inits(c);
+      }
       
       return;
     }
@@ -260,7 +280,7 @@ static void compile_call_emit_invoke(
   emit_op(c,
     kind == SV_CALL_SUPER ? OP_CALL_SUPER :
     kind == SV_CALL_METHOD ? OP_CALL_METHOD : OP_CALL);
-  emit_u16(c, (uint16_t)argc);
+  emit_argc(c, argc);
   if (kind == SV_CALL_SUPER) {
     emit_this_store(c);
     emit_derived_field_inits(c);
@@ -855,7 +875,14 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
 void compile_new(sv_compiler_t *c, sv_ast_t *node) {
   compile_expr(c, node->left);
   emit_op(c, OP_DUP);
-  if (call_has_spread_arg(node)) {
+  if (call_spread_is_last_only(node)) {
+    int argc = node->args.count;
+    for (int i = 0; i < argc - 1; i++) compile_expr(c, node->args.items[i]);
+    compile_expr(c, node->args.items[argc - 1]->right);
+    emit_srcpos(c, node);
+    emit_op(c, OP_NEW_SPREAD);
+    emit_argc(c, argc);
+  } else if (call_has_spread_arg(node)) {
     compile_call_args_array(c, node);
     emit_srcpos(c, node);
     emit_op(c, OP_NEW_APPLY);
@@ -866,6 +893,6 @@ void compile_new(sv_compiler_t *c, sv_ast_t *node) {
       compile_expr(c, node->args.items[i]);
     emit_srcpos(c, node);
     emit_op(c, OP_NEW);
-    emit_u16(c, (uint16_t)argc);
+    emit_argc(c, argc);
   }
 }

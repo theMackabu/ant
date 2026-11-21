@@ -379,7 +379,10 @@ typedef struct {
     uint16_t eval_absent_level;
   };
   
-  uint32_t prototype_epoch;
+  union {
+    uint32_t prototype_epoch;
+    uint32_t fill_epoch;
+  };
 
   union {
     ant_object_t *cached_holder;
@@ -433,6 +436,12 @@ typedef struct {
   uint8_t wasm32_cacheline_padding[12];
 #endif
 } sv_ic_entry_t;
+
+static constexpr uint16_t SV_INIT_FIELD_FILL_LIMIT = 16;
+
+static inline bool sv_init_field_ic_full(const sv_ic_entry_t *ic, uint32_t epoch) {
+  return ic->fill_epoch == epoch && ic->slow_hits >= SV_INIT_FIELD_FILL_LIMIT;
+}
 
 static_assert(
   sizeof(sv_ic_entry_t) == 64,
@@ -494,6 +503,30 @@ typedef struct {
   bool shape_build_failed;
   ant_value_t literal_template;
 } sv_obj_site_cache_t;
+
+typedef enum : uint8_t {
+  SV_LITERAL_ARRAY,
+  SV_LITERAL_OBJECT,
+} sv_literal_kind_t;
+
+typedef enum : uint8_t {
+  SV_LITERAL_HAS_CHILDREN = 1u << 0,
+  SV_LITERAL_HAS_DYNAMIC  = 1u << 1,
+} sv_literal_flags_t;
+
+static constexpr int SV_LITERAL_MAX_DEPTH = 8;
+static constexpr int SV_LITERAL_INLINE_MAX = 32;
+
+typedef struct sv_literal_site {
+  ant_value_t boilerplate;
+  gc_shared_elements_t *block;
+  const uint32_t *key_atoms;
+  uint32_t start;
+  uint32_t count;
+  sv_literal_kind_t kind;
+  uint8_t flags;
+  bool built_once;
+} sv_literal_site_t;
 
 static constexpr uint32_t SV_GF_IC_AUX_MISS_SHIFT = 8u;
 static constexpr uint32_t SV_GF_IC_PROTO_ID_SHIFT = 32u;
@@ -657,12 +690,16 @@ typedef struct {
   sv_srcpos_t *srcpos;
   const char *source;
   bool display_name_varies;
+  uint8_t ctor_props;
   
   int srcpos_count;
   int source_line;
   int source_len;
   int source_start;
   int source_end;
+
+  sv_literal_site_t *literal_sites;
+  uint32_t literal_site_count;
 } sv_func_debug_t;
 
 typedef ant_value_t (*sv_jit_func_t)(
@@ -788,6 +825,7 @@ static inline uint8_t sv_ctor_slot_class(uint32_t props) {
 }
 
 static inline void sv_func_set_ctor_props(sv_func_t *func, uint32_t props) {
+  func->debug->ctor_props = props > UINT8_MAX ? UINT8_MAX : (uint8_t)props;
   func->ctor_slot_class = sv_ctor_slot_class(props) & 3;
 }
 
@@ -1083,8 +1121,22 @@ typedef struct sv_closure {
   
   uint8_t in_remember_set;
   uint8_t generation;
+  uint8_t ctor_props;
+  uint8_t ctor_slots;
   uint64_t gc_epoch;
 } sv_closure_t;
+
+static_assert(sizeof(void *) != 8 || sizeof(sv_closure_t) == 160, "the inherited constructor property count lives in sv_closure_t padding");
+
+static inline uint32_t sv_closure_ctor_props(const sv_closure_t *closure) {
+  if (closure->ctor_props) return closure->ctor_props;
+  return closure->func ? closure->func->debug->ctor_props : 0;
+}
+
+static inline uint8_t sv_closure_construct_slots(const sv_closure_t *closure) {
+  if (!closure) return ANT_INOBJ_BASE_SLOTS;
+  return closure->ctor_slots ? closure->ctor_slots : sv_construct_slots(closure->func);
+}
 
 static inline bool sv_closure_has_lexical_this(const sv_closure_t *closure) {
   return 
@@ -1106,6 +1158,8 @@ static inline sv_closure_t *js_closure_alloc_finish(ant_t *js, sv_closure_t *c) 
   c->u.pending.len = 0;
   c->in_remember_set = 0;
   c->generation = 0;
+  c->ctor_props = 0;
+  c->ctor_slots = 0;
   
   if (js->young_closure_len < js->young_closure_cap)
     js->young_closures[js->young_closure_len++] = c;

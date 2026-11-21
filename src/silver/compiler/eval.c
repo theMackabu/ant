@@ -705,7 +705,7 @@ static int emit_replaced_eval_call(sv_compiler_t *c, sv_ast_t *node, bool has_sp
     for (int i = 0; i < node->args.count; i++) compile_expr(c, node->args.items[i]);
     emit_srcpos(c, node);
     emit_op(c, OP_CALL);
-    emit_u16(c, (uint16_t)node->args.count);
+    emit_argc(c, node->args.count);
   }
   
   int end_jump = emit_jump(c, OP_JMP);
@@ -773,7 +773,7 @@ static void compile_inherited_direct_eval(sv_compiler_t *c, sv_ast_t *node) {
   
   int direct_jump = emit_jump(c, OP_JMP_TRUE);
   emit_op(c, OP_CALL);
-  emit_u16(c, (uint16_t)node->args.count);
+  emit_argc(c, node->args.count);
   
   int end_jump = emit_jump(c, OP_JMP);
   patch_jump(c, direct_jump);

@@ -585,6 +585,7 @@ struct ant_isolate_t {
     bool pending_active;
     bool pending_oom;
     bool kept_alive_overflow;
+    bool finalization_pending;
   } weak_gc;
 
   uint32_t jit_active_depth;

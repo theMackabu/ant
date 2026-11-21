@@ -210,8 +210,7 @@ static inline ant_value_t sv_construct_prototype_from(
 }
 
 static inline uint8_t sv_construct_slots_of(ant_value_t callee) {
-  sv_closure_t *closure = vtype(callee) == kTypeFunction ? js_func_closure(callee) : NULL;
-  return sv_construct_slots(closure ? closure->func : NULL);
+  return sv_closure_construct_slots(vtype(callee) == kTypeFunction ? js_func_closure(callee) : NULL);
 }
 
 static inline ant_value_t sv_prepare_construct_meta(
