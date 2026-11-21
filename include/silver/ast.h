@@ -130,6 +130,7 @@ enum {
   FN_FIELD_THUNK      = 1 << 28,
   FN_SOLE_SUPER_CALL  = 1 << 29,
   FN_SYNTHETIC        = 1 << 30,
+  FN_REST_COMMA       = 1u << 31,
   FN_OPTIONAL_BASE    = FN_SOLE_SUPER_CALL,
 };
 

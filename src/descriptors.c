@@ -1040,31 +1040,28 @@ static define_target_t define_target_init(ant_value_t obj, ant_value_t as_obj, c
   return t;
 }
 
-static ant_value_t define_desc_parse(
-  ant_t *js, ant_value_t descriptor, const define_desc_raw_t *pre_raw, define_desc_t *d
-) {
-  define_desc_raw_t raw = {0};
-  if (pre_raw) raw = *pre_raw;
-  else {
-    ant_value_t read_err = define_desc_read(js, descriptor, &raw);
-    if (is_err(read_err)) return read_err;
-  }
+static inline bool define_desc_flag(ant_t *js, ant_value_t value) {
+  return value == Ant_Value_True || (value != Ant_Value_False && js_truthy(js, value));
+}
 
+static inline ant_value_t define_desc_parse(
+  ant_t *js, ant_value_t descriptor, const define_desc_raw_t *raw, define_desc_t *d
+) {
   *d = (define_desc_t){
-    .has_value = raw.has[DESC_VALUE],
-    .has_get = raw.has[DESC_GET],
-    .has_set = raw.has[DESC_SET],
-    .has_writable = raw.has[DESC_WRITABLE],
-    .has_enumerable = raw.has[DESC_ENUMERABLE],
-    .has_configurable = raw.has[DESC_CONFIGURABLE],
-    .value = raw.has[DESC_VALUE] ? raw.val[DESC_VALUE] : Ant_Value_Undefined,
-    .getter = raw.has[DESC_GET] ? raw.val[DESC_GET] : Ant_Value_Undefined,
-    .setter = raw.has[DESC_SET] ? raw.val[DESC_SET] : Ant_Value_Undefined,
+    .has_value = raw->has[DESC_VALUE],
+    .has_get = raw->has[DESC_GET],
+    .has_set = raw->has[DESC_SET],
+    .has_writable = raw->has[DESC_WRITABLE],
+    .has_enumerable = raw->has[DESC_ENUMERABLE],
+    .has_configurable = raw->has[DESC_CONFIGURABLE],
+    .value = raw->has[DESC_VALUE] ? raw->val[DESC_VALUE] : Ant_Value_Undefined,
+    .getter = raw->has[DESC_GET] ? raw->val[DESC_GET] : Ant_Value_Undefined,
+    .setter = raw->has[DESC_SET] ? raw->val[DESC_SET] : Ant_Value_Undefined,
   };
   
-  d->enumerable = d->has_enumerable && js_truthy(js, raw.val[DESC_ENUMERABLE]);
-  d->configurable = d->has_configurable && js_truthy(js, raw.val[DESC_CONFIGURABLE]);
-  d->writable = d->has_writable && js_truthy(js, raw.val[DESC_WRITABLE]);
+  d->enumerable = d->has_enumerable && define_desc_flag(js, raw->val[DESC_ENUMERABLE]);
+  d->configurable = d->has_configurable && define_desc_flag(js, raw->val[DESC_CONFIGURABLE]);
+  d->writable = d->has_writable && define_desc_flag(js, raw->val[DESC_WRITABLE]);
 
   if ((d->has_value || d->has_writable) && (d->has_get || d->has_set))
     return descriptor_value_error(js, "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute, ", descriptor);
@@ -1098,6 +1095,43 @@ static __attribute__((noinline, cold)) ant_value_t define_redefine_error(
 static inline ant_value_t define_done(ant_t *js, const define_target_t *t) {
   if (!t->sym_key) array_define_or_set_index(js, t->as_obj, t->str, (size_t)t->len);
   return t->obj;
+}
+
+static inline bool define_plain_target(ant_value_t as_obj, const property_key_view_t *key) {
+  if (key->is_symbol || vtype(as_obj) != kTypeObject) return false;
+  const ant_object_t *ptr = (const ant_object_t *)vptr(as_obj);
+  return
+    ptr->type_tag == kTypeObject && ptr->shape && !ptr->extra_slots &&
+    !ptr->flags.is_exotic && !ptr->flags.frozen && !ptr->flags.sealed;
+}
+
+static inline bool define_plain_data(
+  ant_t *js, ant_value_t obj, ant_value_t as_obj, const property_key_view_t *key,
+  const define_desc_raw_t *raw, ant_value_t *result
+) {
+  if (!raw->has[DESC_VALUE]) return false;
+  if (!raw->has[DESC_WRITABLE] || raw->val[DESC_WRITABLE] != Ant_Value_True) return false;
+  if (!raw->has[DESC_ENUMERABLE] || raw->val[DESC_ENUMERABLE] != Ant_Value_True) return false;
+  if (!raw->has[DESC_CONFIGURABLE] || raw->val[DESC_CONFIGURABLE] != Ant_Value_True) return false;
+
+  const char *interned = intern_string(js, key->bytes, key->length);
+  if (!interned) return false;
+
+  ant_object_t *ptr = (ant_object_t *)vptr(as_obj);
+  ant_value_t value = raw->val[DESC_VALUE];
+  int32_t slot = ant_shape_lookup_interned(ptr->shape, interned);
+  *result = obj;
+
+  if (slot < 0) {
+    if (!ptr->flags.extensible) return false;
+    ant_value_t added = mkprop_interned_attrs_impl(js, as_obj, interned, key->length, value, ANT_PROP_ATTR_DEFAULT, 0);
+    if (is_err(added)) *result = added;
+  } else {
+    if (!own_writable_data_slot(ptr, slot) || ant_shape_get_attrs(ptr->shape, (uint32_t)slot) != ANT_PROP_ATTR_DEFAULT) return false;
+    store_own_data_slot(js, ptr, (uint32_t)slot, interned, value);
+  }
+
+  return true;
 }
 
 static bool define_exotic(
@@ -1356,10 +1390,20 @@ static ant_value_t object_define_property_keyed(
   ant_value_t as_obj = js_as_obj(obj);
   if (is_proxy(as_obj)) return define_via_proxy(js, obj, as_obj, key, descriptor, pre_raw);
   
+  define_desc_raw_t raw = {0};
+  if (pre_raw) raw = *pre_raw;
+  else {
+    ant_value_t read_err = define_desc_read(js, descriptor, &raw);
+    if (is_err(read_err)) return read_err;
+  }
+
+  ant_value_t defined;
+  if (define_plain_target(as_obj, key) && define_plain_data(js, obj, as_obj, key, &raw, &defined)) return defined;
+
   define_target_t t = define_target_init(obj, as_obj, key);
   define_desc_t d;
   
-  ant_value_t err = define_desc_parse(js, descriptor, pre_raw, &d);
+  ant_value_t err = define_desc_parse(js, descriptor, &raw, &d);
   if (is_err(err)) return err;
 
   if (fields) *fields = define_desc_fields(&d);
