@@ -82,6 +82,7 @@ typedef enum {
 } sv_destructure_mode_t;
 
 size_t literal_num_key(double num, char *buf, size_t cap);
+size_t literal_num_name(const sv_ast_t *key, char *buf, size_t cap);
 const char *copy_source_text(ant_t *js, const char *source, ant_offset_t source_len);
 void emit(sv_compiler_t *c, uint8_t byte);
 void emit_u16(sv_compiler_t *c, uint16_t val);
@@ -406,7 +407,7 @@ static inline void compile_static_property_key(sv_compiler_t *c, sv_ast_t *key) 
 
   if (key->type == N_NUMBER) {
     char buf[SV_LITERAL_NUM_KEY_BUF_SIZE];
-    size_t n = literal_num_key(key->num, buf, sizeof(buf));
+    size_t n = literal_num_name(key, buf, sizeof(buf));
     emit_constant(c, sv_const_str(c, buf, n));
     return;
   }

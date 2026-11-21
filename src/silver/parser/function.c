@@ -2,13 +2,14 @@
 #include "shapes.h"
 
 sv_ast_t *parse_arrow_body(sv_parser_t *p, bool is_async) {
-  bool saved_async = p->in_async;
+  sv_parse_context_t saved = sv_parse_context_save(p);
   p->in_async = is_async;
-  bool saved_no_in = p->no_in;
+  p->static_block = false;
+  p->in_generator = false;
+  p->no_yield = false;
   if (sv_lexer_next(&p->lx) == TOK_LBRACE) p->no_in = false;
   sv_ast_t *body = p->lx.st.tok == TOK_LBRACE ? parse_block(p, true) : parse_assign(p);
-  p->no_in = saved_no_in;
-  p->in_async = saved_async;
+  sv_parse_context_restore(p, saved);
   return body;
 }
 
@@ -41,6 +42,14 @@ static void arrow_param_bind_names(sv_ast_t *node) {
 
 bool arrow_param_is_name(const sv_ast_t *node) {
   return node && (node->type == N_IDENT || ((node->type == N_UNDEF || node->type == N_GLOBAL_THIS) && node->str));
+}
+
+static bool params_suspend(const sv_ast_t *node) {
+  if (!node || node->type == N_FUNC) return false;
+  if (node->type == N_YIELD || node->type == N_AWAIT) return true;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child) if (params_suspend(child)) return true;
+  return false;
 }
 
 static void push_arrow_param(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr, bool top, bool last) {
@@ -89,6 +98,26 @@ static void push_arrow_param(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr, bool 
 void push_arrow_params_from_expr(sv_parser_t *p, sv_ast_t *fn, sv_ast_t *expr) {
   if (!fn || !expr || Ant_Exception_Pending(p->js)) return;
   push_arrow_param(p, fn, expr, !(fn->flags & FN_ASYNC), true);
+  if (Ant_Exception_Pending(p->js)) return;
+  if ((p->in_generator || sv_await_reserved(p) || (fn->flags & FN_ASYNC)) && params_suspend(expr)) SV_MKERR_TYPED(
+    p->js, JS_ERR_SYNTAX, "Yield or await expression not allowed in formal parameter"
+  );
+}
+
+static bool async_arrow_line_break(sv_parser_t *p) {
+  if (!sv_lexer_lookahead_newline(&p->lx)) return false;
+  SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Line terminator not allowed before arrow");
+  return true;
+}
+
+static bool async_params_mention_await(const sv_ast_t *node) {
+  if (!node || node->type == N_FUNC || node->type == N_CLASS) return false;
+  if (node->type == N_AWAIT) return true;
+  if (node->type == N_IDENT) return node->str && node->len == 5 && memcmp(node->str, "await", 5) == 0;
+  const sv_ast_t *child;
+  SV_AST_FOR_EACH_CHILD(node, child)
+    if (async_params_mention_await(child)) return true;
+  return false;
 }
 
 sv_ast_t *try_parse_async_arrow(sv_parser_t *p) {
@@ -102,6 +131,7 @@ sv_ast_t *try_parse_async_arrow(sv_parser_t *p) {
     if (sv_lexer_next(&p->lx) == TOK_RPAREN) {
       p->lx.st.consumed = 1;
       if (sv_lexer_lookahead(&p->lx) == TOK_ARROW) {
+        if (async_arrow_line_break(p)) return mk(N_EMPTY);
         sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
         sv_ast_t *fn = mk(N_FUNC);
         fn->flags = FN_ARROW | FN_ASYNC;
@@ -121,6 +151,11 @@ sv_ast_t *try_parse_async_arrow(sv_parser_t *p) {
     p->no_in = saved_no_in;
     expect(p, TOK_RPAREN);
     if (sv_lexer_lookahead(&p->lx) == TOK_ARROW) {
+      if (async_arrow_line_break(p)) return mk(N_EMPTY);
+      if (async_params_mention_await(expr)) {
+        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Illegal await-expression in formal parameters of async function");
+        return mk(N_EMPTY);
+      }
       sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
       sv_ast_t *fn = mk(N_FUNC);
       fn->flags = FN_ARROW | FN_ASYNC;
@@ -134,12 +169,18 @@ sv_ast_t *try_parse_async_arrow(sv_parser_t *p) {
     return NULL;
   }
 
-  if (la == TOK_IDENTIFIER || la == TOK_UNDEF || la == TOK_GLOBAL_THIS) {
+  if (ident_tok_here_as(p, la) || la == TOK_AWAIT) {
     sv_lexer_state_t saved;
     sv_lexer_save_state(&p->lx, &saved);
     sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
     sv_ast_t *id = mk_ident_from_tok(p);
-    if (sv_lexer_lookahead(&p->lx) == TOK_ARROW) {
+    if (sv_lexer_lookahead(&p->lx) == TOK_ARROW && !lookahead_crosses_line_terminator(p)) {
+      if (p->lx.st.tok == TOK_AWAIT) {
+        SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected reserved word");
+        return id;
+      }
+      if (sv_reject_binding_name(p, id->str, id->len)) return id;
+      if (id->type != N_IDENT) id->type = N_IDENT;
       sv_lexer_next(&p->lx); p->lx.st.consumed = 1;
       sv_ast_t *fn = mk(N_FUNC);
       fn->flags = FN_ARROW | FN_ASYNC;
@@ -304,45 +345,117 @@ unsigned scope_facts_eval_yield(const sv_ast_list_t *list, const sv_ast_t *body)
   return SCOPE_FACTS_FLAGS(found);
 }
 
+static bool pattern_binds_strict_reserved(const sv_ast_t *node) {
+  if (!node) return false;
+  switch (node->type) {
+    case N_IDENT:
+      return node->str && is_strict_reserved_name(node->str, node->len);
+    case N_ASSIGN: case N_ASSIGN_PAT:
+      return pattern_binds_strict_reserved(node->left);
+    case N_REST: case N_SPREAD: case N_PROPERTY:
+      return pattern_binds_strict_reserved(node->right);
+    case N_ARRAY: case N_ARRAY_PAT: case N_OBJECT: case N_OBJECT_PAT:
+      for (int i = 0; i < node->args.count; i++)
+        if (pattern_binds_strict_reserved(node->args.items[i])) return true;
+      return false;
+    default: return false;
+  }
+}
+
+static bool body_has_use_strict(sv_parser_t *p, const sv_ast_t *body) {
+  if (!body || body->type != N_BLOCK) return false;
+  for (int i = 0; i < body->args.count; i++) {
+    const sv_ast_t *stmt = body->args.items[i];
+    if (!stmt || stmt->type == N_EMPTY) continue;
+    if (stmt->type != N_STRING) return false;
+    if (sv_ast_is_use_strict(p->js, stmt)) return true;
+  }
+  return false;
+}
+
+static void check_retroactive_strict_slow(sv_parser_t *p, const sv_ast_t *fn) {
+  if (Ant_Exception_Pending(p->js) || !body_has_use_strict(p, fn->body)) return;
+  bool reserved = fn->str && (is_strict_reserved_name(fn->str, fn->len) || is_eval_or_arguments_name(fn->str, fn->len));
+  for (int i = 0; !reserved && i < fn->args.count; i++) reserved = pattern_binds_strict_reserved(fn->args.items[i]);
+  if (reserved) SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected strict mode reserved word");
+}
+
+static inline bool body_starts_with_string(const sv_ast_t *body) {
+  if (!body || body->type != N_BLOCK || body->args.count == 0) return false;
+  const sv_ast_t *first = body->args.items[0];
+  return first && (first->type == N_STRING || first->type == N_EMPTY);
+}
+
+static inline void check_retroactive_strict(sv_parser_t *p, const sv_ast_t *fn) {
+  if (__builtin_expect(p->lx.strict || !body_starts_with_string(fn->body), 1)) return;
+  check_retroactive_strict_slow(p, fn);
+}
+
 sv_ast_t *finish_arrow(sv_parser_t *p, sv_ast_t *fn) {
+  check_retroactive_strict(p, fn);
   fn->flags |= scope_facts_eval_yield(&fn->args, fn->body);
   return fn;
 }
 
-sv_ast_t *parse_func(sv_parser_t *p, bool is_async) {
+static sv_ast_t *parse_func_kind(sv_parser_t *p, bool is_async, bool is_generator, sv_func_kind_t kind) {
   sv_ast_t *fn = mk(N_FUNC);
   if (is_async) fn->flags |= FN_ASYNC;
 
-  if (sv_lexer_next(&p->lx) == TOK_MUL) {
+  if (kind != SV_FUNC_METHOD && sv_lexer_next(&p->lx) == TOK_MUL) {
     p->lx.st.consumed = 1;
-    fn->flags |= FN_GENERATOR;
+    is_generator = true;
   }
+  if (is_generator) fn->flags |= FN_GENERATOR;
+  if (kind == SV_FUNC_METHOD) fn->flags |= FN_METHOD;
 
   sv_lexer_next(&p->lx);
-  if (binding_ident_here(p)) {
+  bool named = kind == SV_FUNC_DECLARATION
+    ? ident_tok_here(p)
+    : kind == SV_FUNC_EXPRESSION && ident_tok_allowed(p, p->lx.st.tok, is_async || p->goal == SV_PARSE_MODULE, is_generator);
+  if (named) {
     fn->str = tok_ident_str(p, &fn->len);
-    sv_strict_check_binding_ident(p, fn->str, fn->len);
+    if (kind == SV_FUNC_DECLARATION ? sv_reject_binding_name(p, fn->str, fn->len) : (
+      (p->lx.strict && (is_strict_reserved_name(fn->str, fn->len) || is_eval_or_arguments_name(fn->str, fn->len))) ||
+      (is_generator && fn->len == 5 && memcmp(fn->str, "yield", 5) == 0) ||
+      ((is_async || p->goal == SV_PARSE_MODULE) && fn->len == 5 && memcmp(fn->str, "await", 5) == 0)
+    )) {
+      if (!Ant_Exception_Pending(p->js)) SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected strict mode reserved word");
+      return fn;
+    }
     p->lx.st.consumed = 1;
   }
 
-  bool saved_async = p->in_async;
-  bool saved_no_in = p->no_in;
-  bool saved_initializer = p->class_initializer;
+  sv_parse_context_t saved = sv_parse_context_save(p);
   p->in_async = is_async;
+  p->in_generator = is_generator;
   p->no_in = false;
+  p->static_block = false;
   p->class_initializer = false;
+  p->no_yield = is_generator;
   
   expect(p, TOK_LPAREN);
   parse_formal_params(p, fn, TOK_RPAREN);
   expect(p, TOK_RPAREN);
   
+  p->no_yield = false;
   fn->body = parse_block(p, true);
-  p->class_initializer = saved_initializer;
-  p->no_in = saved_no_in;
-  p->in_async = saved_async;
+  sv_parse_context_restore(p, saved);
 
   fn->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
+  check_retroactive_strict(p, fn);
   finish_func(fn);
   
   return fn;
+}
+
+sv_ast_t *parse_func(sv_parser_t *p, bool is_async) {
+  return parse_func_kind(p, is_async, false, SV_FUNC_EXPRESSION);
+}
+
+sv_ast_t *parse_func_decl(sv_parser_t *p, bool is_async) {
+  return parse_func_kind(p, is_async, false, SV_FUNC_DECLARATION);
+}
+
+sv_ast_t *parse_method_func(sv_parser_t *p, bool is_async, bool is_generator) {
+  return parse_func_kind(p, is_async, is_generator, SV_FUNC_METHOD);
 }

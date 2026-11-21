@@ -489,21 +489,19 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       break;
     }
 
-    case N_IMPORT:
-      if (has_module_import_binding(c)) {
-        emit_get_module_import_binding(c);
-        compile_expr(c, node->right);
-        if (node->left) compile_expr(c, node->left);
-        else emit_op(c, OP_UNDEF);
+    case N_IMPORT: {
+      bool module_binding = has_module_import_binding(c);
+      if (module_binding) emit_get_module_import_binding(c);
+      compile_expr(c, node->right);
+      if (node->flags & 1) emit_constant(c, sv_const_str(c, SV_IMPORT_SOURCE_PHASE, SV_IMPORT_SOURCE_PHASE_LEN));
+      else if (node->left) compile_expr(c, node->left);
+      else emit_op(c, OP_UNDEF);
+      if (module_binding) {
         emit_op(c, OP_CALL);
         emit_u16(c, 2);
-      } else {
-        compile_expr(c, node->right);
-        if (node->left) compile_expr(c, node->left);
-        else emit_op(c, OP_UNDEF);
-        emit_op(c, OP_IMPORT);
-      }
+      } else emit_op(c, OP_IMPORT);
       break;
+    }
 
     case N_REGEXP:
       emit_constant(c, sv_const_str(c, node->str ? node->str : "", node->len));

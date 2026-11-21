@@ -7,6 +7,13 @@ size_t literal_num_key(double num, char *buf, size_t cap) {
   return ant_number_to_shortest(num, buf, cap);
 }
 
+size_t literal_num_name(const sv_ast_t *key, char *buf, size_t cap) {
+  if (!key->str || key->len >= cap) return literal_num_key(key->num, buf, cap);
+  memcpy(buf, key->str, key->len);
+  buf[key->len] = '\0';
+  return key->len;
+}
+
 static constexpr int SV_SHAPED_LITERAL_MAX_KEYS = 32;
 static constexpr int SV_LITERAL_DYNAMIC_RATIO = 6;
 static constexpr int SV_LITERAL_CLASS_STACK = 64;
@@ -441,6 +448,19 @@ static void emit_object_method_home(sv_compiler_t *c, const sv_ast_t *value, boo
   }
 }
 
+static void compile_property_value(sv_compiler_t *c, sv_ast_t *prop) {
+  const sv_ast_t *key = prop->left;
+  char buf[SV_LITERAL_NUM_KEY_BUF_SIZE];
+
+  if (!key || !node_needs_inferred_function_name(prop->right)) compile_expr(c, prop->right);
+  else if (is_quoted_ident_key(key)) compile_expr_with_inferred_name(c, prop->right, key->str + 1, key->len - 2);
+  else if (key->type == N_IDENT || key->type == N_STRING)
+    compile_expr_with_inferred_name(c, prop->right, key->str ? key->str : "", key->len);
+  else if (key->type == N_NUMBER)
+    compile_expr_with_inferred_name(c, prop->right, buf, (uint32_t)literal_num_name(key, buf, sizeof(buf)));
+  else compile_expr(c, prop->right);
+}
+
 static bool computed_key_needs_early_coercion(sv_compiler_t *c, const sv_ast_t *prop) {
   const sv_ast_t *value = prop->right;
   if (!value || value->type == N_FUNC || value->type == N_NUMBER || value->type == N_STRING) return false;
@@ -487,9 +507,7 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
         emit_op(c, OP_SET_PROTO);
         continue;
       }
-      if (prop->left->type == N_IDENT && !is_quoted_ident_key(prop->left))
-        compile_expr_with_inferred_name(c, prop->right, prop->left->str, prop->left->len);
-      else compile_expr(c, prop->right);
+      compile_property_value(c, prop);
       emit_object_method_home(c, prop->right, false);
       emit_op(c, OP_DEFINE_SLOT);
       emit_u32(c, atom_idx[i]);
@@ -547,9 +565,7 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
         emit_op(c, OP_SET_PROTO);
         continue;
       }
-      if (prop->left && prop->left->type == N_IDENT && !is_quoted_ident_key(prop->left))
-        compile_expr_with_inferred_name(c, prop->right, prop->left->str, prop->left->len);
-      else compile_expr(c, prop->right);
+      compile_property_value(c, prop);
       emit_object_method_home(c, prop->right, false);
       if (prop->left->type == N_IDENT && !is_quoted_ident_key(prop->left)) {
         emit_atom_op(c, OP_DEFINE_FIELD, prop->left->str, prop->left->len);

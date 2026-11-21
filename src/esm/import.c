@@ -3,12 +3,14 @@
 #include <string.h>
 
 #include "cfunc.h"
+#include "convert.h"
 #include "ptr.h"
 #include "esm/remote.h"
 #include "esm/import.h"
 #include "esm/builtin_bundle.h"
 #include "modules/proxy.h"
 #include "modules/promise.h"
+#include "modules/microtasks.h"
 #include "silver/engine.h"
 
 static constexpr uint32_t MODULE_CTX_NATIVE_TAG = Ant_NativeTag("MCTX");
@@ -111,29 +113,137 @@ static ant_value_t builtin_import_tla_resolve(ant_params_t) {
   return js_get_slot(call_func, SLOT_DATA);
 }
 
+enum {
+  IMPORT_JOB_PROMISE,
+  IMPORT_JOB_SPECIFIER,
+  IMPORT_JOB_ATTRS,
+  IMPORT_JOB_BASE,
+  IMPORT_JOB_FIELD_COUNT,
+};
+
+static const char *js_import_job_base_path(ant_t *js, ant_value_t base) {
+  return vtype(base) == kTypeString ? js_getstr(js, base, NULL) : js_module_ctx_filename(base);
+}
+
+enum {
+  IMPORT_SETTLE_PROMISE,
+  IMPORT_SETTLE_NAMESPACE,
+  IMPORT_SETTLE_TURNS,
+  IMPORT_SETTLE_FIELD_COUNT,
+};
+
+static ant_value_t builtin_import_settle(ant_params_t);
+
+static void js_import_settle_after(ant_t *js, ant_value_t promise, ant_value_t ns, int turns) {
+  ant_value_t fields[IMPORT_SETTLE_FIELD_COUNT] = {
+    [IMPORT_SETTLE_PROMISE] = promise,
+    [IMPORT_SETTLE_NAMESPACE] = ns,
+    [IMPORT_SETTLE_TURNS] = Ant_Value_FromNumber(turns),
+  };
+  queue_microtask_with_args(js, Ant_Function_Create(builtin_import_settle), fields, IMPORT_SETTLE_FIELD_COUNT);
+}
+
+static ant_value_t builtin_import_settle(ant_params_t) {
+  if (nargs < IMPORT_SETTLE_FIELD_COUNT) return Ant_Value_Undefined;
+  
+  int turns = (int)Ant_Value_AsNumberUnchecked(args[IMPORT_SETTLE_TURNS]);
+  if (turns > 1) js_import_settle_after(js, args[IMPORT_SETTLE_PROMISE], args[IMPORT_SETTLE_NAMESPACE], turns - 1);
+  else js_resolve_promise(js, args[IMPORT_SETTLE_PROMISE], args[IMPORT_SETTLE_NAMESPACE]);
+  
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t builtin_import_job(ant_params_t) {
+  if (nargs < IMPORT_JOB_FIELD_COUNT) return Ant_Value_Undefined;
+  
+  ant_value_t promise = args[IMPORT_JOB_PROMISE];
+  ant_value_t base = args[IMPORT_JOB_BASE];
+  
+  ant_value_t evaluation = Ant_Value_Undefined;
+  ant_value_t ns = js_esm_import_dynamic_ex(js, args[IMPORT_JOB_SPECIFIER], js_import_job_base_path(js, base), args[IMPORT_JOB_ATTRS], &evaluation);
+
+  if (is_err(ns)) js_reject_promise(js, promise, js_take_thrown(js, ns));
+  else if (vtype(evaluation) != kTypePromise) js_import_settle_after(js, promise, ns, 1);
+  else js_resolve_promise(js, promise, js_promise_then(js, evaluation, js_make_data_cfunc(js, ns, builtin_import_tla_resolve), Ant_Value_Undefined));
+  
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t js_import_job_base(ant_t *js, ant_value_t call_func) {
+  ant_value_t module_ctx = js_get_import_owner_module_ctx(js, call_func);
+  if (js_module_ctx_filename(module_ctx)) return module_ctx;
+  
+  module_ctx = js_get_execution_module_ctx(js);
+  if (js_module_ctx_filename(module_ctx)) return module_ctx;
+  
+  return js->filename ? js_mkstr(js, js->filename, strlen(js->filename)) : Ant_Value_Undefined;
+}
+
+static bool js_import_is_source_phase(ant_t *js, ant_value_t marker) {
+  size_t len = 0;
+  const char *str = js_getstr(js, marker, &len);
+  return str && len == SV_IMPORT_SOURCE_PHASE_LEN && memcmp(str, SV_IMPORT_SOURCE_PHASE, len) == 0;
+}
+
+static ant_value_t js_import_source_phase(ant_t *js, ant_value_t specifier, ant_value_t call_func) {
+  ant_value_t base = js_import_job_base(js, call_func);
+  ant_value_t resolved = js_esm_resolve_specifier(js, specifier, js_import_job_base_path(js, base));
+  if (is_err(resolved)) return resolved;
+  
+  static const char code[] = "ERR_SOURCE_PHASE_NOT_DEFINED";
+  ant_value_t props = Ant_Object_CreateBare(js);
+  js_set(js, props, "code", js_mkstr(js, code, sizeof(code) - 1));
+  size_t len = 0;
+  const char *url = js_getstr(js, resolved, &len);
+  
+  return js_mkerr_props(
+    js, JS_ERR_SYNTAX, props,
+    "Source phase import object is not defined for module '%.*s'", (int)len, url ? url : ""
+  );
+}
+
 ant_value_t js_builtin_import(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "import() requires a string specifier");
+  GC_ROOT_SAVE(root_mark, js);
 
-  const char *base_path = js_import_base_path(js, js_get_import_owner_module_ctx(js, call_func));
-
-  ant_value_t attrs = js_import_attributes(js, nargs >= 2 ? args[1] : Ant_Value_Undefined);
-  if (is_err(attrs)) return js_promise_reject_with_ctor(js, js->sym.promise_ctor, js_take_thrown(js, attrs));
-
-  ant_value_t tla_promise = Ant_Value_Undefined;
-  ant_value_t ns = js_esm_import_dynamic_ex(js, args[0], base_path, attrs, &tla_promise);
-
-  if (is_err(ns)) {
-    ant_value_t reject_val = js_take_thrown(js, ns);
-    return js_promise_reject_with_ctor(js, js->sym.promise_ctor, reject_val);
+  ant_value_t specifier = vtype(args[0]) == kTypeString ? args[0] : coerce_to_str_hint(js, args[0], 1);
+  if (specifier != args[0]) GC_ROOT_PIN(js, specifier);
+  
+  bool source_phase = nargs >= 2 && vtype(args[1]) == kTypeString && js_import_is_source_phase(js, args[1]);
+  ant_value_t attrs = is_err(specifier) ? specifier
+    : source_phase ? js_import_source_phase(js, specifier, call_func)
+    : js_import_attributes(js, nargs >= 2 ? args[1] : Ant_Value_Undefined);
+  if (is_object_type(attrs)) GC_ROOT_PIN(js, attrs);
+  
+  if (is_err(attrs)) {
+    ant_value_t rejected = js_promise_reject_with_ctor(js, js->sym.promise_ctor, js_take_thrown(js, attrs));
+    GC_ROOT_RESTORE(js, root_mark);
+    return rejected;
   }
 
-  if (vtype(tla_promise) == kTypePromise) {
-    ant_value_t resolve_fn = js_make_data_cfunc(js, ns, builtin_import_tla_resolve);
-    ant_value_t then_args[] = { resolve_fn };
-    return js_promise_then(js, tla_promise, then_args[0], Ant_Value_Undefined);
+  ant_value_t base = js_import_job_base(js, call_func);
+  if (vtype(base) == kTypeString) GC_ROOT_PIN(js, base);
+  
+  ant_value_t loaded = js_esm_import_loaded(js, specifier, js_import_job_base_path(js, base), attrs);
+  ant_value_t promise = js_mkpromise(js);
+  
+  if (is_object_type(loaded)) {
+    js_import_settle_after(js, promise, loaded, 2);
+    GC_ROOT_RESTORE(js, root_mark);
+    return promise;
   }
 
-  return js_promise_assimilate_awaitable(js, ns);
+  ant_value_t fields[IMPORT_JOB_FIELD_COUNT] = {
+    [IMPORT_JOB_PROMISE] = promise,
+    [IMPORT_JOB_SPECIFIER] = specifier,
+    [IMPORT_JOB_ATTRS] = attrs,
+    [IMPORT_JOB_BASE] = base,
+  };
+  
+  queue_microtask_with_args(js, Ant_Function_Create(builtin_import_job), fields, IMPORT_JOB_FIELD_COUNT);
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  return promise;
 }
 
 static ant_value_t js_get_module_ctx_import_meta(ant_value_t module_ctx) {

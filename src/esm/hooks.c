@@ -451,7 +451,7 @@ ant_value_t esm_import_via_hooks(
     : url;
 
   esm_module_t *cached = esm_find_module(js, cache_key);
-  if (cached && (cached->is_loaded || cached->is_loading)) {
+  if (cached && cached->status != ESM_MODULE_UNLOADED) {
     *handled = true;
     ant_value_t cached_ns = cached->namespace_obj;
     free(fs_path);

@@ -1,13 +1,7 @@
 #include "parser_internal.h"
 
 bool lookahead_crosses_line_terminator(sv_parser_t *p) {
-  sv_lexer_state_t saved;
-  sv_lexer_save_state(&p->lx, &saved);
-  p->lx.st.consumed = 1;
-  (void)sv_lexer_next(&p->lx);
-  bool had_newline = p->lx.st.had_newline;
-  sv_lexer_restore_state(&p->lx, &saved);
-  return had_newline;
+  return sv_lexer_lookahead_newline(&p->lx);
 }
 
 void sv_parse_stop(sv_parser_t *p) {
@@ -15,6 +9,22 @@ void sv_parse_stop(sv_parser_t *p) {
   p->lx.st.consumed = 0;
   p->lx.st.toff = p->lx.st.pos = p->lx.clen;
   p->lx.st.tlen = 0;
+}
+
+bool sv_reject_ident_name_slow(sv_parser_t *p, const char *s, uint32_t len) {
+  if (p->class_initializer && len == 9 && memcmp(s, "arguments", 9) == 0) {
+    SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "'arguments' is not allowed in class field initializer or static initialization block");
+    return true;
+  }
+  if (len == 5 && memcmp(s, "await", 5) == 0 && ((p->static_block && !p->in_async) || sv_await_reserved(p))) {
+    SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected reserved word");
+    return true;
+  }
+  if ((p->lx.strict && is_strict_reserved_name(s, len)) || (p->in_generator && len == 5 && memcmp(s, "yield", 5) == 0)) {
+    SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected strict mode reserved word");
+    return true;
+  }
+  return false;
 }
 
 static bool pattern_name_ok(sv_parser_t *p, const sv_ast_t *node) {
@@ -39,6 +49,7 @@ static bool simple_target_ok(sv_parser_t *p, const sv_ast_t *node, bool allow_ca
     case N_GLOBAL_THIS:
       return pattern_name_ok(p, node);
     case N_MEMBER:
+      if (ast_is_ident(node->left, "import", 6) && !(node->left->flags & FN_PAREN)) return false;
       return target_chain_ok(node);
     case N_CALL:
       return allow_call && !ast_is_ident(node->left, "super", 5) && target_chain_ok(node);
@@ -298,7 +309,8 @@ sv_ast_t *sv_parse_function_body(ant_t *js, const char *code, ant_offset_t clen,
 sv_ast_t *sv_parse_function_parts(ant_t *js, const sv_function_parts_t *parts) {
   sv_parser_t parser = {
     .js = js, .goal = SV_PARSE_SCRIPT,
-    .in_async = parts->is_async, .function_depth = 1,
+    .in_async = parts->is_async, .in_generator = parts->is_generator,
+    .no_yield = parts->is_generator, .function_depth = 1,
   };
   sv_parser_t *p = &parser;
 
@@ -315,6 +327,7 @@ sv_ast_t *sv_parse_function_parts(ant_t *js, const sv_function_parts_t *parts) {
 
   sv_lexer_init(&p->lx, js, parts->text, parts->body_end, false);
   p->lx.st.pos = parts->body_off;
+  p->no_yield = false;
   fn->body = mk_plain(N_BLOCK);
   fn->body->src_off = (uint32_t)parts->body_off;
   fn->body->src_end = (uint32_t)parts->body_end;

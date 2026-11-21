@@ -219,6 +219,9 @@ typedef struct {
   uint32_t src_end;
 } sv_srcpos_t;
 
+#define SV_IMPORT_SOURCE_PHASE "\x01import.source"
+#define SV_IMPORT_SOURCE_PHASE_LEN 14
+
 typedef enum {
   SV_TI_UNKNOWN = 0,
   SV_TI_NUM,
