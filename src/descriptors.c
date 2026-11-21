@@ -1380,7 +1380,7 @@ static ant_value_t define_data(
   return define_done(js, t);
 }
 
-static bool define_namespace_export(
+static __attribute__((noinline)) bool define_namespace_export(
   ant_t *js, const define_target_t *t, const define_desc_t *d, const define_existing_t *e, ant_value_t *result
 ) {
   const ant_object_t *ptr = e->ptr;
@@ -1444,7 +1444,7 @@ static ant_value_t object_define_property_keyed(
   }
 
   define_existing_t e = define_lookup_existing(js, &t);
-  if (define_namespace_export(js, &t, &d, &e, &result)) return result;
+  if (e.found && e.has_meta && !e.meta.configurable && !e.meta.writable && define_namespace_export(js, &t, &d, &e, &result)) return result;
   err = define_validate_existing(js, &t, &d, &e);
   if (is_err(err)) return err;
 
