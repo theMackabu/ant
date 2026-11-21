@@ -312,9 +312,9 @@ static ant_value_t sv_construct_ordinary(
   ant_value_t effective_new_target = new_target;
   bool carried = sv_construct_carries_prototype(js, func, new_target);
   bool proxied = carried || (vtype(new_target) == kTypeObject && is_proxy(new_target));
-  ant_value_t proto = proxied
-    ? js_getprop_fallback(js, new_target, "prototype")
-    : sv_prepare_construct_meta(js, func, new_target, &effective_new_target);
+  ant_value_t proto = !proxied ? sv_prepare_construct_meta(js, func, new_target, &effective_new_target)
+    : carried ? js_getprop_fallback(js, new_target, "prototype")
+    : js_proxy_get_prototype(js, new_target);
   if (is_err(proto)) return proto;
   if (proxied && vtype(proto) == kTypeBuiltin) proto = js_cfunc_promote(js, proto);
   if (proxied && !is_object_type(proto)) proto = Ant_Value_Undefined;
@@ -443,14 +443,13 @@ ant_value_t sv_construct_proxied(
     return sv_construct(vm, js, func, args, argc, new_target);
   if (fn->is_derived_ctor) return sv_construct_unsettled(vm, js, func, args, argc, new_target);
 
-  ant_value_t proto = js_getprop_fallback(js, new_target, "prototype");
+  ant_value_t proto = js_proxy_get_prototype(js, new_target);
   if (is_err(proto)) return proto;
   if (vtype(proto) == kTypeBuiltin) proto = js_cfunc_promote(js, proto);
   if (!is_object_type(proto)) proto = js->sym.object_proto;
 
-  ant_value_t seed = Ant_Object_CreateBare(js);
+  ant_value_t seed = js_mkobj_with_proto_slots(js, proto, sv_construct_slots_of(func));
   if (is_err(seed)) return seed;
-  js_set_proto_init(seed, proto);
 
   ant_value_t ctor_this = seed;
   ant_value_t result = sv_vm_call(vm, js, func, seed, args, argc, &ctor_this, new_target);
@@ -470,7 +469,7 @@ ant_value_t sv_construct_settle(ant_t *js, ant_value_t seed, ant_value_t new_tar
 
   ant_value_t proto;
   if (vtype(new_target) == kTypeObject && is_proxy(new_target)) {
-    proto = js_getprop_fallback(js, new_target, "prototype");
+    proto = js_proxy_get_prototype(js, new_target);
     if (is_err(proto)) return proto;
     if (vtype(proto) == kTypeBuiltin) proto = js_cfunc_promote(js, proto);
     if (!is_object_type(proto)) proto = js->sym.object_proto;
