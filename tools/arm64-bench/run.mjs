@@ -170,7 +170,7 @@ async function main() {
     process.stdout.write(`wrote ${options.output}\n`);
   }
 
-  if (options.strict && output.run.status !== 'ok') process.exitCode = 1;
+  if (options.require.some(id => resultEngines.get(id)?.status !== 'ok')) process.exitCode = 1;
 }
 
 function parseArgs(argv) {
@@ -181,13 +181,13 @@ function parseArgs(argv) {
     engines: [],
     output: 'arm64-bench-result.json',
     repo: null,
+    require: [],
     samples: 5,
-    strict: false,
     timeoutMs: 10 * 60 * 1000
   };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
-    if (arg === '--strict') options.strict = true;
+    if (arg === '--require') options.require.push(requiredValue(argv, ++index, arg));
     else if (arg === '--engine') options.engines.push(requiredValue(argv, ++index, arg));
     else if (arg === '--samples') options.samples = Number(requiredValue(argv, ++index, arg));
     else if (arg === '--timeout-ms') options.timeoutMs = Number(requiredValue(argv, ++index, arg));
@@ -197,7 +197,7 @@ function parseArgs(argv) {
     else if (arg === '--repo') options.repo = requiredValue(argv, ++index, arg);
     else if (arg === '--date') options.date = requiredValue(argv, ++index, arg);
     else if (arg === '--help') {
-      process.stdout.write('Usage: node tools/arm64-bench/run.mjs [--samples N] [--engine ID] [--output PATH] [--strict]\n');
+      process.stdout.write('Usage: node tools/arm64-bench/run.mjs [--samples N] [--engine ID] [--output PATH] [--require ID]\n');
       process.exit(0);
     } else throw new Error(`unknown argument: ${arg}`);
   }

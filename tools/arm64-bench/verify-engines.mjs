@@ -19,27 +19,33 @@ const state = fs.existsSync(statePath)
   : {};
 let failed = false;
 
+function report(engine, message) {
+  if (engine.id === 'ant') {
+    console.error(`${engine.id}: ${message}`);
+    failed = true;
+  } else if (process.env.GITHUB_ACTIONS) console.log(`::warning::${engine.id}: ${message}`);
+  else console.error(`warning: ${engine.id}: ${message}`);
+}
+
 for (const configured of config.engines) {
   if (externalOnly && configured.id === 'ant') continue;
   const engine = resolveEngine(configured, { repo, engineRoot });
   if (!fs.existsSync(engine.executable)) {
-    console.error(`${engine.id}: missing ${engine.executable}`);
-    failed = true;
+    report(engine, `missing ${engine.executable}`);
     continue;
   }
 
   const metadata = await executableMetadata(engine);
   const resolution = state[engine.id];
   if (engine.id !== 'ant' && !resolution) {
-    console.error(`${engine.id}: missing resolution in ${statePath}`);
-    failed = true;
+    report(engine, `missing resolution in ${statePath}`);
     continue;
   }
   if (resolution && resolution.executableSha256 !== metadata.executableSha256) {
-    console.error(
-      `${engine.id}: executable hash changed: expected ${resolution.executableSha256}, found ${metadata.executableSha256}`,
+    report(
+      engine,
+      `executable hash changed: expected ${resolution.executableSha256}, found ${metadata.executableSha256}`,
     );
-    failed = true;
     continue;
   }
 

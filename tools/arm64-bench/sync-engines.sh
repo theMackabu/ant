@@ -122,135 +122,187 @@ install_zip() {
   activate "$id" "$install_dir" "$executable_name" "$channel" "$version" "$revision"
 }
 
-github_release=$(github_fetch https://api.github.com/repos/boa-dev/boa/releases/latest)
-boa_version=$(jq -er '.tag_name' <<<"$github_release")
-boa_url=$(jq -er '.assets[] | select(.name == "boa-aarch64-apple-darwin") | .browser_download_url' \
-  <<<"$github_release")
-boa_revision=$(git_tag_revision https://github.com/boa-dev/boa.git "$boa_version")
-install_single_binary boa "$boa_version" "$boa_url" boa latest-release "$boa_version" "$boa_revision"
-
-v8_version=$(fetch https://storage.googleapis.com/chromium-v8/official/canary/v8-mac-arm64-rel-latest.json \
-  | jq -er '.version')
-v8_url="https://storage.googleapis.com/chromium-v8/official/canary/v8-mac-arm64-rel-$v8_version.zip"
-v8_revision=$(git_tag_revision https://chromium.googlesource.com/v8/v8.git "$v8_version")
-install_zip v8-jitless "$v8_version" "$v8_url" d8 canary "$v8_version" "$v8_revision"
-
-sm_version=$(fetch https://product-details.mozilla.org/1.0/firefox_history_development_releases.json \
-  | jq -er 'to_entries | sort_by(.value) | last | .key')
-sm_url="https://archive.mozilla.org/pub/firefox/releases/$sm_version/jsshell/jsshell-mac.zip"
-install_zip sm-jitless "$sm_version" "$sm_url" js development-release "$sm_version"
-
-kiesel_revision=$(git ls-remote https://codeberg.org/kiesel-js/kiesel.git HEAD | awk '{print $1}')
-[[ "$kiesel_revision" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid Kiesel revision" >&2; exit 1; }
-install_single_binary kiesel "$kiesel_revision" \
-  https://files.kiesel.dev/kiesel-macos-aarch64-releasefast kiesel main-snapshot \
-  "$kiesel_revision" "$kiesel_revision"
-kiesel_reported_version=$("$ENGINES_ROOT/kiesel/current/kiesel" --version 2>&1)
-[[ "$kiesel_reported_version" == *"${kiesel_revision:0:9}"* ]] || {
-  echo "Kiesel snapshot does not match resolved HEAD $kiesel_revision: $kiesel_reported_version" >&2
-  exit 1
+warn() {
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo "::warning::$*"
+  else
+    echo "warning: $*" >&2
+  fi
 }
 
-libjs_revision=$(git ls-remote https://github.com/LadybirdBrowser/ladybird.git HEAD | awk '{print $1}')
-[[ "$libjs_revision" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid LibJS revision" >&2; exit 1; }
-libjs_install="$ENGINES_ROOT/libjs/$libjs_revision"
+sync_boa() {
+  local release version url revision
+  release=$(github_fetch https://api.github.com/repos/boa-dev/boa/releases/latest)
+  version=$(jq -er '.tag_name' <<<"$release")
+  url=$(jq -er '.assets[] | select(.name == "boa-aarch64-apple-darwin") | .browser_download_url' \
+    <<<"$release")
+  revision=$(git_tag_revision https://github.com/boa-dev/boa.git "$version")
+  install_single_binary boa "$version" "$url" boa latest-release "$version" "$revision"
+}
+
+sync_v8_jitless() {
+  local version url revision
+  version=$(fetch https://storage.googleapis.com/chromium-v8/official/canary/v8-mac-arm64-rel-latest.json \
+    | jq -er '.version')
+  url="https://storage.googleapis.com/chromium-v8/official/canary/v8-mac-arm64-rel-$version.zip"
+  revision=$(git_tag_revision https://chromium.googlesource.com/v8/v8.git "$version")
+  install_zip v8-jitless "$version" "$url" d8 canary "$version" "$revision"
+}
+
+sync_sm_jitless() {
+  local version url
+  version=$(fetch https://product-details.mozilla.org/1.0/firefox_history_development_releases.json \
+    | jq -er 'to_entries | sort_by(.value) | last | .key')
+  url="https://archive.mozilla.org/pub/firefox/releases/$version/jsshell/jsshell-mac.zip"
+  install_zip sm-jitless "$version" "$url" js development-release "$version"
+}
+
+sync_kiesel() {
+  local revision reported
+  revision=$(git ls-remote https://codeberg.org/kiesel-js/kiesel.git HEAD | awk '{print $1}')
+  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid Kiesel revision" >&2; return 1; }
+  install_single_binary kiesel "$revision" \
+    https://files.kiesel.dev/kiesel-macos-aarch64-releasefast kiesel main-snapshot \
+    "$revision" "$revision"
+  reported=$("$ENGINES_ROOT/kiesel/current/kiesel" --version 2>&1)
+  [[ "$reported" == *"${revision:0:9}"* ]] || {
+    echo "Kiesel snapshot does not match resolved HEAD $revision: $reported" >&2
+    return 1
+  }
+}
+
 libjs_runs() {
-  [[ -x "$libjs_install/js" ]] || return 1
+  [[ -x "$1/bin/js" ]] || return 1
   : > "$work_dir/libjs-probe.js"
-  "$libjs_install/js" "$work_dir/libjs-probe.js" >/dev/null 2>&1
+  "$1/bin/js" "$work_dir/libjs-probe.js" >/dev/null 2>&1
 }
-if ! libjs_runs; then
-  libjs_source="$SOURCE_ROOT/ladybird"
-  if [[ ! -d "$libjs_source/.git" ]]; then
-    git clone --filter=blob:none https://github.com/LadybirdBrowser/ladybird.git "$libjs_source"
-  fi
-  git -C "$libjs_source" fetch --depth 1 origin "$libjs_revision"
-  git -C "$libjs_source" checkout --detach "$libjs_revision"
-  compiled=true
-  (
-    cd "$libjs_source"
-    if command -v brew >/dev/null && brew --prefix rustup >/dev/null 2>&1; then
-      rustup_prefix=$(brew --prefix rustup)
-      export PATH="$rustup_prefix/bin:$PATH"
+
+sync_libjs() {
+  local revision install source stage
+  revision=$(git ls-remote https://github.com/LadybirdBrowser/ladybird.git HEAD | awk '{print $1}')
+  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid LibJS revision" >&2; return 1; }
+  install="$ENGINES_ROOT/libjs/$revision"
+  if ! libjs_runs "$install"; then
+    source="$SOURCE_ROOT/ladybird"
+    stage="$work_dir/libjs"
+    if [[ ! -d "$source/.git" ]]; then
+      git clone --filter=blob:none https://github.com/LadybirdBrowser/ladybird.git "$source"
     fi
-    python3 Meta/ladybird.py vcpkg --preset Distribution
-    cmake --preset Distribution -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DENABLE_GUI_TARGETS=OFF \
-      -DVCPKG_OVERLAY_PORTS="$SCRIPT_DIR/vcpkg-overlays"
-    ninja -C Build/distribution js
-  )
-  mkdir -p "$libjs_install"
-  cp "$libjs_source/Build/distribution/bin/js" "$libjs_install/js"
-  chmod +x "$libjs_install/js"
-  libjs_icu="$libjs_source/Build/distribution/share/Lagom/icu"
-  if [[ -d "$libjs_icu" ]]; then
-    cp "$libjs_icu"/icudt*.dat "$libjs_install/"
+    git -C "$source" fetch --depth 1 origin "$revision"
+    git -C "$source" checkout --detach "$revision"
+    : > "$work_dir/compiled"
+    (
+      cd "$source"
+      if command -v brew >/dev/null && brew --prefix rustup >/dev/null 2>&1; then
+        rustup_prefix=$(brew --prefix rustup)
+        export PATH="$rustup_prefix/bin:$PATH"
+      fi
+      python3 Meta/ladybird.py vcpkg --preset Distribution
+      cmake --fresh --preset Distribution -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DENABLE_GUI_TARGETS=OFF \
+        -DVCPKG_OVERLAY_PORTS="$SCRIPT_DIR/vcpkg-overlays"
+      ninja -C Build/distribution js
+      cmake --install Build/distribution --component js --prefix "$stage"
+    )
+    libjs_runs "$stage" || { echo "LibJS does not run after install" >&2; return 1; }
+    mkdir -p "$ENGINES_ROOT/libjs"
+    rm -rf "$install"
+    mv "$stage" "$install"
   fi
-  libjs_runs || { echo "LibJS does not run after install" >&2; exit 1; }
-fi
-activate libjs "$libjs_install" js main "$libjs_revision" "$libjs_revision"
+  activate libjs "$install" bin/js main "$revision" "$revision"
+}
 
-duktape_version=2.7.0
-duktape_revision=$(git_tag_revision https://github.com/svaarala/duktape.git "v$duktape_version")
-duktape_install="$ENGINES_ROOT/duktape/$duktape_version"
-if [[ ! -x "$duktape_install/duk" ]]; then
-  duktape_stage="$work_dir/duktape"
-  mkdir -p "$duktape_stage" "$ENGINES_ROOT/duktape"
-  fetch --output "$work_dir/duktape.tar.xz" \
-    "https://github.com/svaarala/duktape/releases/download/v$duktape_version/duktape-$duktape_version.tar.xz"
-  tar -xJf "$work_dir/duktape.tar.xz" --strip-components=1 -C "$duktape_stage"
-  compiled=true
-  make -C "$duktape_stage" -f Makefile.cmdline
-  mkdir -p "$duktape_install"
-  cp "$duktape_stage/duk" "$duktape_install/duk"
-  chmod +x "$duktape_install/duk"
-fi
-activate duktape "$duktape_install" duk latest-release "$duktape_version" "$duktape_revision"
+sync_duktape() {
+  local version=2.7.0 revision install stage
+  revision=$(git_tag_revision https://github.com/svaarala/duktape.git "v$version")
+  install="$ENGINES_ROOT/duktape/$version"
+  if [[ ! -x "$install/duk" ]]; then
+    stage="$work_dir/duktape"
+    mkdir -p "$stage" "$ENGINES_ROOT/duktape"
+    fetch --output "$work_dir/duktape.tar.xz" \
+      "https://github.com/svaarala/duktape/releases/download/v$version/duktape-$version.tar.xz"
+    tar -xJf "$work_dir/duktape.tar.xz" --strip-components=1 -C "$stage"
+    : > "$work_dir/compiled"
+    make -C "$stage" -f Makefile.cmdline
+    mkdir -p "$install"
+    cp "$stage/duk" "$install/duk"
+    chmod +x "$install/duk"
+  fi
+  activate duktape "$install" duk latest-release "$version" "$revision"
+}
 
-quickjs_version=$(fetch https://bellard.org/quickjs/binary_releases/LATEST.json | jq -er '.version')
-quickjs_install="$ENGINES_ROOT/quickjs/$(safe_key "$quickjs_version")"
-if [[ ! -x "$quickjs_install/qjs" ]]; then
-  quickjs_stage="$work_dir/quickjs"
-  mkdir -p "$quickjs_stage" "$ENGINES_ROOT/quickjs"
-  fetch --output "$work_dir/quickjs.tar.xz" \
-    "https://bellard.org/quickjs/quickjs-$quickjs_version.tar.xz"
-  tar -xJf "$work_dir/quickjs.tar.xz" --strip-components=1 -C "$quickjs_stage"
-  compiled=true
-  make -C "$quickjs_stage" -j"$(sysctl -n hw.ncpu)" qjs
-  mkdir -p "$quickjs_install"
-  cp "$quickjs_stage/qjs" "$quickjs_install/qjs"
-  chmod +x "$quickjs_install/qjs"
-fi
-activate quickjs "$quickjs_install" qjs latest-release "$quickjs_version"
+sync_quickjs() {
+  local version install stage
+  version=$(fetch https://bellard.org/quickjs/binary_releases/LATEST.json | jq -er '.version')
+  install="$ENGINES_ROOT/quickjs/$(safe_key "$version")"
+  if [[ ! -x "$install/qjs" ]]; then
+    stage="$work_dir/quickjs"
+    mkdir -p "$stage" "$ENGINES_ROOT/quickjs"
+    fetch --output "$work_dir/quickjs.tar.xz" \
+      "https://bellard.org/quickjs/quickjs-$version.tar.xz"
+    tar -xJf "$work_dir/quickjs.tar.xz" --strip-components=1 -C "$stage"
+    : > "$work_dir/compiled"
+    make -C "$stage" -j"$(sysctl -n hw.ncpu)" qjs
+    mkdir -p "$install"
+    cp "$stage/qjs" "$install/qjs"
+    chmod +x "$install/qjs"
+  fi
+  activate quickjs "$install" qjs latest-release "$version"
+}
 
-porffor_release=$(github_fetch https://api.github.com/repos/CanadaHonk/porffor/releases/latest)
-porffor_version=$(jq -er '.tag_name' <<<"$porffor_release")
-porffor_url=$(jq -er '.assets[] | select(.name == "porffor-darwin-arm64.tar.gz") | .browser_download_url' \
-  <<<"$porffor_release")
-porffor_revision=$(git_tag_revision https://github.com/CanadaHonk/porffor.git "$porffor_version")
-porffor_install="$ENGINES_ROOT/porffor/$(safe_key "$porffor_version")"
-if [[ ! -x "$porffor_install/porf" ]]; then
-  porffor_stage="$work_dir/porffor"
-  mkdir -p "$porffor_stage" "$ENGINES_ROOT/porffor"
-  fetch --output "$work_dir/porffor.tar.gz" "$porffor_url"
-  tar -xzf "$work_dir/porffor.tar.gz" -C "$porffor_stage"
-  chmod +x "$porffor_stage/porf"
-  mv "$porffor_stage" "$porffor_install"
-fi
-activate porffor "$porffor_install" porf latest-release "$porffor_version" "$porffor_revision"
-porffor_reported_version=$("$porffor_install/porf" --version 2>&1)
-if [[ -n "$porffor_revision" ]] && [[ "$porffor_reported_version" != *"${porffor_revision:0:7}"* ]]; then
-  echo "Porffor asset does not match release commit $porffor_revision: $porffor_reported_version" >&2
-  exit 1
-fi
+sync_porffor() {
+  local release version url revision install stage reported
+  release=$(github_fetch https://api.github.com/repos/CanadaHonk/porffor/releases/latest)
+  version=$(jq -er '.tag_name' <<<"$release")
+  url=$(jq -er '.assets[] | select(.name == "porffor-darwin-arm64.tar.gz") | .browser_download_url' \
+    <<<"$release")
+  revision=$(git_tag_revision https://github.com/CanadaHonk/porffor.git "$version")
+  install="$ENGINES_ROOT/porffor/$(safe_key "$version")"
+  if [[ ! -x "$install/porf" ]]; then
+    stage="$work_dir/porffor"
+    mkdir -p "$stage" "$ENGINES_ROOT/porffor"
+    fetch --output "$work_dir/porffor.tar.gz" "$url"
+    tar -xzf "$work_dir/porffor.tar.gz" -C "$stage"
+    chmod +x "$stage/porf"
+    mv "$stage" "$install"
+  fi
+  activate porffor "$install" porf latest-release "$version" "$revision"
+  reported=$("$install/porf" --version 2>&1)
+  if [[ -n "$revision" ]] && [[ "$reported" != *"${revision:0:7}"* ]]; then
+    echo "Porffor asset does not match release commit $revision: $reported" >&2
+    return 1
+  fi
+}
 
+engine_ids=(boa v8-jitless sm-jitless kiesel libjs duktape quickjs porffor)
 metadata_files=()
-for id in boa v8-jitless sm-jitless kiesel libjs duktape quickjs porffor; do
-  metadata_files+=("$ENGINES_ROOT/$id/current/metadata.json")
+for id in "${engine_ids[@]}"; do
+  metadata="$ENGINES_ROOT/$id/current/metadata.json"
+  set +e
+  (
+    set -e
+    "sync_${id//-/_}"
+  )
+  status=$?
+  set -e
+  if (( status != 0 )); then
+    if [[ -f "$metadata" ]]; then
+      warn "$id failed to synchronize; keeping $(jq -r '.resolvedVersion' "$metadata")"
+    else
+      warn "$id failed to synchronize and has no previous install"
+    fi
+  fi
+  if [[ -f "$metadata" ]]; then
+    metadata_files+=("$metadata")
+  fi
 done
+if [[ -e "$work_dir/compiled" ]]; then
+  compiled=true
+fi
+
 jq -s \
   --arg resolvedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   '{schema: 1, resolvedAt: $resolvedAt, engines: (map({key: .id, value: .}) | from_entries)}' \
-  "${metadata_files[@]}" > "$ENGINE_ROOT/engine-state.json"
+  ${metadata_files[@]+"${metadata_files[@]}"} > "$ENGINE_ROOT/engine-state.json"
 
 node "$SCRIPT_DIR/verify-engines.mjs" --engine-root "$ENGINE_ROOT" --external-only
 
