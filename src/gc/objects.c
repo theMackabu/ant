@@ -401,7 +401,7 @@ static void gc_sweep_young_upvalues(ant_t *js) {
 }
 
 #define GC_MARK_STACK_INIT 4096
-static void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd);
+static void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd, bool untraced_only);
 
 static __attribute__((noinline)) bool gc_mark_stack_grow(ant_t *js) {
   size_t new_cap = js->gc.mark_cap ? js->gc.mark_cap * 2 : GC_MARK_STACK_INIT;
@@ -857,7 +857,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   if (pd) {
     gc_mark_value_fast(js, pd->value);
     gc_mark_value_fast(js, pd->trigger_parent);
-    gc_mark_promise_handlers(js, pd);
+    gc_mark_promise_handlers(js, pd, js->gc.minor && obj->flags.generation == 1);
   }
 
   ant_proxy_state_t *proxy_state = ant_object_proxy_state(obj);
@@ -1380,7 +1380,7 @@ static inline void gc_mark_promise_handler(ant_t *js, const promise_handler_t *h
   if (h->await_coro) gc_mark_coroutine(js, h->await_coro);
 }
 
-static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd) {
+static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd, bool untraced_only) {
   if (!pd) return;
 
   if (pd->has_inline_handler) {
@@ -1389,10 +1389,12 @@ static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd) 
   }
 
   if (!pd->handlers) return;
-  promise_handler_t *h = NULL;
+  uint32_t *traced = ant_promise_handlers_traced(pd->handlers);
+  uint32_t len = utarray_len(pd->handlers);
   
-  while ((h = (promise_handler_t *)utarray_next(pd->handlers, h)))
-    gc_mark_promise_handler(js, h);
+  for (uint32_t i = untraced_only ? *traced : 0; i < len; i++)
+    gc_mark_promise_handler(js, (promise_handler_t *)utarray_eltptr(pd->handlers, i));
+  *traced = len;
 }
 
 static void gc_mark_code_unit_root(ant_t *js, sv_code_unit_t *unit) {
@@ -1500,8 +1502,9 @@ static void gc_mark_roots(ant_t *js) {
     gc_mark_value(js, ctx->prev_import_meta_prop);
   }
 
-  for (size_t i = 0; i < js->pending_rejections.len; i++)
+  for (size_t i = js->gc.minor ? js->pending_rejections.traced : 0; i < js->pending_rejections.len; i++)
     gc_mark_value(js, js->pending_rejections.items[i]);
+  js->pending_rejections.traced = js->pending_rejections.len;
 
   for (uint32_t i = 0; i < ANT_FOR_IN_CACHE_SIZE; i++)
     if (js->runtime_cache.for_in[i].shape) gc_mark_value(js, js->runtime_cache.for_in[i].keys);

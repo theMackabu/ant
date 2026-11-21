@@ -332,6 +332,7 @@ void Ant_Destroy(ant_t *js) {
   free(js->pending_rejections.items);
   js->pending_rejections.items = NULL;
   js->pending_rejections.len = js->pending_rejections.cap = 0;
+  js->pending_rejections.traced = 0;
 
   ant_ptr_pair_free(&js->cfunc_promoted);
   ant_ptr_pair_free(&js->cfunc_named);

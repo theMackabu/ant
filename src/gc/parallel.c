@@ -36,8 +36,7 @@ typedef struct gc_par_chunk {
 } gc_par_chunk_t;
 
 typedef struct {
-  ant_object_t **stack;
-  size_t len, cap;
+  gc_par_stack_t stack;
   ant_object_t **objects;
   size_t objects_len, objects_cap;
   ant_value_t *values;
@@ -83,9 +82,28 @@ static void gc_par_grow(void **items, size_t *cap, size_t elem) {
   *cap = next;
 }
 
+__attribute__((noinline)) void gc_par_stack_room(gc_par_stack_t *stack) {
+  if (stack->base == 0 || stack->base < stack->cap / 4) {
+    gc_par_grow((void **)&stack->items, &stack->cap, sizeof(*stack->items));
+    return;
+  }
+
+  stack->len -= stack->base;
+  memmove(stack->items, stack->items + stack->base, stack->len * sizeof(*stack->items));
+  stack->base = 0;
+}
+
+size_t gc_par_stack_give(gc_par_stack_t *stack, ant_object_t **out, size_t limit) {
+  size_t held = stack->len - stack->base;
+  size_t give = held / 2 > limit ? limit : held / 2;
+  memcpy(out, stack->items + stack->base, give * sizeof(*out));
+  stack->base += give;
+  return give;
+}
+
 static inline void gc_par_push(gc_par_worker_t *w, ant_object_t *obj) {
-  if (__builtin_expect(w->len >= w->cap, 0)) gc_par_grow((void **)&w->stack, &w->cap, sizeof(*w->stack));
-  w->stack[w->len++] = obj;
+  if (__builtin_expect(w->stack.len >= w->stack.cap, 0)) gc_par_stack_room(&w->stack);
+  w->stack.items[w->stack.len++] = obj;
 }
 
 static inline void gc_par_defer_object(gc_par_worker_t *w, ant_object_t *obj) {
@@ -155,12 +173,7 @@ static inline __attribute__((always_inline)) bool gc_par_scan_plain(ant_t *js, g
 static void gc_par_donate(gc_par_worker_t *w) {
   gc_par_chunk_t *chunk = malloc(sizeof(*chunk));
   if (!chunk) return;
-  uint32_t give = (uint32_t)(w->len / 2);
-  if (give > GC_PAR_CHUNK) give = GC_PAR_CHUNK;
-  chunk->len = give;
-  memcpy(chunk->items, w->stack, give * sizeof(*chunk->items));
-  memmove(w->stack, w->stack + give, (w->len - give) * sizeof(*w->stack));
-  w->len -= give;
+  chunk->len = (uint32_t)gc_par_stack_give(&w->stack, chunk->items, GC_PAR_CHUNK);
 
   uv_mutex_lock(&gc_par.lock);
   chunk->next = gc_par.queue;
@@ -203,11 +216,12 @@ static void gc_par_work(gc_par_worker_t *w) {
   uint64_t start = gc_now_ns();
   w->waited_ns = 0;
   do {
-    while (w->len) {
-      ant_object_t *obj = w->stack[--w->len];
+    while (w->stack.len > w->stack.base) {
+      ant_object_t *obj = w->stack.items[--w->stack.len];
       if (!gc_par_scan_plain(js, w, obj)) gc_par_defer_object(w, obj);
-      if (w->len >= GC_PAR_DONATE_MIN && __atomic_load_n(&gc_par.idle_hint, __ATOMIC_RELAXED)) gc_par_donate(w);
+      if (w->stack.len - w->stack.base >= GC_PAR_DONATE_MIN && __atomic_load_n(&gc_par.idle_hint, __ATOMIC_RELAXED)) gc_par_donate(w);
     }
+    w->stack.len = w->stack.base = 0;
   } while (gc_par_take(w));
   uint64_t elapsed = gc_now_ns() - start;
   w->busy_ns = elapsed > w->waited_ns ? elapsed - w->waited_ns : 0;

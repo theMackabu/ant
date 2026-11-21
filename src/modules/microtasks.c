@@ -354,7 +354,8 @@ static inline microtask_entry_t *take_microtask_batch(ant_t *js) {
 
   js->timers.microtasks = NULL;
   js->timers.microtasks_tail = NULL;
-  js->timers.microtasks_processing = batch;
+  js->timers.microtasks_scanned = NULL;
+  js->timers.microtasks_batch_scanned = 0;
   
   return batch;
 }
@@ -364,7 +365,8 @@ static inline microtask_entry_t *take_next_tick_batch(ant_t *js) {
 
   js->timers.next_ticks = NULL;
   js->timers.next_ticks_tail = NULL;
-  js->timers.next_ticks_processing = batch;
+  js->timers.next_ticks_scanned = NULL;
+  js->timers.next_ticks_batch_scanned = 0;
   
   return batch;
 }
@@ -429,9 +431,14 @@ static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejectio
 }
 
 void ant_realm_run_microtasks(ant_t *js, ant_realm_t *realm) {
+if (realm->microtasks_draining) return;
+realm->microtasks_draining = true;
+
 while (realm->microtasks) {
   microtask_entry_t *batch = realm->microtasks;
   realm->microtasks = realm->microtasks_tail = NULL;
+  realm->microtasks_scanned = NULL;
+  realm->microtasks_batch_scanned = 0;
   
   while (batch) {
     microtask_entry_t *entry = batch;
@@ -442,7 +449,10 @@ while (realm->microtasks) {
     process_microtask_entry(js, entry);
     microtask_entry_free(js, entry);
   }
-}}
+}
+
+realm->microtasks_draining = false;
+}
 
 void process_microtasks(ant_t *js) {
   process_microtasks_internal(js, true);
@@ -499,12 +509,14 @@ void ant_microtasks_discard(ant_t *js) {
   for (ant_realm_t *realm = js->realms; realm; realm = realm->next) {
     discard_jobs(js, realm->microtasks);
     realm->microtasks = realm->microtasks_tail = NULL;
+    realm->microtasks_scanned = NULL;
   }
   
   t->microtasks_processing = NULL;
   t->next_ticks_processing = NULL;
   t->microtasks = t->microtasks_tail = NULL;
   t->next_ticks = t->next_ticks_tail = NULL;
+  t->microtasks_scanned = t->next_ticks_scanned = NULL;
 
   while (t->free_jobs) {
     microtask_entry_t *next = t->free_jobs->next;
@@ -524,24 +536,32 @@ static void gc_mark_jobs(ant_t *js, microtask_entry_t *m, gc_mark_fn mark) {
   }
 }
 
+static void gc_mark_queued_jobs(
+  ant_t *js, microtask_entry_t *head, microtask_entry_t *tail,
+  microtask_entry_t **scanned, gc_mark_fn mark
+) {
+  microtask_entry_t *first = js->gc.minor && *scanned ? (*scanned)->next : head;
+  *scanned = tail;
+  gc_mark_jobs(js, first, mark);
+}
+
+static void gc_mark_running_jobs(ant_t *js, microtask_entry_t *batch, uintptr_t *scanned, gc_mark_fn mark) {
+  if (js->gc.minor && *scanned) return;
+  *scanned = 1;
+  gc_mark_jobs(js, batch, mark);
+}
+
 void gc_mark_microtasks(ant_t *js, gc_mark_fn mark) {
-  gc_mark_jobs(js, js->timers.microtasks, mark);
-  gc_mark_jobs(js, js->timers.microtasks_processing, mark);
+  ant_timer_state_t *t = &js->timers;
+
+  gc_mark_queued_jobs(js, t->microtasks, t->microtasks_tail, &t->microtasks_scanned, mark);
+  gc_mark_running_jobs(js, t->microtasks_processing, &t->microtasks_batch_scanned, mark);
 
   for (ant_realm_t *realm = js->realms; realm; realm = realm->next) {
-    gc_mark_jobs(js, realm->microtasks, mark);
-    gc_mark_jobs(js, realm->microtasks_processing, mark);
+    gc_mark_queued_jobs(js, realm->microtasks, realm->microtasks_tail, &realm->microtasks_scanned, mark);
+    gc_mark_running_jobs(js, realm->microtasks_processing, &realm->microtasks_batch_scanned, mark);
   }
 
-  for (microtask_entry_t *m = js->timers.next_ticks; m; m = m->next) {
-    mark(js, m->callback);
-    mark(js, m->u.promise);
-    for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
-  }
-
-  for (microtask_entry_t *m = js->timers.next_ticks_processing; m; m = m->next) {
-    mark(js, m->callback);
-    mark(js, m->u.promise);
-    for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
-  }
+  gc_mark_queued_jobs(js, t->next_ticks, t->next_ticks_tail, &t->next_ticks_scanned, mark);
+  gc_mark_running_jobs(js, t->next_ticks_processing, &t->next_ticks_batch_scanned, mark);
 }

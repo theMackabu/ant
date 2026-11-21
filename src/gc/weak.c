@@ -121,6 +121,7 @@ void gc_weak_keep_alive(ant_t *js, ant_value_t value) {
 void gc_weak_clear_kept_alive(ant_t *js) {
   if (!js) return;
   js->weak_gc.kept_alive_len = 0;
+  js->weak_gc.kept_alive_traced = 0;
   js->weak_gc.kept_alive_overflow = false;
 }
 
@@ -134,8 +135,10 @@ for (ant_object_t *obj = objects; obj; obj = obj->next) {
 
 void gc_weak_mark_kept_alive(ant_t *js, gc_weak_mark_fn mark) {
   if (!js || !mark) return;
-  for (size_t i = 0; i < js->weak_gc.kept_alive_len; i++)
+  size_t start = js->gc.minor ? js->weak_gc.kept_alive_traced : 0;
+  for (size_t i = start; i < js->weak_gc.kept_alive_len; i++)
     mark(js, js->weak_gc.kept_alive[i]);
+  js->weak_gc.kept_alive_traced = js->weak_gc.kept_alive_len;
 
   if (__builtin_expect(js->weak_gc.kept_alive_overflow, 0)) {
     gc_weak_mark_all_weakrefs(js, js->objects, mark);
@@ -562,9 +565,10 @@ void gc_weak_process(
     goto done;
   }
 
+  size_t first = minor ? js->weak_gc.collection_old : 0;
   js->weak_gc.pending_active = false;
   js->weak_gc.pending_oom = false;
-  for (size_t i = 0; i < js->weak_gc.collection_len; i++) {
+  for (size_t i = first; i < js->weak_gc.collection_len; i++) {
     ant_object_t *obj = js->weak_gc.collections[i];
     if (collection_live(js, obj) && obj->type_tag == kTypeWeakMap &&
         (!minor || obj->flags.generation == 0))
@@ -589,7 +593,7 @@ void gc_weak_process(
   } else {
     gc_weak_clear_pending(js);
     js->weak_gc.pending_active = false;
-    for (size_t i = 0; i < js->weak_gc.collection_len; i++) {
+    for (size_t i = first; i < js->weak_gc.collection_len; i++) {
       ant_object_t *obj = js->weak_gc.collections[i];
       if (collection_live(js, obj) && (!minor || obj->flags.generation == 0))
         gc_weak_prune_collection(js, obj);
@@ -597,8 +601,8 @@ void gc_weak_process(
     if (minor) gc_weak_prune_minor_edges(js);
   }
 
-  size_t live = 0;
-  for (size_t i = 0; i < js->weak_gc.collection_len; i++) {
+  size_t live = first;
+  for (size_t i = first; i < js->weak_gc.collection_len; i++) {
     ant_object_t *obj = js->weak_gc.collections[i];
     if (collection_live(js, obj)) {
       js->weak_gc.collections[live++] = obj;
@@ -609,6 +613,7 @@ void gc_weak_process(
   js->weak_gc.minor_edge_overflow = false;
 
 done:
+  js->weak_gc.collection_old = js->weak_gc.collection_len;
   gc_weak_clear_pending(js);
   js->weak_gc.pending_active = false;
   js->weak_gc.mark = NULL;
