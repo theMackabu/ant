@@ -678,6 +678,8 @@ struct ant_isolate_t {
   ant_intern_memo_entry_t intern_memo[INTERN_MEMO_SIZE];
   
   struct ant_listen_policy *listen_policy;
+  uint64_t eval_env_serial;
+  uint32_t eval_var_epoch;
 };
 
 // TODO: rename

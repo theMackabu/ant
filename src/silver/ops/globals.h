@@ -472,6 +472,45 @@ ant_value_t sv_global_get_interned_miss(
   return val;
 }
 
+static sv_upvalue_t *sv_eval_env_ic_outer_cell(
+  ant_value_t env, const sv_ic_entry_t *ic, const sv_eval_env_state_t **owner
+) {
+  uint8_t depth = (uint8_t)(ic->cached_aux & SV_EVAL_IC_CELL_DEPTH);
+  ant_object_t *holder = (ant_object_t *)vptr(env);
+  const sv_eval_scope_t *scope = (const sv_eval_scope_t *)(ic->cached_aux & ~(uintptr_t)SV_EVAL_IC_CELL_DEPTH);
+
+  for (uint8_t level = 0; level < depth; level++) {
+    if (sv_eval_env_object_scope(holder) != scope || holder->prop_count) return NULL;
+    if (!(holder = sv_eval_env_object_parent(holder))) return NULL;
+    scope = level ? ic->guard.eval.outer_scope : ic->eval_parent_scope;
+  }
+
+  const sv_eval_env_state_t *state = sv_eval_env_object_state(holder);
+  if (!state || state->scope != scope || ic->cached_index >= state->cell_count) return NULL;
+
+  sv_upvalue_t *cell = state->cells[ic->cached_index];
+  if (!cell || is_empty_slot(*cell->location)) return NULL;
+  if (owner) *owner = state;
+
+  return cell;
+}
+
+static inline bool sv_eval_env_ic_unfilled(const ant_t *js, ant_value_t env, const sv_ic_entry_t *ic) {
+  return ic && ic->epoch != js->ic.epoch && !((const ant_object_t *)vptr(env))->prop_count;
+}
+
+static __attribute__((noinline)) bool sv_eval_env_ic_outer_get(ant_t *js, ant_value_t env, const sv_ic_entry_t *ic, ant_value_t *out) {
+  sv_upvalue_t *cell = sv_eval_env_ic_live(js, env, ic) ? sv_eval_env_ic_outer_cell(env, ic, NULL) : NULL;
+  if (cell) *out = *cell->location;
+  return cell != NULL;
+}
+
+static __attribute__((noinline)) bool sv_eval_env_ic_outer_put(ant_t *js, ant_value_t env, const sv_ic_entry_t *ic, ant_value_t val) {
+  const sv_eval_env_state_t *state = NULL;
+  if (!sv_eval_env_ic_live(js, env, ic) || !sv_eval_env_ic_outer_cell(env, ic, &state)) return false;
+  return sv_eval_binding_store(js, state, &state->scope->bindings[ic->cached_index], val);
+}
+
 static bool sv_eval_env_ic_fill_binding(ant_t *js, ant_object_t *target, sv_ic_entry_t *ic, const char *interned, uint32_t len) {
   const sv_eval_env_state_t *state = sv_eval_env_object_state(target);
   const sv_runtime_binding_t *binding = sv_eval_env_find_binding(state, interned, len);
@@ -488,6 +527,42 @@ static bool sv_eval_env_ic_fill_binding(ant_t *js, ant_object_t *target, sv_ic_e
   ic->epoch = js->ic.epoch;
 
   return true;
+}
+
+static __attribute__((noinline)) void sv_eval_env_ic_fill_outer_cell(
+  ant_t *js, ant_value_t env, sv_ic_entry_t *ic, const char *interned, uint32_t len
+) {
+  const sv_eval_scope_t *scopes[SV_EVAL_IC_MAX_DEPTH] = {0};
+  const sv_runtime_binding_t *binding = NULL;
+  ant_object_t *holder = (ant_object_t *)vptr(env);
+  uint8_t depth = 0;
+
+  sv_eval_env_ic_drop(js, ic);
+  ic->eval_depth = SV_EVAL_IC_PENDING;
+  ic->eval_seen = (uint32_t)env;
+  ic->epoch = js->ic.epoch;
+
+  for (;; depth++) {
+    if (depth == SV_EVAL_IC_MAX_DEPTH || holder->flags.is_exotic || !holder->shape || holder->prop_count) return;
+    if ((binding = sv_eval_env_find_binding(sv_eval_env_object_state(holder), interned, len))) break;
+
+    scopes[depth] = sv_eval_env_object_scope(holder);
+    if (!(holder = sv_eval_env_object_parent(holder))) return;
+  }
+
+  const sv_eval_env_state_t *state = sv_eval_env_object_state(holder);
+  if (!state->scope) return;
+  if (binding->kind & (SV_EVAL_BIND_IMPORT_DEFAULT | SV_EVAL_BIND_IMPORT_NAMED | SV_EVAL_BIND_ARGUMENTS)) return;
+
+  uint32_t index = (uint32_t)(binding - state->scope->bindings);
+  if (index >= state->cell_count || !state->cells[index]) return;
+
+  scopes[depth] = state->scope;
+  ic->eval_depth = SV_EVAL_IC_OUTER_CELL;
+  ic->cached_index = index;
+  ic->cached_aux = (uintptr_t)scopes[0] | depth;
+  ic->eval_parent_scope = scopes[1];
+  ic->guard.eval.outer_scope = scopes[2];
 }
 
 static void sv_eval_env_ic_fill(
@@ -546,6 +621,248 @@ static void sv_eval_env_ic_fill(
   ic->epoch = js->ic.epoch;
 }
 
+static inline bool sv_eval_env_ic_serial_is(const sv_ic_entry_t *ic, uint64_t serial) {
+  if ((uintptr_t)serial != ic->cached_aux) return false;
+  return sizeof(uintptr_t) >= sizeof(serial) || (uintptr_t)(serial >> 32) == (uintptr_t)ic->guard.eval.outer_scope;
+}
+
+static inline bool sv_eval_env_ic_chain_serves(const sv_ic_entry_t *ic) {
+  return ic && (ic->eval_depth == SV_EVAL_IC_CHAIN || ic->eval_depth == SV_EVAL_IC_CHAIN_CELL);
+}
+
+static inline bool sv_eval_env_ic_pending(uint8_t kind) {
+  return kind == SV_EVAL_IC_PENDING || kind == SV_EVAL_IC_PENDING_OFF;
+}
+
+static inline bool sv_eval_env_ic_chained(uint8_t kind) {
+  return kind >= SV_EVAL_IC_CHAIN && kind <= SV_EVAL_IC_CHAIN_OFF;
+}
+
+static inline uint8_t sv_eval_env_ic_chain(ant_t *js, ant_value_t env, const sv_ic_entry_t *ic) {
+  uint8_t kind = ic->eval_depth;
+  if (!sv_eval_env_ic_chained(kind) || vtype(env) != kTypeObject) return 0;
+  if (kind != SV_EVAL_IC_CHAIN_OFF && (ic->epoch != js->ic.epoch || ic->eval_var_epoch != js->eval_var_epoch)) return 0;
+
+  const sv_eval_env_state_t *state = sv_eval_env_object_state((ant_object_t *)vptr(env));
+  return state && sv_eval_env_ic_serial_is(ic, state->serial) ? kind : 0;
+}
+
+static inline ant_object_t *sv_eval_env_ic_chain_holder(const sv_ic_entry_t *ic) {
+  ant_object_t *holder = ic->cached_holder;
+  if (holder->shape != ic->cached_shape || holder->flags.is_exotic || ic->cached_index >= holder->prop_count) return NULL;
+  return holder;
+}
+
+static inline sv_upvalue_t *sv_eval_env_ic_chain_cell(const sv_ic_entry_t *ic, const sv_eval_env_state_t **owner) {
+  const sv_eval_env_state_t *state = sv_eval_env_object_state(ic->cached_holder);
+  sv_upvalue_t *cell = state->cells[ic->cached_index];
+  if (is_empty_slot(*cell->location)) return NULL;
+
+  *owner = state;
+  return cell;
+}
+
+static __attribute__((noinline)) bool sv_eval_env_ic_chain_get(ant_t *js, ant_value_t env, sv_ic_entry_t *ic, ant_value_t *out) {
+  uint8_t chain = sv_eval_env_ic_chain(js, env, ic);
+
+  if (chain == SV_EVAL_IC_CHAIN) {
+    ant_object_t *holder = sv_eval_env_ic_chain_holder(ic);
+    if (!holder) return false;
+    *out = ant_object_prop_get_unchecked(holder, ic->cached_index);
+  } else if (chain == SV_EVAL_IC_CHAIN_CELL) {
+    const sv_eval_env_state_t *owner;
+    sv_upvalue_t *cell = sv_eval_env_ic_chain_cell(ic, &owner);
+    if (!cell) return false;
+    *out = *cell->location;
+  } else return false;
+
+  if (ic->eval_refills) ic->eval_refills = 0;
+  return true;
+}
+
+static __attribute__((noinline)) bool sv_eval_env_ic_chain_put(
+  ant_t *js, ant_value_t env, sv_ic_entry_t *ic, const char *interned, uint32_t len, ant_value_t val
+) {
+  uint8_t chain = sv_eval_env_ic_chain(js, env, ic);
+
+  if (chain == SV_EVAL_IC_CHAIN) {
+    ant_object_t *holder = sv_eval_env_ic_chain_holder(ic);
+    if (!holder) return false;
+
+    regexp_note_property_write(js, interned, len);
+    ant_object_prop_set_unchecked(holder, ic->cached_index, val);
+    gc_write_barrier(js, holder, val);
+    ant_property_mutation_invalidate(js, holder, interned);
+  } else if (chain == SV_EVAL_IC_CHAIN_CELL) {
+    const sv_eval_env_state_t *owner;
+    if (!sv_eval_env_ic_chain_cell(ic, &owner)) return false;
+    if (!sv_eval_binding_store(js, owner, &owner->scope->bindings[ic->cached_index], val)) return false;
+  } else return false;
+
+  if (ic->eval_refills) ic->eval_refills = 0;
+  return true;
+}
+
+static void sv_eval_env_ic_fill_chain_key(ant_t *js, sv_ic_entry_t *ic, uint8_t kind, uint64_t serial) {
+  ic->eval_depth = kind;
+  ic->cached_aux = (uintptr_t)serial;
+  ic->guard.eval.outer_scope = (const sv_eval_scope_t *)(uintptr_t)(serial >> 32);
+  ic->eval_var_epoch = js->eval_var_epoch;
+  ic->epoch = js->ic.epoch;
+}
+
+static void sv_eval_env_ic_fill_chain_none(ant_t *js, sv_ic_entry_t *ic, uint64_t serial) {
+  sv_eval_env_ic_drop(js, ic);
+  ic->cached_shape = NULL;
+  ic->cached_holder = NULL;
+  sv_eval_env_ic_fill_chain_key(js, ic, SV_EVAL_IC_CHAIN_NONE, serial);
+}
+
+static ant_object_t *sv_eval_env_chain_find(
+  ant_t *js, ant_object_t *holder, const char *interned, uint32_t len,
+  const sv_runtime_binding_t **binding, int32_t *slot
+) {
+  ant_object_t *global = sv_global_obj_ptr(js->global);
+
+  for (; holder; holder = sv_eval_env_object_parent(holder)) {
+    const sv_eval_env_state_t *state = holder == global ? NULL : sv_eval_env_object_state(holder);
+    if (holder->flags.is_exotic || !holder->shape || (!state && holder != global)) return NULL;
+    if (state && (*binding = sv_eval_env_find_binding(state, interned, len))) return holder;
+    if ((*slot = ant_shape_lookup_interned(holder->shape, interned)) >= 0) return holder;
+    if (holder == global) return NULL;
+  }
+
+  return NULL;
+}
+
+static void sv_eval_env_chain_guard(ant_object_t *target, const ant_object_t *holder) {
+  for (ant_object_t *env = target; env != holder; env = sv_eval_env_object_parent(env))
+    if (sv_eval_env_object_state(env)->is_variable) ant_object_guard_absence(env);
+}
+
+static __attribute__((noinline)) void sv_eval_env_ic_fill_chain(
+  ant_t *js, ant_value_t env, sv_ic_entry_t *ic,
+  const char *interned, uint32_t len, bool for_put, uint8_t kind
+) {
+  ant_object_t *target = (ant_object_t *)vptr(env);
+  sv_eval_env_state_t *state = sv_eval_env_object_state(target);
+  if (!state) return;
+
+  bool same = sv_eval_env_ic_chained(kind) && sv_eval_env_ic_serial_is(ic, state->serial);
+
+  if (same && kind != SV_EVAL_IC_CHAIN_OFF && ++ic->eval_refills > SV_EVAL_IC_CHAIN_REFILLS) {
+    ic->eval_depth = SV_EVAL_IC_CHAIN_OFF;
+    ic->eval_refills = 0;
+    ic->epoch = js->ic.epoch;
+    return;
+  }
+
+  if (!same && (!sv_eval_env_ic_pending(kind) || ic->eval_seen != (uint32_t)env)) {
+    if (!sv_eval_env_ic_pending(kind)) ic->eval_depth = kind == SV_EVAL_IC_CHAIN_OFF ? SV_EVAL_IC_PENDING_OFF : SV_EVAL_IC_PENDING;
+    ic->eval_seen = (uint32_t)env;
+    return;
+  }
+
+  if (kind == SV_EVAL_IC_PENDING) ic->eval_refills = 0;
+  if (kind == SV_EVAL_IC_PENDING_OFF || kind == SV_EVAL_IC_CHAIN_OFF) ic->eval_refills = SV_EVAL_IC_CHAIN_REFILLS;
+
+  if (!state->serial) state->serial = ++js->eval_env_serial;
+  uint64_t serial = state->serial;
+
+  const sv_runtime_binding_t *binding = NULL;
+  int32_t slot = -1;
+
+  ant_object_t *holder = interned == js->intern.arguments ? NULL : sv_eval_env_chain_find(js, target, interned, len, &binding, &slot);
+  if (!holder || holder == target) return sv_eval_env_ic_fill_chain_none(js, ic, serial);
+
+  if (binding) {
+    const sv_eval_env_state_t *owner = sv_eval_env_object_state(holder);
+    uint32_t index = (uint32_t)(binding - owner->scope->bindings);
+
+    if (
+      (binding->kind & (SV_EVAL_BIND_IMPORT_DEFAULT | SV_EVAL_BIND_IMPORT_NAMED | SV_EVAL_BIND_ARGUMENTS)) ||
+      index >= owner->cell_count || !owner->cells[index]
+    ) return sv_eval_env_ic_fill_chain_none(js, ic, serial);
+
+    sv_eval_env_ic_drop(js, ic);
+    sv_eval_env_chain_guard(target, holder);
+    ic->cached_shape = NULL;
+    ic->cached_index = index;
+    ic->cached_holder = holder;
+    return sv_eval_env_ic_fill_chain_key(js, ic, SV_EVAL_IC_CHAIN_CELL, serial);
+  }
+
+  bool global = holder == sv_global_obj_ptr(js->global);
+  const ant_shape_prop_t *prop = (uint32_t)slot < holder->prop_count ? ant_shape_prop_at(holder->shape, (uint32_t)slot) : NULL;
+
+  if (
+    !prop || prop->type != ANT_SHAPE_KEY_STRING || prop->has_getter || prop->has_setter ||
+    (for_put && !(prop->attrs & ANT_PROP_ATTR_WRITABLE)) ||
+    (global && (sv_global_sandboxed(js) || sv_global_lexical(js, interned))) ||
+    (!global && sv_eval_env_object_scope(holder))
+  ) return sv_eval_env_ic_fill_chain_none(js, ic, serial);
+
+  bool tracked = global || ant_shape_is_dictionary(holder->shape);
+  if (tracked) ant_shape_mark_epoch_guarded(holder->shape);
+
+  ic->eval_depth = SV_EVAL_IC_NONE;
+  if (!sv_eval_env_ic_hold(js, ic, &ic->guard.eval.absent_shape, SV_IC_SHAPE_REF_ADD_FROM, NULL)) return;
+  if (!sv_eval_env_ic_hold(js, ic, &ic->guard.eval.holder_shape, SV_IC_SHAPE_REF_ADD_TO, tracked ? NULL : holder->shape)) return;
+
+  sv_eval_env_chain_guard(target, holder);
+  ic->cached_shape = holder->shape;
+  ic->cached_index = (uint32_t)slot;
+  ic->cached_holder = holder;
+  sv_eval_env_ic_fill_chain_key(js, ic, SV_EVAL_IC_CHAIN, serial);
+}
+
+static inline void sv_eval_env_ic_mark_pending(ant_t *js, ant_value_t env, sv_ic_entry_t *ic) {
+  if (!ic || ic->epoch == js->ic.epoch || sv_eval_env_ic_pending(ic->eval_depth)) return;
+  ic->eval_depth = SV_EVAL_IC_PENDING;
+  ic->eval_seen = (uint32_t)env;
+}
+
+static __attribute__((noinline)) void sv_eval_env_ic_chain_refill(
+  ant_t *js, ant_value_t env, sv_ic_entry_t *ic, const char *interned, uint32_t len, bool for_put
+) {
+  uint8_t kind = ic->eval_depth;
+  uint8_t chain = sv_eval_env_ic_chain(js, env, ic);
+
+  if (kind == SV_EVAL_IC_PENDING_OFF && ic->eval_seen != (uint32_t)env) {
+    ic->eval_seen = (uint32_t)env;
+    return;
+  }
+
+  if (chain == SV_EVAL_IC_CHAIN_NONE) return;
+  if (chain == SV_EVAL_IC_CHAIN_OFF && (++ic->eval_refills & SV_EVAL_IC_CHAIN_RETRY) != 0) return;
+
+  if (ic->epoch != js->ic.epoch) {
+    sv_eval_env_ic_fill(js, env, ic, interned, len, for_put);
+    if (ic->epoch == js->ic.epoch) return;
+
+    if (sv_eval_env_ic_unfilled(js, env, ic)) sv_eval_env_ic_fill_outer_cell(js, env, ic, interned, len);
+    if (ic->eval_depth == SV_EVAL_IC_OUTER_CELL) return;
+    if (kind == SV_EVAL_IC_PENDING_OFF) ic->eval_depth = kind;
+  }
+
+  sv_eval_env_ic_fill_chain(js, env, ic, interned, len, for_put, kind);
+}
+
+static inline __attribute__((always_inline)) void sv_eval_env_ic_refill(
+  ant_t *js, ant_value_t env, sv_ic_entry_t *ic, const char *interned, uint32_t len, bool for_put
+) {
+  if (ic && ic->eval_depth == SV_EVAL_IC_PENDING) {
+    if (ic->eval_seen == (uint32_t)env) return sv_eval_env_ic_fill_chain(js, env, ic, interned, len, for_put, SV_EVAL_IC_PENDING);
+    ic->eval_seen = (uint32_t)env;
+    if (ic->epoch == js->ic.epoch) return;
+  } else if (ic && (uint8_t)(ic->eval_depth - SV_EVAL_IC_CHAIN) <= SV_EVAL_IC_PENDING_OFF - SV_EVAL_IC_CHAIN)
+    return sv_eval_env_ic_chain_refill(js, env, ic, interned, len, for_put);
+
+  sv_eval_env_ic_fill(js, env, ic, interned, len, for_put);
+  if (sv_eval_env_ic_unfilled(js, env, ic)) sv_eval_env_ic_fill_outer_cell(js, env, ic, interned, len);
+  else sv_eval_env_ic_mark_pending(js, env, ic);
+}
+
 static inline bool sv_eval_env_ic_get(ant_t *js, ant_value_t env, const sv_ic_entry_t *ic, ant_value_t *out) {
   if (!sv_eval_env_ic_live(js, env, ic)) return false;
 
@@ -589,9 +906,19 @@ static __attribute__((noinline)) ant_value_t sv_eval_env_get_interned_miss(
   sv_ic_entry_t *ic, bool *found
 ) {
   ant_value_t out = Ant_Value_Undefined;
+  if (ic && ic->eval_depth == SV_EVAL_IC_OUTER_CELL && sv_eval_env_ic_outer_get(js, env, ic, &out)) {
+    if (found) *found = true;
+    return out;
+  }
+
+  if (sv_eval_env_ic_chain_serves(ic) && sv_eval_env_ic_chain_get(js, env, ic, &out)) {
+    if (found) *found = true;
+    return out;
+  }
+
   bool resolved = sv_env_try_get_interned(js, env, interned, len, &out);
   if (found) *found = resolved;
-  if (resolved && !is_err(out)) sv_eval_env_ic_fill(js, env, ic, interned, len, false);
+  if (resolved && !is_err(out)) sv_eval_env_ic_refill(js, env, ic, interned, len, false);
 
   return out;
 }
@@ -631,17 +958,27 @@ ant_value_t sv_eval_global_get_interned_ic(
   return out;
 }
 
+static __attribute__((noinline)) ant_value_t sv_eval_env_put_interned_miss(
+  ant_t *js, ant_value_t env,
+  const char *interned, uint32_t len,
+  ant_value_t val, bool is_strict, sv_ic_entry_t *ic
+) {
+  if (ic && ic->eval_depth == SV_EVAL_IC_OUTER_CELL && sv_eval_env_ic_outer_put(js, env, ic, val)) return val;
+  if (sv_eval_env_ic_chain_serves(ic) && sv_eval_env_ic_chain_put(js, env, ic, interned, len, val)) return val;
+
+  ant_value_t result = sv_env_put(js, env, interned, len, val, is_strict);
+  if (!is_err(result)) sv_eval_env_ic_refill(js, env, ic, interned, len, true);
+
+  return result;
+}
+
 ant_value_t sv_eval_global_put_interned_ic(
   ant_t *js, ant_value_t env,
   const char *interned, uint32_t len,
   ant_value_t val, bool is_strict, sv_ic_entry_t *ic
 ) {
   if (sv_eval_env_ic_put(js, env, ic, interned, len, val)) return val;
-
-  ant_value_t result = sv_env_put(js, env, interned, len, val, is_strict);
-  if (!is_err(result)) sv_eval_env_ic_fill(js, env, ic, interned, len, true);
-
-  return result;
+  return sv_eval_env_put_interned_miss(js, env, interned, len, val, is_strict, ic);
 }
 
 #endif

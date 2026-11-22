@@ -37,9 +37,11 @@ static constexpr uint8_t SV_EVAL_LAYOUT_MAX = 8;
 typedef struct {
   uint64_t hash;
   const char *source;
+  const void *scope;
   uint32_t len;
   uint16_t bits;
   uint8_t layout_count;
+  bool fork;
   const void *layout[SV_EVAL_LAYOUT_MAX];
 } sv_eval_cache_key_t;
 
@@ -94,9 +96,11 @@ static inline bool sv_code_unit_dying(const sv_code_unit_t *unit, uint64_t epoch
   return unit && !unit->compiling && !unit->pins && unit->gc_epoch != epoch;
 }
 
-bool sv_eval_cache_key(ant_t *js, sv_eval_cache_key_t *key, const char *source, size_t len, uint16_t bits);
+bool sv_eval_cache_key(
+  ant_t *js, sv_eval_cache_key_t *key, const char *source, size_t len, uint16_t bits, const void *scope
+);
 bool sv_eval_cache_key_bind(ant_t *js, sv_eval_cache_key_t *key, ant_value_t env);
-sv_func_t *sv_eval_cache_find(ant_t *js, const sv_eval_cache_key_t *key);
+sv_func_t *sv_eval_cache_find(ant_t *js, sv_eval_cache_key_t *key);
 
 void sv_eval_cache_store(ant_t *js, const sv_eval_cache_key_t *key, sv_func_t *func, bool bound);
 sv_func_t *sv_eval_cache_find_bound(ant_t *js, const sv_eval_cache_key_t *key);

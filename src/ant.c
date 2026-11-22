@@ -456,7 +456,7 @@ static inline __attribute__((always_inline)) js_eval_result_t js_eval_source_fro
   sv_eval_cache_key_t cache_key;
   bool cacheable = is_eval && sv_eval_cache_key(
     js, &cache_key, buf, len,
-    (uint16_t)(shadows | (strict ? 4 : 0) | (mode == SV_COMPILE_EVAL_FUNCTION ? 8 : 0)));
+    (uint16_t)(shadows | (strict ? 4 : 0) | (mode == SV_COMPILE_EVAL_FUNCTION ? 8 : 0)), scope.layout);
   bool bound = (shadows & SV_EVAL_SCOPE_ENV_BOUND) != 0;
   if (bound && cacheable) cacheable = sv_eval_cache_key_bind(js, &cache_key, scope.env);
   
