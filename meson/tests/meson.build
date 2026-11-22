@@ -29,6 +29,7 @@ libant_tests = [
   'code-unit-feedback',
   'code-unit-lifetime',
   'code-unit-ctor-proto',
+  'eval-cache-scope-keys',
   'ic-poly-shape-release',
   'gc-two-isolates',
   'arena-chunks',
