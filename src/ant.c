@@ -433,8 +433,8 @@ static inline __attribute__((always_inline)) ant_value_t js_execute_compiled_eva
   ant_value_t compiled = mkref(kTypeFunctionInfo, func);
   GC_ROOT_PIN(js, compiled);
 
-  ant_value_t result = caller && func->unit->eval_reads_arguments
-    ? sv_eval_bind_arguments(js->vm, js, caller, scope.env)
+  ant_value_t result = caller && func->unit->eval_arguments
+    ? sv_eval_bind_arguments(js->vm, js, caller, scope.env, func->unit->eval_arguments)
     : Ant_Value_Undefined;
 
   if (!is_err(result)) result = sv_eval_declare_vars(js, func, scope.env, true);

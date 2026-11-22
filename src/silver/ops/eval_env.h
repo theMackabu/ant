@@ -272,21 +272,25 @@ static inline ant_value_t sv_eval_init_variable_env(sv_vm_t *vm, ant_t *js, sv_f
     state->arguments_obj = Ant_Value_Undefined;
     state->is_variable = true;
     frame->eval_env = env;
-    if (frame->func->is_arrow) {}
-    else if (frame->func->lazy_eval_env && !sv_frame_is_strict(frame)) state->arguments_deferred = true;
-    else {
-      ant_value_t arguments = sv_eval_arguments(js, vm, frame);
-      if (is_err(arguments)) { GC_ROOT_RESTORE(js, mark); return arguments; }
-      sv_eval_env_set_arguments(js, env, state, arguments);
-    }
+    state->arguments_deferred = !frame->func->is_arrow;
   }
   GC_ROOT_RESTORE(js, mark);
   return env;
 }
 
-static inline ant_value_t sv_eval_bind_arguments(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, ant_value_t env) {
+ant_value_t sv_eval_bind_scope_arguments(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, ant_value_t env, uint8_t uses);
+
+static inline ant_value_t sv_eval_bind_arguments(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, ant_value_t env, uint8_t uses) {
+  const sv_func_t *func = frame->func;
+  if (!func->lazy_eval_env) {
+    if (func->is_arrow || func->is_eval) return Ant_Value_Undefined;
+    if (!func->is_strict && !(uses & SV_EVAL_READS_ARGUMENTS)) return Ant_Value_Undefined;
+    return sv_eval_bind_scope_arguments(vm, js, frame, env, uses);
+  }
+
   sv_eval_env_state_t *variable = sv_eval_env_state(frame->eval_env);
-  if (!variable || !variable->arguments_deferred || variable->func != frame->func) return Ant_Value_Undefined;
+  if (!variable || !variable->arguments_deferred || variable->func != func) return Ant_Value_Undefined;
+  if (!(uses & SV_EVAL_READS_ARGUMENTS)) return Ant_Value_Undefined;
 
   ant_value_t arguments = sv_eval_arguments(js, vm, frame);
   if (is_err(arguments)) return arguments;
@@ -295,7 +299,10 @@ static inline ant_value_t sv_eval_bind_arguments(sv_vm_t *vm, ant_t *js, sv_fram
   sv_eval_env_set_arguments(js, frame->eval_env, variable, arguments);
 
   sv_eval_env_state_t *state = sv_eval_env_state(env);
-  if (state) state->arguments_obj = arguments;
+  if (state) {
+    state->arguments_obj = arguments;
+    gc_write_barrier(js, js_obj_ptr(js_as_obj(env)), arguments);
+  }
 
   return Ant_Value_Undefined;
 }
@@ -617,21 +624,42 @@ ant_value_t sv_eval_capture_scope_env(
   ant_value_t env = js_mkobj_with_proto(js, parent);
   if (is_err(env)) { GC_ROOT_RESTORE(js, mark); return env; }
   GC_ROOT_PIN(js, env);
-  sv_eval_env_state_t *parent_state = sv_eval_env_state(parent);
-  ant_value_t arguments = Ant_Value_Undefined;
-  bool provides = !scope->parent && !frame->func->is_arrow && !frame->func->is_eval &&
-    !(parent_state && parent_state->is_variable) && !scope->binds_arguments;
-  if (provides) {
-    arguments = sv_eval_arguments(js, vm, frame);
-    if (is_err(arguments)) { GC_ROOT_RESTORE(js, mark); return arguments; }
-  }
+  bool provides = !scope->parent && !frame->func->is_arrow && !frame->func->is_eval && !scope->binds_arguments;
   sv_eval_env_state_t *state = sv_eval_env_state_create(vm, frame, scope);
   if (!state || !sv_eval_env_state_attach(env, state)) {
     free(state);
     env = js_mkerr(js, "failed to capture eval environment");
-  } else if (provides) sv_eval_env_set_arguments(js, env, state, arguments);
+  } else state->arguments_deferred = provides;
   GC_ROOT_RESTORE(js, mark);
   return env;
+}
+
+__attribute__((noinline)) ant_value_t sv_eval_bind_scope_arguments(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, ant_value_t env, uint8_t uses
+) {
+  bool binds_params = false;
+  ant_value_t root = env;
+  sv_eval_env_state_t *state = sv_eval_env_state(root);
+  for (;; state = sv_eval_env_state(root)) {
+    binds_params |= state->scope->binds_params;
+    if (!state->scope->parent) break;
+    root = sv_eval_env_parent(root);
+  }
+  if (!state->arguments_deferred) return Ant_Value_Undefined;
+  if (!(uses & SV_EVAL_READS_ARGUMENTS) && !binds_params) return Ant_Value_Undefined;
+
+  ant_value_t arguments = sv_eval_arguments(js, vm, frame);
+  if (is_err(arguments)) return arguments;
+
+  state->arguments_deferred = false;
+  state->arguments_obj = arguments;
+  sv_eval_env_set_arguments(js, root, state, arguments);
+  for (ant_value_t current = env; current != root; current = sv_eval_env_parent(current)) {
+    sv_eval_env_state(current)->arguments_obj = arguments;
+    gc_write_barrier(js, js_obj_ptr(js_as_obj(current)), arguments);
+  }
+
+  return Ant_Value_Undefined;
 }
 
 __attribute__((noinline, cold)) bool sv_sandbox_global_lookup(

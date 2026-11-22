@@ -638,6 +638,7 @@ typedef struct sv_eval_scope {
   uint32_t count;
   uint32_t parent;
   bool binds_arguments;
+  bool binds_params;
   uint16_t eval_bits;
   sv_eval_scope_flags_t flags;
 } sv_eval_scope_t;
@@ -646,6 +647,11 @@ enum {
   SV_EVAL_IC_MAX_DEPTH = 3,
   SV_EVAL_IC_CELL = 0x80,
   SV_EVAL_IC_NONE = 0xff,
+};
+
+enum {
+  SV_EVAL_READS_ARGUMENTS = 1,
+  SV_EVAL_WRITES_NAMES = 2,
 };
 
 enum {

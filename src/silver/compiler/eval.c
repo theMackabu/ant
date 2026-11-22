@@ -96,6 +96,7 @@ static bool eval_scope_builder_add_binding(
   }
   uint32_t binding_index = scope->count++;
   if (len == 9 && memcmp(name, "arguments", 9) == 0) scope->binds_arguments = true;
+  if ((kind & SV_EVAL_BIND_KIND_MASK) == SV_EVAL_BIND_PARAM) scope->binds_params = true;
   if (meta->import_kind == SV_IMPORT_BIND_DEFAULT) kind |= SV_EVAL_BIND_IMPORT_DEFAULT;
   if (meta->import_kind == SV_IMPORT_BIND_NAMED) kind |= SV_EVAL_BIND_IMPORT_NAMED;
   
@@ -884,23 +885,40 @@ static bool eval_program_mentions_arguments(sv_compiler_t *c, const sv_ast_t *no
   return false;
 }
 
-static bool eval_source_test(
+void eval_source_visit(
   sv_compiler_t *c, const sv_ast_t *source,
-  bool (*test)(sv_compiler_t *c, const sv_ast_t *program)
+  void (*visit)(void *data, const sv_ast_t *program), void *data
 ) {
   GC_ROOT_SAVE(exception_mark, c->js);
   ant_value_t saved_exception = Ant_Exception_Peek(c->js);
   GC_ROOT_PIN(c->js, saved_exception);
   code_arena_mark_t mark = parse_arena_mark(c->js);
   
-  sv_ast_t *program = sv_parse(c->js, source->str ? source->str : "", source->len, SV_PARSE_SCRIPT, c->is_strict);
-  bool result = test(c, program);
+  visit(data, sv_parse(c->js, source->str ? source->str : "", source->len, SV_PARSE_SCRIPT, c->is_strict));
   
   parse_arena_rewind(c->js, mark);
   Ant_Exception_Set(c->js, saved_exception);
   GC_ROOT_RESTORE(c->js, exception_mark);
-  
-  return result;
+}
+
+typedef struct {
+  sv_compiler_t *c;
+  bool (*test)(sv_compiler_t *c, const sv_ast_t *program);
+  bool result;
+} eval_source_test_t;
+
+static void eval_source_test_visit(void *data, const sv_ast_t *program) {
+  eval_source_test_t *test = data;
+  test->result = test->test(test->c, program);
+}
+
+static bool eval_source_test(
+  sv_compiler_t *c, const sv_ast_t *source,
+  bool (*test)(sv_compiler_t *c, const sv_ast_t *program)
+) {
+  eval_source_test_t run = { c, test, false };
+  eval_source_visit(c, source, eval_source_test_visit, &run);
+  return run.result;
 }
 
 bool ast_literal_eval_mentions_arguments(sv_compiler_t *c, const sv_ast_t *node) {

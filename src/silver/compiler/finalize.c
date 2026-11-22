@@ -197,6 +197,7 @@ void sv_func_finalize_type_data(
       dst->count = src->count;
       dst->parent = src->parent;
       dst->binds_arguments = src->binds_arguments;
+      dst->binds_params = src->binds_params;
       dst->flags = src->flags;
       dst->eval_bits = sv_eval_scope_bits(&src->flags);
       dst->bindings = src->count > 0
