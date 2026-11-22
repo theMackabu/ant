@@ -222,6 +222,19 @@ function churn(rounds) {
 }
 
 {
+  const loop = 'let t = ""; for (let k = 0; k < 4; k++) t += leafProbe; t';
+  globalThis.leafProbe = 'G';
+  function make(declare) { eval(declare); return function inner() { eval('var pad = 1'); return eval(loop); }; }
+  const plain = make('var other = 1'), shadowed = make('var leafProbe = "S"');
+  for (let round = 0; round < 6; round++) {
+    assert.strictEqual(plain(), 'GGGG');
+    assert.strictEqual(shadowed(), 'SSSS');
+    assert.strictEqual(plain(), 'GGGG');
+  }
+  delete globalThis.leafProbe;
+}
+
+{
   const src = 'a + 1', strictVar = '"use strict"; var z = a; z + 1', reflect = 'new.target === undefined ? "call" : "new"';
   function* gen(a) { yield eval(src); a += 10; yield eval(src); }
   async function later(a) { await null; return eval(src); }
