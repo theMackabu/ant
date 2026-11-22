@@ -495,6 +495,10 @@ static sv_upvalue_t *sv_eval_env_ic_outer_cell(
   return cell;
 }
 
+static inline bool sv_eval_env_ic_unfilled(const ant_t *js, ant_value_t env, const sv_ic_entry_t *ic) {
+  return ic && ic->epoch != js->ic.epoch && !((const ant_object_t *)vptr(env))->prop_count;
+}
+
 static inline bool sv_eval_env_ic_refused(const ant_t *js, const sv_ic_entry_t *ic) {
   return ic && ic->eval_depth == SV_EVAL_IC_REFUSED && ic->epoch == js->ic.epoch;
 }
@@ -550,7 +554,7 @@ static __attribute__((noinline)) void sv_eval_env_ic_fill_outer_cell(
   }
 
   const sv_eval_env_state_t *state = sv_eval_env_object_state(holder);
-  if (!depth || !state->scope) return;
+  if (!state->scope) return;
   if (binding->kind & (SV_EVAL_BIND_IMPORT_DEFAULT | SV_EVAL_BIND_IMPORT_NAMED | SV_EVAL_BIND_ARGUMENTS)) return;
 
   uint32_t index = (uint32_t)(binding - state->scope->bindings);
@@ -672,7 +676,7 @@ static __attribute__((noinline)) ant_value_t sv_eval_env_get_interned_miss(
   if (found) *found = resolved;
   if (resolved && !is_err(out) && !sv_eval_env_ic_refused(js, ic)) {
     sv_eval_env_ic_fill(js, env, ic, interned, len, false);
-    if (ic && ic->epoch != js->ic.epoch) sv_eval_env_ic_fill_outer_cell(js, env, ic, interned, len);
+    if (sv_eval_env_ic_unfilled(js, env, ic)) sv_eval_env_ic_fill_outer_cell(js, env, ic, interned, len);
   }
 
   return out;
@@ -723,7 +727,7 @@ static __attribute__((noinline)) ant_value_t sv_eval_env_put_interned_miss(
   ant_value_t result = sv_env_put(js, env, interned, len, val, is_strict);
   if (!is_err(result) && !sv_eval_env_ic_refused(js, ic)) {
     sv_eval_env_ic_fill(js, env, ic, interned, len, true);
-    if (ic && ic->epoch != js->ic.epoch) sv_eval_env_ic_fill_outer_cell(js, env, ic, interned, len);
+    if (sv_eval_env_ic_unfilled(js, env, ic)) sv_eval_env_ic_fill_outer_cell(js, env, ic, interned, len);
   }
 
   return result;
