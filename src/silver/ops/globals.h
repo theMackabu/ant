@@ -472,6 +472,34 @@ ant_value_t sv_global_get_interned_miss(
   return val;
 }
 
+static __attribute__((noinline)) sv_upvalue_t *sv_eval_env_ic_outer_cell(
+  ant_value_t env, const sv_ic_entry_t *ic, const sv_eval_env_state_t **owner
+) {
+  uint8_t depth = (uint8_t)(ic->cached_aux & SV_EVAL_IC_CELL_DEPTH);
+  ant_object_t *holder = (ant_object_t *)vptr(env);
+  const sv_eval_scope_t *scope = (const sv_eval_scope_t *)(ic->cached_aux & ~(uintptr_t)SV_EVAL_IC_CELL_DEPTH);
+
+  for (uint8_t level = 0; level < depth; level++) {
+    if (sv_eval_env_object_scope(holder) != scope) return NULL;
+
+    bool absent = level == ic->eval_absent_level
+      ? holder->shape == ic->guard.eval.absent_shape
+      : holder->prop_count == 0;
+
+    if (!absent || !(holder = sv_eval_env_object_parent(holder))) return NULL;
+    scope = level ? ic->guard.eval.outer_scope : ic->eval_parent_scope;
+  }
+
+  const sv_eval_env_state_t *state = sv_eval_env_object_state(holder);
+  if (!state || state->scope != scope || ic->cached_index >= state->cell_count) return NULL;
+
+  sv_upvalue_t *cell = state->cells[ic->cached_index];
+  if (!cell || is_empty_slot(*cell->location)) return NULL;
+  if (owner) *owner = state;
+
+  return cell;
+}
+
 static bool sv_eval_env_ic_fill_binding(ant_t *js, ant_object_t *target, sv_ic_entry_t *ic, const char *interned, uint32_t len) {
   const sv_eval_env_state_t *state = sv_eval_env_object_state(target);
   const sv_runtime_binding_t *binding = sv_eval_env_find_binding(state, interned, len);
@@ -488,6 +516,32 @@ static bool sv_eval_env_ic_fill_binding(ant_t *js, ant_object_t *target, sv_ic_e
   ic->epoch = js->ic.epoch;
 
   return true;
+}
+
+static __attribute__((noinline)) void sv_eval_env_ic_fill_outer_cell(
+  ant_t *js, sv_ic_entry_t *ic, const ant_object_t *holder, const sv_runtime_binding_t *binding,
+  const sv_eval_scope_t **scopes, uint8_t depth, ant_shape_t *absent_shape, uint16_t absent_level
+) {
+  const sv_eval_env_state_t *state = sv_eval_env_object_state(holder);
+  if (depth >= SV_EVAL_IC_MAX_DEPTH || !state->scope) return;
+  if (binding->kind & (SV_EVAL_BIND_IMPORT_DEFAULT | SV_EVAL_BIND_IMPORT_NAMED | SV_EVAL_BIND_ARGUMENTS)) return;
+  if (binding->len == sv_eval_arguments_binding.len && memcmp(binding->name, sv_eval_arguments_binding.name, binding->len) == 0) return;
+
+  uint32_t index = (uint32_t)(binding - state->scope->bindings);
+  if (index >= state->cell_count || !state->cells[index]) return;
+
+  ic->eval_depth = SV_EVAL_IC_NONE;
+  if (!sv_eval_env_ic_hold(js, ic, &ic->guard.eval.absent_shape, SV_IC_SHAPE_REF_ADD_FROM, absent_shape)) return;
+  if (!sv_eval_env_ic_hold(js, ic, &ic->guard.eval.holder_shape, SV_IC_SHAPE_REF_ADD_TO, NULL)) return;
+
+  scopes[depth] = state->scope;
+  ic->eval_depth = SV_EVAL_IC_CELL;
+  ic->eval_absent_level = absent_level;
+  ic->cached_index = index;
+  ic->cached_aux = (uintptr_t)scopes[0] | depth;
+  ic->eval_parent_scope = scopes[1];
+  ic->guard.eval.outer_scope = scopes[2];
+  ic->epoch = js->ic.epoch;
 }
 
 static void sv_eval_env_ic_fill(
@@ -507,7 +561,9 @@ static void sv_eval_env_ic_fill(
 
   for (;; depth++) {
     if (holder->flags.is_exotic || !holder->shape) return;
-    if (depth > 0 && holder != global && sv_eval_env_find_binding(sv_eval_env_object_state(holder), interned, len)) return;
+    const sv_runtime_binding_t *outer = depth > 0 && holder != global
+      ? sv_eval_env_find_binding(sv_eval_env_object_state(holder), interned, len) : NULL;
+    if (outer) return sv_eval_env_ic_fill_outer_cell(js, ic, holder, outer, scopes, depth, absent_shape, absent_level);
     if ((slot = ant_shape_lookup_interned(holder->shape, interned)) >= 0) break;
     if (holder == global || depth == SV_EVAL_IC_MAX_DEPTH) return;
 
@@ -551,6 +607,7 @@ static inline bool sv_eval_env_ic_get(ant_t *js, ant_value_t env, const sv_ic_en
 
   if (ic->eval_depth == SV_EVAL_IC_CELL) {
     sv_upvalue_t *cell = sv_eval_env_ic_cell(env, ic);
+    if (!cell && (ic->cached_aux & SV_EVAL_IC_CELL_DEPTH)) cell = sv_eval_env_ic_outer_cell(env, ic, NULL);
     if (cell) *out = *cell->location;
     return cell != NULL;
   }
@@ -567,8 +624,9 @@ static inline bool sv_eval_env_ic_put(
   if (!sv_eval_env_ic_live(js, env, ic)) return false;
 
   if (ic->eval_depth == SV_EVAL_IC_CELL) {
-    if (!sv_eval_env_ic_cell(env, ic)) return false;
     const sv_eval_env_state_t *state = sv_eval_env_object_state((ant_object_t *)vptr(env));
+    if (sv_eval_env_ic_cell(env, ic)) return sv_eval_binding_store(js, state, &state->scope->bindings[ic->cached_index], val);
+    if (!(ic->cached_aux & SV_EVAL_IC_CELL_DEPTH) || !sv_eval_env_ic_outer_cell(env, ic, &state)) return false;
     return sv_eval_binding_store(js, state, &state->scope->bindings[ic->cached_index], val);
   }
 
