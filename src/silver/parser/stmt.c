@@ -384,6 +384,7 @@ static sv_ast_t *parse_stmt(sv_parser_t *p) {
       }
       p->lx.st.consumed = 1;
       sv_ast_t *n = mk(is_of ? (is_for_await ? N_FOR_AWAIT_OF : N_FOR_OF) : N_FOR_IN);
+      if (is_for_await) p->program_syntax |= SV_PROGRAM_SUSPEND;
       n->left = init_node;
       n->right = is_of ? parse_assign(p) : parse_expr(p);
       expect(p, TOK_RPAREN);

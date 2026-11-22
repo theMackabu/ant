@@ -201,7 +201,8 @@ static inline bool type_dep_live(const sv_compiler_t *c, const sv_type_dep_t *de
 void type_dep_add(sv_compiler_t *c, int local) {
   if (c->types->dep_count >= c->types->dep_cap) {
     int cap = c->types->dep_cap ? c->types->dep_cap * 2 : 16;
-    sv_type_dep_t *next = realloc(c->types->deps, (size_t)cap * sizeof(*next));
+    sv_type_dep_t *next = sv_compile_ctx_grow_types(
+      c->types, c->types->deps, (size_t)c->types->dep_count * sizeof(*next), (size_t)cap * sizeof(*next));
     if (!next) return;
     c->types->deps = next;
     c->types->dep_cap = cap;
@@ -219,7 +220,8 @@ bool type_deps_live(const sv_compiler_t *c, int base) {
 static sv_type_use_t *type_use_push(sv_compiler_t *c, const sv_type_dep_t *dep) {
   if (c->types->use_count >= c->types->use_cap) {
     int cap = c->types->use_cap ? c->types->use_cap * 2 : 32;
-    sv_type_use_t *next = realloc(c->types->uses, (size_t)cap * sizeof(*next));
+    sv_type_use_t *next = sv_compile_ctx_grow_types(
+      c->types, c->types->uses, (size_t)c->types->use_count * sizeof(*next), (size_t)cap * sizeof(*next));
     if (!next) return NULL;
     c->types->uses = next;
     c->types->use_cap = cap;
@@ -348,7 +350,8 @@ void type_assign_local_slow(sv_compiler_t *c, int local_idx, uint8_t type, int d
   
   if (c->types->promo_count >= c->types->promo_cap) {
     int cap = c->types->promo_cap ? c->types->promo_cap * 2 : 16;
-    sv_type_dep_t *next = realloc(c->types->promos, (size_t)cap * sizeof(*next));
+    sv_type_dep_t *next = sv_compile_ctx_grow_types(
+      c->types, c->types->promos, (size_t)c->types->promo_count * sizeof(*next), (size_t)cap * sizeof(*next));
     if (!next) {
       type_local_clear(local);
       return;

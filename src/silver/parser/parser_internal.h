@@ -21,6 +21,7 @@ typedef struct {
   bool no_yield;
   bool in_generator;
   bool body_stmt;
+  uint8_t program_syntax;
   uint32_t function_depth;
   uint32_t chain_links;
 } sv_parser_t;
@@ -274,12 +275,14 @@ static inline bool binding_ident_here(sv_parser_t *p) {
 
 bool sv_reject_ident_name_slow(sv_parser_t *p, const char *s, uint32_t len);
 
-static inline bool sv_restricted_name_start(char c) {
-  static constexpr uint32_t mask =
+static inline bool sv_restricted_name_shape(const char *s, uint32_t len) {
+  static constexpr uint32_t starts =
     (1u << ('a' - 'a')) | (1u << ('e' - 'a')) | (1u << ('i' - 'a')) |
     (1u << ('l' - 'a')) | (1u << ('p' - 'a')) | (1u << ('s' - 'a')) | (1u << ('y' - 'a'));
-  unsigned idx = (unsigned)c - 'a';
-  return idx < 26 && ((mask >> idx) & 1);
+  static constexpr uint32_t lengths =
+    (1u << 3) | (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7) | (1u << 9) | (1u << 10);
+  unsigned idx = (unsigned)s[0] - 'a';
+  return len < 11 && ((lengths >> len) & 1) && idx < 26 && ((starts >> idx) & 1);
 }
 
 static inline bool sv_ident_names_restricted(const sv_parser_t *p) {
@@ -287,12 +290,12 @@ static inline bool sv_ident_names_restricted(const sv_parser_t *p) {
 }
 
 static inline bool sv_reject_ident_name(sv_parser_t *p, const char *s, uint32_t len) {
-  if (__builtin_expect(!sv_ident_names_restricted(p) || !sv_restricted_name_start(s[0]), 1)) return false;
+  if (__builtin_expect(!sv_restricted_name_shape(s, len) || !sv_ident_names_restricted(p), 1)) return false;
   return sv_reject_ident_name_slow(p, s, len);
 }
 
 static inline bool sv_reject_binding_name(sv_parser_t *p, const char *s, uint32_t len) {
-  if (__builtin_expect(!sv_ident_names_restricted(p) || !sv_restricted_name_start(s[0]), 1)) return false;
+  if (__builtin_expect(!sv_restricted_name_shape(s, len) || !sv_ident_names_restricted(p), 1)) return false;
   if (sv_reject_ident_name_slow(p, s, len)) return true;
   if (p->lx.strict && is_eval_or_arguments_name(s, len)) {
     SV_MKERR_TYPED(p->js, JS_ERR_SYNTAX, "Unexpected eval or arguments in strict mode");

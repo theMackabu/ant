@@ -341,6 +341,7 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
       if (sv_lexer_next(&p->lx) == TOK_IDENTIFIER && p->lx.st.tlen == 6 && memcmp(tok_str(p), "target", 6) == 0) {
         p->lx.st.consumed = 1;
         sv_ast_t *target = mk(N_NEW_TARGET);
+        p->program_syntax |= SV_PROGRAM_NEW_TARGET;
         target->src_off = new_off;
         target->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
         return target;
@@ -444,12 +445,14 @@ sv_ast_t *parse_primary(sv_parser_t *p) {
     }
     p->lx.st.consumed = 1;
     sv_ast_t *n = mk(N_AWAIT);
+    p->program_syntax |= SV_PROGRAM_SUSPEND;
     n->right = parse_unary(p);
     return n;
   }
 
   l_super: {
     sv_ast_t *n = mk_ident(p, "super", 5);
+    p->program_syntax |= SV_PROGRAM_SUPER;
     n->src_off = (uint32_t)p->lx.st.toff;
     n->src_end = (uint32_t)(p->lx.st.toff + p->lx.st.tlen);
     p->lx.st.consumed = 1;

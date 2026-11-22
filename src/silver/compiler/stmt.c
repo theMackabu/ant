@@ -125,6 +125,12 @@ static bool unwinding_runs_finally(const sv_compiler_t *c) {
 }
 
 void emit_return_from_stack(sv_compiler_t *c) {
+  if (!(c->unwind_count | c->using_cleanup_count)) {
+    emit_close_upvals(c);
+    emit_op(c, OP_RETURN);
+    return;
+  }
+
   exit_cursor_t cur = { c->local_count, c->using_cleanup_count };
   int active_unwinds = c->unwind_count;
   int stash_local = -1;

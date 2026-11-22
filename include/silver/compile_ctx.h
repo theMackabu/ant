@@ -32,6 +32,7 @@ uint32_t sv_compile_ctx_hash_local_name(const char *name, uint32_t len);
 sv_line_table_t *sv_compile_ctx_build_line_table(const char *source, ant_offset_t source_len);
 
 void sv_compile_ctx_cleanup(sv_compiler_t *ctx);
+void *sv_compile_ctx_grow_types(const sv_type_scratch_t *types, void *items, size_t used, size_t size);
 void sv_compile_ctx_free_line_table(sv_line_table_t *lt);
 
 void sv_compile_ctx_ensure_local_lookup_capacity(sv_compiler_t *ctx, int next_count);
