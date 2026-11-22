@@ -594,6 +594,7 @@ static void emit_set_var_plain(sv_compiler_t *c, const char *name, uint32_t len,
   }
   if (keep) emit_op(c, OP_DUP);
   emit_arguments_eval_env(c, name, len);
+  note_eval_writes_names(c);
   emit_atom_op(
     c, env_resolution_op(c, OP_PUT_GLOBAL, OP_PUT_EVAL_GLOBAL),
     name, len);

@@ -156,7 +156,9 @@ sv_func_t *sv_compile(
   sv_func_t *func = compile_function_body(&root, &top_fn, mode);
   if (func && unit) {
     sv_func_metadata_t *metadata = sv_func_metadata(func);
-    unit->eval_reads_arguments = root.eval_reads_arguments;
+    unit->eval_arguments = (uint8_t)(
+      (root.eval_reads_arguments ? SV_EVAL_READS_ARGUMENTS : 0) |
+      (root.eval_writes_names ? SV_EVAL_WRITES_NAMES : 0));
     unit->eval_leaf =
       sv_compile_mode_is_eval(mode) && !root.eval_reads_arguments && unit->funcs == func && !func->unit_next &&
       (!metadata || !metadata->eval_var_count);

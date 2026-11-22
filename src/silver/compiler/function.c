@@ -250,6 +250,19 @@ static bool sv_func_compute_curried_step(sv_func_t *func) {
   return child->is_fusable_leaf;
 }
 
+static void snapshot_written_params(sv_compiler_t *c, const sv_ast_t *node) {
+  uint64_t written = eval_written_params(c, node);
+  for (int i = 0; written && i < node->args.count; i++) {
+    const sv_ast_t *param = node->args.items[i];
+    if (i < 64 && !((written >> i) & 1)) continue;
+    int local = add_local(c, param->str, param->len, false, 0);
+    emit_op(c, OP_GET_ARG);
+    emit_u16(c, (uint16_t)i);
+    emit_put_local(c, local);
+  }
+  c->param_bind_end = c->local_count;
+}
+
 static void emit_field_thunk(sv_compiler_t *c) {
   sv_ast_t *thunk = sv_ast_new(c->js, N_FUNC);
   thunk->flags = FN_ARROW | FN_FIELD_THUNK;
@@ -321,7 +334,7 @@ sv_func_t *compile_function_body(
       comp.owns_eval_env = ast_has_own_eval(&comp, node->body);
   }
   comp.inherits_eval_env |= comp.owns_eval_env;
-  comp.lazy_eval_env = comp.owns_eval_env && !has_non_simple_params;
+  comp.lazy_eval_env = comp.owns_eval_env;
   if (comp.owns_eval_env) emit_op(&comp, OP_INIT_EVAL_ENV);
   if (node->flags & FN_CLASS_CTOR) emit_op(&comp, OP_CHECK_CTOR);
 
@@ -376,6 +389,10 @@ sv_func_t *compile_function_body(
   }
 
   comp.param_bind_end = comp.param_locals;
+  if (
+    comp.is_strict && may_eval && !has_non_simple_params && node->body &&
+    has_implicit_arguments_obj(&comp) && comp.arguments_local < 0
+  ) snapshot_written_params(&comp, node);
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
       for (int i = 0; i < node->body->args.count; i++)

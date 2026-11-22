@@ -242,6 +242,7 @@ typedef struct {
   uint32_t parent;
   int local_count;
   bool binds_arguments;
+  bool binds_params;
   sv_eval_scope_flags_t flags;
 } sv_eval_scope_builder_t;
 
@@ -355,6 +356,7 @@ typedef struct sv_compiler {
   bool eval_shadows_global_this;
   ant_value_t eval_env;
   bool eval_reads_arguments;
+  bool eval_writes_names;
 
   sv_eval_decl_t *eval_vars;
   uint32_t *eval_var_index;

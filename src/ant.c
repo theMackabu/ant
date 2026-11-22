@@ -433,8 +433,8 @@ static inline __attribute__((always_inline)) ant_value_t js_execute_compiled_eva
   ant_value_t compiled = mkref(kTypeFunctionInfo, func);
   GC_ROOT_PIN(js, compiled);
 
-  ant_value_t result = caller && func->unit->eval_reads_arguments
-    ? sv_eval_bind_arguments(js->vm, js, caller, scope.env)
+  ant_value_t result = caller && func->unit->eval_arguments
+    ? sv_eval_bind_arguments(js->vm, js, caller, scope.env, func->unit->eval_arguments)
     : Ant_Value_Undefined;
 
   if (!is_err(result)) result = sv_eval_declare_vars(js, func, scope.env, true);
@@ -541,6 +541,12 @@ js_eval_result_t js_eval_source(
   return js_eval_source_from(js, buf, len, mode, strict, scope, NULL);
 }
 
+static inline bool js_eval_snapshots_arguments(const sv_func_t *unit_func, const sv_frame_t *frame, const sv_eval_scope_t *layout) {
+  return
+    (unit_func->unit->eval_arguments & SV_EVAL_WRITES_NAMES) && layout->binds_params &&
+    frame->func->is_strict && vtype(frame->arguments_obj) == kTypeUndefined;
+}
+
 static const uint16_t js_eval_env_bits = SV_EVAL_SCOPE_ENV_BOUND | SV_EVAL_SCOPE_PRIVATE | SV_EVAL_SCOPE_THIS_BINDING;
 
 static __attribute__((noinline)) ant_value_t js_eval_in_frame_with_env(
@@ -576,7 +582,7 @@ ant_value_t js_eval_in_frame(
   sv_eval_cache_key_t cache_key;
   bool cacheable = sv_eval_cache_key(js, &cache_key, source, len, js_eval_key_bits(shadows, strict, mode), layout);
   sv_func_t *cached = cacheable ? sv_eval_cache_find(js, &cache_key) : NULL;
-  bool leaf = cached && cached->unit->eval_leaf && !layout->parent;
+  bool leaf = cached && cached->unit->eval_leaf && !layout->parent && !js_eval_snapshots_arguments(cached, frame, layout);
 
   scope.env = leaf
     ? sv_eval_leaf_env_acquire(vm, js, frame, layout)

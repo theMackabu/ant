@@ -27,7 +27,7 @@ struct sv_code_unit {
   
   uint32_t pins;
   bool compiling;
-  bool eval_reads_arguments;
+  uint8_t eval_arguments;
   bool eval_leaf;
 };
 

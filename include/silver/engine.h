@@ -638,6 +638,7 @@ typedef struct sv_eval_scope {
   uint32_t count;
   uint32_t parent;
   bool binds_arguments;
+  bool binds_params;
   uint16_t eval_bits;
   sv_eval_scope_flags_t flags;
 } sv_eval_scope_t;
@@ -655,6 +656,11 @@ static_assert(
   _Alignof(sv_eval_scope_t) > SV_EVAL_IC_CELL_DEPTH && SV_EVAL_IC_MAX_DEPTH <= SV_EVAL_IC_CELL_DEPTH,
   "eval cell cache entries keep the holder depth in the scope pointer's low bits"
 );
+
+enum {
+  SV_EVAL_READS_ARGUMENTS = 1,
+  SV_EVAL_WRITES_NAMES = 2,
+};
 
 enum {
   SV_EVAL_BIND_PARAM = 0,
