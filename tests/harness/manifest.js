@@ -126,6 +126,8 @@ export function targets() {
     'test_eval_cache_shared_scope.cjs',
     'test_eval_cache_this_binding.cjs',
     'test_eval_lazy_variable_env.cjs',
+    'test_eval_outer_binding_cache.cjs',
+    'test_eval_outer_import_cache.mjs',
     'test_eval_with_cache.cjs',
     'test_event_prototype_getters.cjs',
     'test_compile_time_scopes.cjs',

@@ -644,9 +644,17 @@ typedef struct sv_eval_scope {
 
 enum {
   SV_EVAL_IC_MAX_DEPTH = 3,
+  SV_EVAL_IC_CELL_DEPTH = 3,
   SV_EVAL_IC_CELL = 0x80,
+  SV_EVAL_IC_OUTER_CELL = 0x81,
+  SV_EVAL_IC_REFUSED = 0x82,
   SV_EVAL_IC_NONE = 0xff,
 };
+
+static_assert(
+  _Alignof(sv_eval_scope_t) > SV_EVAL_IC_CELL_DEPTH && SV_EVAL_IC_MAX_DEPTH <= SV_EVAL_IC_CELL_DEPTH,
+  "eval cell cache entries keep the holder depth in the scope pointer's low bits"
+);
 
 enum {
   SV_EVAL_BIND_PARAM = 0,
