@@ -12,11 +12,12 @@ typedef struct sv_eval_env_state {
   sv_func_t *func;
   const sv_eval_scope_t *scope;
   uint32_t cell_count;
-  ant_value_t arguments_obj;
-  ant_value_t arguments_value;
   bool is_variable;
   bool has_arguments;
   bool arguments_deferred;
+  ant_value_t arguments_obj;
+  ant_value_t arguments_value;
+  uint64_t serial;
   sv_upvalue_t *cells[];
 } sv_eval_env_state_t;
 
@@ -375,6 +376,8 @@ __attribute__((noinline, cold)) bool sv_sandbox_global_lookup(
   ant_t *js, const char *interned, uint32_t len, ant_value_t *out
 );
 
+void sv_eval_env_absence_changed(ant_t *js, ant_object_t *env);
+
 static inline ant_value_t sv_eval_declare_vars(
   ant_t *js, sv_func_t *func, ant_value_t env, bool configurable
 ) {
@@ -414,6 +417,7 @@ static inline ant_value_t sv_eval_declare_vars(
       (sandboxed && sv_sandbox_has(js, name->str, name->len));
     
     if (exists) continue;
+    if (!global && ((ant_object_t *)vptr(target))->flags.guards_absence) sv_eval_env_absence_changed(js, (ant_object_t *)vptr(target));
     result = setprop_interned(js, holder, name->str, name->len, Ant_Value_Undefined);
     
     if (is_err(result)) break;
@@ -518,6 +522,11 @@ static inline ant_value_t sv_global_declare(ant_t *js, sv_func_t *func) {
 }
 
 #ifdef SV_OPS_IMPLEMENTATION
+
+__attribute__((noinline, cold)) void sv_eval_env_absence_changed(ant_t *js, ant_object_t *env) {
+  env->flags.guards_absence = 0;
+  if (++js->eval_var_epoch == 0) ant_ic_epoch_bump(js);
+}
 
 bool sv_eval_env_try_put(
   ant_t *js, ant_value_t env, const char *name, uint32_t len,

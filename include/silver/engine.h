@@ -380,11 +380,14 @@ typedef struct {
   union {
     uint16_t slow_hits;
     uint16_t eval_absent_level;
+    uint16_t eval_refills;
   };
   
   union {
     uint32_t prototype_epoch;
     uint32_t fill_epoch;
+    uint32_t eval_var_epoch;
+    uint32_t eval_seen;
   };
 
   union {
@@ -647,7 +650,14 @@ enum {
   SV_EVAL_IC_CELL_DEPTH = 3,
   SV_EVAL_IC_CELL = 0x80,
   SV_EVAL_IC_OUTER_CELL = 0x81,
-  SV_EVAL_IC_REFUSED = 0x82,
+  SV_EVAL_IC_CHAIN = 0x82,
+  SV_EVAL_IC_CHAIN_CELL = 0x83,
+  SV_EVAL_IC_CHAIN_NONE = 0x84,
+  SV_EVAL_IC_CHAIN_OFF = 0x85,
+  SV_EVAL_IC_PENDING_OFF = 0x86,
+  SV_EVAL_IC_PENDING = 0x87,
+  SV_EVAL_IC_CHAIN_REFILLS = 3,
+  SV_EVAL_IC_CHAIN_RETRY = 15,
   SV_EVAL_IC_NONE = 0xff,
 };
 
