@@ -176,4 +176,49 @@ const assert = require('node:assert');
   assert.deepStrictEqual([...first], ['a', 'b']);
 }
 
+{
+  const src = 'x';
+  function outer(x) {
+    function free() { return eval(src); }
+    function own(x) { return eval(src); }
+    return [free(), free(), free(), own('own'), free(), own('again'), own('third'), free()];
+  }
+  for (let round = 0; round < 3; round++)
+    assert.deepStrictEqual(outer('outer' + round), ['outer' + round, 'outer' + round, 'outer' + round, 'own', 'outer' + round, 'again', 'third', 'outer' + round]);
+}
+
+{
+  const set = 'd = d + 1', get = 'd';
+  function outer(a, b, c, d) {
+    function inner(p0, p1, p2, p3, p4, p5, source) { const out = eval(source); return [out, p0, p1, p2, p3, p4, p5]; }
+    const out = [];
+    for (let k = 0; k < 5; k++) out.push(inner(10, 11, 12, 13, 14, 15, set), inner(20, 21, 22, 23, 24, 25, get));
+    return [out, a, b, c, d];
+  }
+  for (let round = 0; round < 3; round++) {
+    const [out, a, b, c, d] = outer('a', 'b', 'c', round);
+    assert.deepStrictEqual([a, b, c, d], ['a', 'b', 'c', round + 5]);
+    for (let k = 0; k < 5; k++) {
+      assert.deepStrictEqual(out[2 * k], [round + k + 1, 10, 11, 12, 13, 14, 15]);
+      assert.deepStrictEqual(out[2 * k + 1], [round + k + 1, 20, 21, 22, 23, 24, 25]);
+    }
+  }
+}
+
+{
+  const src = 'reuseX', churnSrc = 'for (let i = 0; i < 35000; i++) kept = { i }';
+  function churn() { let kept = null; eval(churnSrc); return kept; }
+  function settle() { churn(); churn(); }
+  function outer(reuseX, declare) {
+    function inner() { eval(declare); return eval(src); }
+    return [inner(), inner(), inner()];
+  }
+  for (let round = 0; round < 24; round++) {
+    assert.deepStrictEqual(outer('outer' + round, 'var reusePad' + (round % 3) + ' = 1'), ['outer' + round, 'outer' + round, 'outer' + round]);
+    settle();
+    assert.deepStrictEqual(outer('outer', 'var reuseX = "shadow' + round + '"'), ['shadow' + round, 'shadow' + round, 'shadow' + round]);
+    settle();
+  }
+}
+
 console.log('ok');

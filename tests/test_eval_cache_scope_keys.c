@@ -52,6 +52,10 @@ int main(void) {
   assert(compiles(js, "cycle('i + a + 1000', 1, 8)", 8028) == 2);
   assert(compiles(js, "cycle('i + a + 1000', 1, 8)", 8028) == 0);
 
+  assert(compiles(js, "hosts[1](5, 6, 'i + a + 1000')", 1011) == 0);
+  assert(compiles(js, "hosts[1](5, 6, 'i + a + 1000')", 1011) <= 1);
+  assert(compiles(js, "hosts[1](5, 6, 'i + a + 1000')", 1011) == 0);
+
   assert(compiles(js, "cycle('i + a + 2000', 2, 8)", 32064) <= 3);
   assert(compiles(js, "cycle('i + a + 2000', 2, 8)", 32064) == 0);
 

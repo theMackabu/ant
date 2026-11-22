@@ -505,7 +505,7 @@ static __attribute__((noinline)) sv_func_t *eval_cache_find_scope(
   sv_eval_cache_entry_t *fork = eval_cache_match(js, hash, key);
   key->fork = false;
 
-  if (fork && fork->scope == key->scope) {
+  if (fork) {
     fork->used = true;
     if (entry) entry->used = true;
     return fork->func;

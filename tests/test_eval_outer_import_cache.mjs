@@ -18,6 +18,15 @@ for (let round = 0; round < 6; round++) {
   }
 }
 equal(local, 18);
+
+const nestedKinds = 'eval("typeof assert + typeof equal + typeof assertions.strictEqual")';
+const nestedSame = 'eval("equal === assertions.strictEqual && assert === assertions.default")';
+for (let round = 0; round < 6; round++) {
+  for (const host of [sloppy, nested, declared]) {
+    equal(host(nestedKinds), 'functionfunctionfunction');
+    equal(host(nestedSame), true);
+  }
+}
 assert.throws(() => sloppy('equal = 1'), TypeError);
 assert.throws(() => sloppy('equal = 1'), TypeError);
 equal(typeof equal, 'function');
