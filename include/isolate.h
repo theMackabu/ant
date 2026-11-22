@@ -679,6 +679,8 @@ struct ant_isolate_t {
   
   struct ant_listen_policy *listen_policy;
   ant_value_t eval_leaf_env;
+  uint64_t eval_env_serial;
+  uint32_t eval_var_epoch;
 };
 
 // TODO: rename
