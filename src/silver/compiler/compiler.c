@@ -45,6 +45,20 @@ uint16_t sv_eval_shadow_bits(ant_t *js, const js_eval_scope_t *scope, const char
   return bits & (uint16_t)~SV_EVAL_SCOPE_PRIVATE;
 }
 
+uint16_t sv_eval_frame_shadow_bits(
+  ant_t *js, const sv_frame_t *frame, const sv_eval_scope_t *layout, const char *source, size_t len
+) {
+  bool escaped = len <= 64 && memchr(source, '\\', len) != NULL;
+  uint16_t bits = layout->eval_bits;
+
+  if ((escaped || eval_source_may_mention(source, len, "undefined", 9)) && sv_eval_scope_shadows_global(js, frame, layout, "undefined", 9))
+    bits |= SV_EVAL_SHADOWS_UNDEFINED;
+  if ((escaped || eval_source_may_mention(source, len, "globalThis", 10)) && sv_eval_scope_shadows_global(js, frame, layout, "globalThis", 10))
+    bits |= SV_EVAL_SHADOWS_GLOBAL_THIS;
+
+  return bits;
+}
+
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,
   const char *source, ant_offset_t source_len, uint16_t eval_shadows, ant_value_t eval_env
@@ -140,7 +154,13 @@ sv_func_t *sv_compile(
   
   root.line_table = sv_compile_ctx_build_line_table(root.source, source_len);
   sv_func_t *func = compile_function_body(&root, &top_fn, mode);
-  if (func && unit) unit->eval_reads_arguments = root.eval_reads_arguments;
+  if (func && unit) {
+    sv_func_metadata_t *metadata = sv_func_metadata(func);
+    unit->eval_reads_arguments = root.eval_reads_arguments;
+    unit->eval_leaf =
+      sv_compile_mode_is_eval(mode) && !root.eval_reads_arguments && unit->funcs == func && !func->unit_next &&
+      (!metadata || !metadata->eval_var_count);
+  }
   sv_compile_ctx_free_line_table(root.line_table);
   sv_code_unit_finish(unit);
   
