@@ -98,6 +98,8 @@ export function targets() {
     'test_property_descriptor_objects.cjs',
     'test_inspect_extra_props.cjs',
     'test_eval_variable_cache.cjs',
+    'test_eval_deep_chain_cache.cjs',
+    'test_eval_deep_chain_import.mjs',
     'test_for_in_deep_prototype_chain.cjs',
     'test_for_in_enumeration_cache.cjs',
     'test_tls_server.mjs',
