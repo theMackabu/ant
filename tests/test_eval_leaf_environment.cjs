@@ -213,6 +213,15 @@ function churn(rounds) {
 }
 
 {
+  const src = 'seen = a + b; churn(n); a = { n: a }; b = [b]; churn(n); a.n + b[0] + seen';
+  function host(a, b, n) { let seen = 0; const out = eval(src); return [out, a.n, b[0], seen]; }
+  for (let round = 0; round < 16; round++) {
+    const n = round % 4 === 0 ? 50000 : 3000;
+    assert.deepStrictEqual(host(round, 5, n), [2 * (round + 5), round, 5, round + 5]);
+  }
+}
+
+{
   const src = 'a + 1', strictVar = '"use strict"; var z = a; z + 1', reflect = 'new.target === undefined ? "call" : "new"';
   function* gen(a) { yield eval(src); a += 10; yield eval(src); }
   async function later(a) { await null; return eval(src); }
