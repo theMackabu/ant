@@ -5,7 +5,6 @@
 
 __attribute__((cold)) 
 void init_transform_stream_module(ant_t *js);
-void gc_mark_transform_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));
 
 bool ts_is_stream(ant_value_t obj);
 bool ts_is_controller(ant_value_t obj);

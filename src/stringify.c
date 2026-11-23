@@ -1190,10 +1190,6 @@ js_cstr_t js_inspect_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t 
   return js_cstr_impl(js, value, stack_buf, stack_size, true, ANT_INSPECT_MAX_DEPTH, 0);
 }
 
-js_cstr_t js_inspect_cstr_depth(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size, int max_depth) {
-  return js_cstr_impl(js, value, stack_buf, stack_size, true, max_depth, 0);
-}
-
 js_cstr_t js_inspect_cstr_opts(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size, int max_depth, uint8_t flags) {
   return js_cstr_impl(js, value, stack_buf, stack_size, true, max_depth, flags);
 }

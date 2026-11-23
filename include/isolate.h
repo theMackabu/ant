@@ -352,7 +352,6 @@ struct ant_isolate_t {
 
   struct {
     void *base;
-    void *main_base;
     size_t limit;
     void *floor;
   } cstk;
@@ -704,7 +703,6 @@ static inline void js_cstk_refresh_floor(ant_t *js) {
 
 static inline void js_setstackbase(ant_t *js, void *base) {
   js->cstk.base = base;
-  js->cstk.main_base = base;
   js_cstk_refresh_floor(js);
 }
 
