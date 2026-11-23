@@ -109,10 +109,13 @@ typedef struct {
 } ant_c_function_t;
 
 typedef struct {
+  ant_t *js;
   ffi_cif *cif;
   void (*entry)(void);
   void *result;
   void **args;
+  size_t root_count;
+  uint64_t depths;
 } ant_c_ffi_call_t;
 
 static const ant_c_arg_mapping_t ANT_C_ARG_MAPPINGS[] = {
@@ -506,12 +509,38 @@ static ant_value_t ant_c_native_fault(
   );
 }
 
+static_assert(
+  offsetof(ant_t, vm_exec_depth) == offsetof(ant_t, jit_active_depth) + sizeof(uint32_t),
+  "the compiled and interpreted entry depths are read as one word"
+);
+
+static inline uint64_t ant_c_entry_depths(const ant_t *js) {
+  uint64_t depths;
+  memcpy(&depths, &js->jit_active_depth, sizeof(depths));
+  return depths;
+}
+
+static bool ant_c_fault_recoverable(void *context) {
+  const ant_c_ffi_call_t *call = context;
+  const ant_t *js = call->js;
+
+  return
+    ant_c_entry_depths(js) == call->depths &&
+    js->c_root_count == call->root_count &&
+    !js->gc_running;
+}
+
 static int ant_c_call_ffi_guarded(
-  ffi_cif *cif, void (*entry)(void), void *result, void **args,
+  ant_t *js, ffi_cif *cif, void (*entry)(void), void *result, void **args,
   uintptr_t *fault_address
 ) {
-  ant_c_ffi_call_t call = { .cif = cif, .entry = entry, .result = result, .args = args };
-  return ant_crash_guard_native_call(ant_c_invoke_ffi, &call, fault_address);
+  ant_c_ffi_call_t call = {
+    .js = js, .cif = cif, .entry = entry, .result = result, .args = args,
+    .root_count = js->c_root_count,
+    .depths = ant_c_entry_depths(js),
+  };
+
+  return ant_crash_guard_native_call(ant_c_invoke_ffi, ant_c_fault_recoverable, &call, fault_address);
 }
 
 static void ant_c_function_destroy(ant_c_function_t *function) {
@@ -630,7 +659,7 @@ static ant_value_t ant_c_function_call(ant_params_t) {
   uintptr_t fault_address = 0;
 
   int signal_number = ant_c_call_ffi_guarded(
-    &function->cif, function->entry_item->addr, &result,
+    js, &function->cif, function->entry_item->addr, &result,
     function->arg_count == 0 ? NULL : ffi_args, &fault_address
   );
 
@@ -718,7 +747,7 @@ static ant_value_t ant_c_call_configured_entry(
   ant_c_arg_value_t native_result = {0};
   uintptr_t fault_address = 0;
   
-  int signal_number = ant_c_call_ffi_guarded(&cif, entry_item->addr, &native_result, NULL, &fault_address);
+  int signal_number = ant_c_call_ffi_guarded(js, &cif, entry_item->addr, &native_result, NULL, &fault_address);
   if (signal_number != 0) return ant_c_native_fault(js, signature->entry_name, signal_number, fault_address);
   
   return ant_c_result_to_js(js, signature->returns, signature->return_type, &native_result);
@@ -748,7 +777,7 @@ static ant_value_t ant_c_call_status_entry(
   int result = 0;
   uintptr_t fault_address = 0;
   int signal_number = ant_c_call_ffi_guarded(
-    &cif, entry_item->addr, &result,
+    js, &cif, entry_item->addr, &result,
     entry_func->nargs == 0 ? NULL : args, &fault_address
   );
   
