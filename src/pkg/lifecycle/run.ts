@@ -5,7 +5,7 @@ import path from 'node:path';
 import { nodeGypShim, nodeShim } from '../tools.ts';
 import { fail, write } from '../ui/output.ts';
 import { MARKER, markerText } from './discover.ts';
-import type { Pending } from './discover.ts';
+import type { Pending, Script } from './discover.ts';
 
 const OUTPUT_LIMIT = 1 << 20;
 
@@ -37,7 +37,7 @@ function unshare(dir: string): void {
   }
 }
 
-function runScript(pkg: Pending, root: string, script: [string, string], tools: string[]): Promise<Run> {
+function runScript(pkg: Pending, root: string, script: Script, tools: string[]): Promise<Run> {
   const [command, args] = shell();
   const bins = [path.join(pkg.modules, '.bin'), path.join(root, 'node_modules', '.bin'), ...tools];
   const env = {
@@ -63,29 +63,26 @@ function runScript(pkg: Pending, root: string, script: [string, string], tools: 
   });
 }
 
+async function build(pkg: Pending, root: string, tools: string[], verbose: boolean): Promise<boolean> {
+  unshare(pkg.dir);
+  for (const script of pkg.scripts) {
+    const { code, output } = await runScript(pkg, root, script, tools);
+    if (verbose || code !== 0) write('stderr', output);
+    if (code === 0) continue;
+    fail(`${pkg.name}: ${script[0]} script exited with code ${code}`);
+    return false;
+  }
+  try {
+    fs.writeFileSync(path.join(pkg.dir, MARKER), markerText(pkg.scripts));
+  } catch {}
+  return true;
+}
+
 export async function runLifecycle(root: string, pending: Pending[], verbose: boolean): Promise<{ built: string[]; failed: number }> {
   const tools = pending.length > 0 ? [nodeGypShim(), nodeShim()] : [];
   const built: string[] = [];
-  let failed = 0;
-
   for (const pkg of pending) {
-    unshare(pkg.dir);
-    let ok = true;
-    for (const script of pkg.scripts) {
-      const { code, output } = await runScript(pkg, root, script, tools);
-      if (verbose || code !== 0) write('stderr', output);
-      if (code === 0) continue;
-      fail(`${pkg.name}: ${script[0]} script exited with code ${code}`);
-      ok = false;
-      failed++;
-      break;
-    }
-    if (!ok) continue;
-    try {
-      fs.writeFileSync(path.join(pkg.dir, MARKER), markerText(pkg.scripts));
-    } catch {}
-    built.push(pkg.name);
+    if (await build(pkg, root, tools, verbose)) built.push(pkg.name);
   }
-
-  return { built, failed };
+  return { built, failed: pending.length - built.length };
 }

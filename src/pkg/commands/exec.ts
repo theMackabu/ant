@@ -15,10 +15,7 @@ import { fail, usage } from '../ui/output.ts';
 
 function runGlobal(bin: string, args: string[]): number {
   const ran = spawnSync(bin, args, { stdio: 'inherit', shell: process.platform === 'win32' });
-  if (ran.error) {
-    fail(describe(ran.error));
-    return 1;
-  }
+  if (ran.error) return fail(describe(ran.error));
   if (ran.signal) return 128 + (os.constants.signals[ran.signal] ?? 0);
   return ran.status ?? 1;
 }
@@ -33,20 +30,14 @@ export async function exec(args: string[], session: Session): Promise<number> {
 
   const [command, ...commandArgs] = rest;
   if (command && !command.startsWith('-')) {
-    let parsed;
-    try {
-      parsed = parseSource(command);
-    } catch (error) {
-      return usage((error as Error).message);
-    }
-    if (parsed.source) useSource(parsed.source, session.settings);
+    const { spec, source } = parseSource(command);
+    if (source) useSource(source, session.settings);
 
-    const name = nameOfSpec(parsed.spec);
-    const pinned = parsed.spec !== name;
+    const name = nameOfSpec(spec);
     const local = session.dir && fs.existsSync(path.join(session.dir, 'node_modules', '.bin', name));
-    const global = pinned || local ? undefined : globalBin(name);
+    const global = spec !== name || local ? undefined : globalBin(name);
     if (global) return runGlobal(global, commandArgs);
-    rest = [parsed.spec, ...commandArgs];
+    rest = [spec, ...commandArgs];
   }
 
   return await upm(['exec', ...rest], session);

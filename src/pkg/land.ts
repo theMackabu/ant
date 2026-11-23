@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { nameOfSpec } from './args.ts';
-import type { SourcedSpec } from './args.ts';
+import type { Spec } from './args.ts';
 import { registryOf } from './registry.ts';
 import type { Source } from './settings.ts';
 import { note } from './ui/output.ts';
@@ -78,13 +78,13 @@ async function pinSpec(spec: string, source: Source, explicit: boolean, dir: str
   return `${name}@${tarball}`;
 }
 
-export async function pinSpecs(specs: SourcedSpec[], dir: string): Promise<string[]> {
+export async function pinSpecs(specs: Spec[], dir: string): Promise<string[]> {
   const project = readConfig(dir).registry;
-  const onLand = project === registryBase(registryOf('land'));
+  const home = (['land', 'npm'] as const).find(source => project === registryBase(registryOf(source)));
   const pinned: string[] = [];
   for (const { spec, source } of specs) {
-    const target = source ?? (onLand ? 'land' : undefined);
-    const needed = target && isRegistrySpec(spec) && !(target === 'npm' && project === registryBase(registryOf('npm')));
+    const target = source ?? (home === 'land' ? 'land' : undefined);
+    const needed = target && isRegistrySpec(spec) && !(target === 'npm' && home === 'npm');
     pinned.push(needed ? await pinSpec(spec, target, source !== undefined, dir) : spec);
   }
   return pinned;

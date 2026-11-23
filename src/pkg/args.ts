@@ -15,14 +15,15 @@ const SOURCE_PREFIXES: [string, Source][] = [
   ['npm:', 'npm'],
 ];
 
-export interface SourcedSpec {
+export class UsageError extends Error {}
+
+export interface Spec {
   spec: string;
   source?: Source;
 }
 
 export interface Args {
-  specs: string[];
-  sourced: SourcedSpec[];
+  specs: Spec[];
   flags: string[];
   dir?: string;
   global: boolean;
@@ -31,57 +32,45 @@ export interface Args {
 
 export const isHelp = (args: string[]) => args.includes('-h') || args.includes('--help');
 
-export function parseSource(token: string): { spec: string; source?: Source } {
+export function parseSource(token: string): Spec {
   const prefix = SOURCE_PREFIXES.find(([name]) => token.startsWith(name));
   if (!prefix) return { spec: token };
-  
+
   const [name, source] = prefix;
   const spec = token.slice(name.length);
-  if (!spec) throw new Error(`invalid package source in "${token}"`);
-  
+  if (!spec) throw new UsageError(`invalid package source in "${token}"`);
   return { spec, source };
 }
 
 export function parseArgs(args: string[]): Args {
-  const parsed: Args = { specs: [], sourced: [], flags: [], global: false, all: false };
+  const parsed: Args = { specs: [], flags: [], global: false, all: false };
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === '--') {
-      const rest = args.slice(i + 1);
-      parsed.specs.push(...rest);
-      parsed.sourced.push(...rest.map(spec => ({ spec })));
+      parsed.specs.push(...args.slice(i + 1).map(spec => ({ spec })));
       break;
     }
 
-    if (!arg.startsWith('-')) {
-      const sourced = parseSource(arg);
-      parsed.sourced.push(sourced);
-      parsed.specs.push(sourced.spec);
-      continue;
-    }
-
-    if (GLOBAL_FLAGS.has(arg)) parsed.global = true;
+    if (!arg.startsWith('-')) parsed.specs.push(parseSource(arg));
+    else if (GLOBAL_FLAGS.has(arg)) parsed.global = true;
     else if (ALL_FLAGS.has(arg)) parsed.all = true;
     else {
       const eq = arg.indexOf('=');
       const flag = eq < 0 ? arg : arg.slice(0, eq);
-      const value = eq < 0 && VALUED.has(flag) ? args[++i] : eq < 0 ? undefined : arg.slice(eq + 1);
-      if (DIR_FLAGS.has(flag) && value !== undefined) parsed.dir = value;
+      let value = eq < 0 ? undefined : arg.slice(eq + 1);
       parsed.flags.push(arg);
-      if (eq < 0 && VALUED.has(flag) && value !== undefined) parsed.flags.push(value);
+      if (eq < 0 && VALUED.has(flag) && ++i < args.length) parsed.flags.push((value = args[i]!));
+      if (DIR_FLAGS.has(flag) && value !== undefined) parsed.dir = value;
     }
   }
 
   return parsed;
 }
 
-export function nameOfSpec(spec: string): string {
-  const at = spec.indexOf('@', spec.startsWith('@') ? 1 : 0);
-  return at < 0 ? spec : spec.slice(0, at);
+export function splitKey(key: string): { name: string; version: string } {
+  const at = key.indexOf('@', 1);
+  return at < 0 ? { name: key, version: '' } : { name: key.slice(0, at), version: key.slice(at + 1) };
 }
 
-export function splitKey(key: string): { name: string; version: string } {
-  const at = key.indexOf('@', key.startsWith('@') ? 1 : 0);
-  return { name: key.slice(0, at), version: key.slice(at + 1) };
-}
+export const nameOfSpec = (spec: string) => splitKey(spec).name;

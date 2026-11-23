@@ -1,3 +1,4 @@
+import { setProgramName } from 'upm/src/cli.ts';
 import { setHome } from 'upm/src/util.ts';
 
 import fs from 'node:fs';
@@ -18,7 +19,9 @@ function antDir(kind: 'data' | 'cache'): string {
   return kind === 'data' ? path.join(home, '.local', 'share', 'ant') : path.join(home, '.cache', 'ant');
 }
 
-export function useAntHome(): void {
+export function useAnt(): void {
+  process.env.npm_config_user_agent = `ant/${process.versions.ant}`;
+  setProgramName('ant', 'magenta');
   setHome(antDir);
 }
 

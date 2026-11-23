@@ -10,6 +10,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { readManifest } from '../project.ts';
+import type { Session } from '../session.ts';
+import { note } from '../ui/output.ts';
 import { LOCKB, parseLockb } from './parse.ts';
 import type { LockbPackage } from './parse.ts';
 
@@ -64,27 +66,23 @@ function lockbSource(packages: LockbPackage[], manifest: RootManifest): Source {
   return { nodes, specs: declaredSpecs(manifest) ?? {}, root };
 }
 
-export async function migrateLockb(dir: string, log: (message: string) => void): Promise<boolean> {
+export async function migrateLockb({ dir }: Session): Promise<void> {
+  if (!dir) return;
   const lockb = path.join(dir, LOCKB);
-  if (!fs.existsSync(lockb) || fs.existsSync(path.join(dir, LOCKFILE))) return false;
+  if (!fs.existsSync(lockb) || fs.existsSync(path.join(dir, LOCKFILE))) return;
 
-  const manifest = readManifest(dir) as RootManifest | undefined;
-  if (!manifest) return false;
-
-  if ((manifest as { workspaces?: unknown }).workspaces) {
-    log(`not migrating ${LOCKB}: workspaces are resolved again`);
-    return false;
-  }
+  const manifest = readManifest(dir);
+  if (!manifest) return;
+  if (manifest.workspaces) return note(`not migrating ${LOCKB}: workspaces are resolved again`);
 
   try {
-    const packages = parseLockb(fs.readFileSync(lockb));
+    const root = manifest as RootManifest;
     const { registry, scopes } = readConfig(dir);
-    const { lock } = readSource(LOCKB, lockbSource(packages, manifest), manifest, hosts(registry, scopes));
+    const source = lockbSource(parseLockb(fs.readFileSync(lockb)), root);
+    const { lock } = readSource(LOCKB, source, root, hosts(registry, scopes));
     await writeLockfile(dir, lock);
-    log(`migrated ${LOCKB} to ${LOCKFILE} · ${Object.keys(lock.packages).length} pkgs`);
-    return true;
+    note(`migrated ${LOCKB} to ${LOCKFILE} · ${Object.keys(lock.packages).length} pkgs`);
   } catch (error) {
-    log(`not migrating ${LOCKB}, resolving again: ${(error as Error).message}`);
-    return false;
+    note(`not migrating ${LOCKB}, resolving again: ${(error as Error).message}`);
   }
 }

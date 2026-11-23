@@ -5,14 +5,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { nameOfSpec, parseArgs } from '../args.ts';
-import type { Args, SourcedSpec } from '../args.ts';
+import type { Spec } from '../args.ts';
 import { pinSpecs } from '../land.ts';
+import { afterInstall } from '../lifecycle/report.ts';
+import { migrateLockb } from '../lockb/migrate.ts';
 import { GROUPS, readManifest } from '../project.ts';
 import { sourceOfTarball } from '../registry.ts';
 import { projectRoot, upm } from '../session.ts';
 import type { Session } from '../session.ts';
-import { afterInstall, migrate } from '../steps.ts';
-import { fail, usage } from '../ui/output.ts';
+import { fail } from '../ui/output.ts';
 
 type Group = (typeof GROUPS)[number];
 
@@ -22,7 +23,8 @@ const GROUP_FLAGS: Record<Group, string[]> = {
   optionalDependencies: ['--optional'],
 };
 
-async function refreshAll(root: string | undefined, flags: string[], session: Session): Promise<number> {
+async function refreshAll(flags: string[], session: Session): Promise<number> {
+  const root = session.dir;
   if (!root) {
     const code = await upm(['install', ...flags], session);
     return code !== 0 ? code : await afterInstall(session, flags);
@@ -38,43 +40,31 @@ async function refreshAll(root: string | undefined, flags: string[], session: Se
   if (code === 0 && written) return await afterInstall(session, flags);
   if (saved && !written) fs.writeFileSync(lockFile, saved);
   if (code !== 0) return code;
-  fail(`${LOCKFILE} was not rewritten: another package manager's lockfile was read instead`);
-  return 1;
+  return fail(`${LOCKFILE} was not rewritten: another package manager's lockfile was read instead`);
 }
 
 export async function update(args: string[], session: Session): Promise<number> {
-  let parsed: Args;
-  try {
-    parsed = parseArgs(args);
-  } catch (error) {
-    return usage((error as Error).message);
-  }
-  
-  await migrate(session);
-  if (parsed.specs.length === 0) return await refreshAll(session.dir, parsed.flags, session);
+  const { specs, flags } = parseArgs(args);
+  await migrateLockb(session);
+  if (specs.length === 0) return await refreshAll(flags, session);
 
-  const manifest = session.dir ? readManifest(session.dir) ?? {} : {};
-  const groups = new Map<Group, SourcedSpec[]>();
-  for (const { spec, source } of parsed.sourced) {
+  const manifest = (session.dir && readManifest(session.dir)) || {};
+  const groups = new Map<Group, Spec[]>();
+  for (const { spec, source } of specs) {
     const name = nameOfSpec(spec);
     const group = GROUPS.find(g => manifest[g]?.[name] !== undefined);
-    
-    if (!group) {
-      fail(`${name} is not a dependency in package.json`);
-      return 1;
-    }
-    
+    if (!group) return fail(`${name} is not a dependency in package.json`);
+
     const declared = String(manifest[group]![name]);
     const pinned = spec === name ? sourceOfTarball(declared) : undefined;
     const wanted = spec !== name ? spec : pinned ? name : `${name}@${declared}`;
-    
     groups.set(group, [...(groups.get(group) ?? []), { spec: wanted, source: source ?? pinned }]);
   }
 
-  for (const [group, sourced] of groups) {
-    const specs = await pinSpecs(sourced, projectRoot(session));
-    const code = await upm(['add', ...GROUP_FLAGS[group], ...specs, ...parsed.flags], session);
+  for (const [group, wanted] of groups) {
+    const pinned = await pinSpecs(wanted, projectRoot(session));
+    const code = await upm(['add', ...GROUP_FLAGS[group], ...pinned, ...flags], session);
     if (code !== 0) return code;
   }
-  return await afterInstall(session, parsed.flags);
+  return await afterInstall(session, flags);
 }

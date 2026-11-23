@@ -39,14 +39,11 @@ function declaredRange(lock: Lockfile, entries: Map<string, StoreEntry[]>, paren
 }
 
 export function why(args: string[], session: Session): number {
-  const [name] = parseArgs(args).specs;
+  const name = parseArgs(args).specs[0]?.spec;
   if (!name) return usage('why needs a package name');
   const cwd = projectRoot(session);
   const lock = readLock(cwd);
-  if (!lock) {
-    error("No lockfile found. Run 'ant install' first.");
-    return 1;
-  }
+  if (!lock) return error("No lockfile found. Run 'ant install' first.");
 
   const versions = Object.keys(lock.packages).map(splitKey).filter(key => key.name === name).map(key => key.version);
   if (versions.length === 0) {

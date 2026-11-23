@@ -20,6 +20,8 @@ const CACHE_VERSION = 1;
 const SCRIPTS = ['preinstall', 'install', 'postinstall'] as const;
 const SKIPPED = new Set(['esbuild']);
 
+export type Script = [name: string, command: string];
+
 export interface Pending {
   name: string;
   slot: string;
@@ -27,7 +29,7 @@ export interface Pending {
   version: string;
   dir: string;
   modules: string;
-  scripts: [string, string][];
+  scripts: Script[];
 }
 
 interface Cached {
@@ -37,9 +39,9 @@ interface Cached {
   candidates: Pending[];
 }
 
-export function buildScripts(manifest: Manifest, hasGyp: () => boolean): [string, string][] {
+export function buildScripts(manifest: Manifest, hasGyp: () => boolean): Script[] {
   const scripts = manifest.scripts ?? {};
-  const found = SCRIPTS.filter(name => scripts[name]).map(name => [name, scripts[name]!] as [string, string]);
+  const found = SCRIPTS.filter(name => scripts[name]).map((name): Script => [name, scripts[name]!]);
   if (!scripts.install && !scripts.preinstall && hasGyp()) {
     const at = found.findIndex(([name]) => name === 'postinstall');
     found.splice(at < 0 ? found.length : at, 0, ['install', 'node-gyp rebuild']);
@@ -47,7 +49,7 @@ export function buildScripts(manifest: Manifest, hasGyp: () => boolean): [string
   return found;
 }
 
-export function markerText(scripts: [string, string][]): string {
+export function markerText(scripts: Script[]): string {
   return [MARKER_HEADER, ...scripts.map(([name]) => name)].join('\n') + '\n';
 }
 

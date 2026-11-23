@@ -1,4 +1,3 @@
-import { setProgramName } from 'upm/src/cli.ts';
 import { readConfig } from 'upm/src/config.ts';
 import { treeStanding } from 'upm/src/link.ts';
 import { LOCKFILE } from 'upm/src/lock.ts';
@@ -13,7 +12,7 @@ import type { Root } from 'upm/src/workspaces.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { useAntHome } from './paths.ts';
+import { useAnt } from './paths.ts';
 import { useDefaultRegistry } from './registry.ts';
 import { loadConfig } from './settings.ts';
 import { printBanner } from './ui/banner.ts';
@@ -80,10 +79,7 @@ export async function quickRun(argv: string[]): Promise<number | undefined> {
   }
   if (!Object.hasOwn(scripts, name)) return undefined;
 
-  process.env.npm_config_user_agent = `ant/${process.versions.ant}`;
-  setProgramName('ant', 'magenta');
-  useAntHome();
-  
+  useAnt();
   const config = loadConfig();
   useDefaultRegistry(config);
 
@@ -92,7 +88,6 @@ export async function quickRun(argv: string[]): Promise<number | undefined> {
 
   const command = scripts[name]!;
   const scriptArgs = rest[0] === '--' ? rest.slice(1) : rest;
-  
   printBanner({ script: name, line: shellLine(command, scriptArgs), workspace: undefined });
   return await runScript({ dir, file, name, command, args: scriptArgs, pkg: manifest });
 }

@@ -70,7 +70,7 @@ export function parseLockb(bytes: Uint8Array): LockbPackage[] {
   const within = (offset: number, count: number, size: number, what: string) => {
     if (offset + count * size > bytes.length) throw invalid(`${what} runs past the end`);
   };
-  
+
   within(stringOffset, stringSize, 1, 'string table');
   within(packageOffset, packageCount, PACKAGE_SIZE, 'packages');
   within(dependencyOffset, dependencyCount, DEPENDENCY_SIZE, 'dependencies');
@@ -95,7 +95,7 @@ export function parseLockb(bytes: Uint8Array): LockbPackage[] {
     const patch = view.getBigUint64(at + 24, true);
     const prerelease = str(at + 32);
     const digest = bytes.subarray(at + 40, at + 104);
-    const flags = bytes[at + 128];
+    const flags = view.getUint8(at + 128);
     const depsStart = u32(at + 120);
     const depsCount = u32(at + 124);
     if (depsStart + depsCount > dependencyCount) throw invalid(`package ${i} has dependencies out of range`);
@@ -105,7 +105,7 @@ export function parseLockb(bytes: Uint8Array): LockbPackage[] {
       const dat = dependencyOffset + d * DEPENDENCY_SIZE;
       const index = u32(dat);
       if (index >= packageCount) throw invalid(`dependency ${d} points past the packages`);
-      const depFlags = bytes[dat + 12];
+      const depFlags = view.getUint8(dat + 12);
       dependencies.push({
         index,
         constraint: str(dat + 4),

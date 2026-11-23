@@ -8,10 +8,7 @@ import { color, fail, summary } from '../ui/output.ts';
 export async function init(): Promise<number> {
   const cwd = process.cwd();
   const file = path.join(cwd, 'package.json');
-  if (fs.existsSync(file)) {
-    fail(`${file} already exists`);
-    return 1;
-  }
+  if (fs.existsSync(file)) return fail(`${file} already exists`);
 
   let name = path.basename(cwd) || 'my-project';
   let version = '1.0.0';

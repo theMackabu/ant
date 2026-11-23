@@ -18,6 +18,7 @@ const PLAIN = Object.fromEntries(Object.keys(CODES).map(key => [key, ''])) as ty
 
 export const c = color('bold', 'x') === 'x' ? PLAIN : CODES;
 
-export function error(message: string): void {
+export function error(message: string): number {
   write('stderr', `Error: ${message}\n`);
+  return 1;
 }

@@ -6,17 +6,11 @@ import { runLifecycle } from '../lifecycle/run.ts';
 import { readManifest, writeJson } from '../project.ts';
 import { projectRoot } from '../session.ts';
 import type { Session } from '../session.ts';
-import { duration, list, note, out, plural, summary, usage } from '../ui/output.ts';
+import { duration, list, note, out, plural, summary } from '../ui/output.ts';
 
 export async function trust(args: string[], session: Session): Promise<number> {
-  let names: string[];
-  let all: boolean;
-  try {
-    ({ specs: names, all } = parseArgs(args));
-  } catch (error) {
-    return usage((error as Error).message);
-  }
-
+  const { specs, all } = parseArgs(args);
+  const names = specs.map(({ spec }) => spec);
   const root = projectRoot(session);
   const start = performance.now();
   const pending = discover(root);

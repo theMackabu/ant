@@ -1,10 +1,15 @@
-import { fail, help, note, paint, usage, write } from 'upm/src/cli.ts';
+import { fail as report, help, note, paint, usage, write } from 'upm/src/cli.ts';
 import type { Output, Style } from 'upm/src/cli.ts';
 
-export { fail, help, note, usage, write };
+export { help, note, usage, write };
 
 export const out = (text: string) => write('stdout', text);
 export const color = (style: Style, text: string, to: Output = 'stdout') => paint(style, text, to);
+
+export function fail(message: string): number {
+  report(message);
+  return 1;
+}
 
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;

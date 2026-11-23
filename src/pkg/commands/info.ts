@@ -44,7 +44,7 @@ async function fetchPackument(name: string, dir: string, source: Source | undefi
 const TAG_COLORS: Record<string, 'blue' | 'cyan'> = { beta: 'blue', latest: 'cyan' };
 
 export async function info(args: string[], session: Session): Promise<number> {
-  const [first] = parseArgs(args).sourced;
+  const [first] = parseArgs(args).specs;
   if (!first) return usage('info needs a package name');
   const { spec, source } = first;
   const name = nameOfSpec(spec);
@@ -54,21 +54,14 @@ export async function info(args: string[], session: Session): Promise<number> {
   try {
     doc = await fetchPackument(name, projectRoot(session), source);
   } catch (cause) {
-    error(describe(cause));
-    return 1;
+    return error(describe(cause));
   }
-  if (!doc) {
-    error(`package not found: ${name}`);
-    return 1;
-  }
+  if (!doc) return error(`package not found: ${name}`);
 
   const versions = Object.keys(doc.versions ?? {});
   const version = doc['dist-tags']?.[wanted] ?? (doc.versions?.[wanted] ? wanted : validRange(wanted) ? maxSatisfying(versions, wanted) : undefined);
   const pkg = version ? doc.versions?.[version] : undefined;
-  if (!version || !pkg) {
-    error(`version not found: ${name}@${wanted}`);
-    return 1;
-  }
+  if (!version || !pkg) return error(`version not found: ${name}@${wanted}`);
 
   const deps = Object.entries(pkg.dependencies ?? {});
   out(`${c.blue}${c.ul}${name}${c.ulOff}@${c.blue}${c.bold}${c.ul}${version}${c.reset}`);

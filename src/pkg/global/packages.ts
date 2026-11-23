@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { nameOfSpec } from '../args.ts';
-import type { SourcedSpec } from '../args.ts';
+import type { Spec } from '../args.ts';
 import { pinSpecs } from '../land.ts';
 import { binDir, globalDir } from '../paths.ts';
 import { readManifest, writeJson } from '../project.ts';
@@ -19,9 +19,9 @@ function openGlobal(session: Session): string {
   return dir;
 }
 
-export async function addGlobal(sourced: SourcedSpec[], flags: string[], session: Session): Promise<number> {
+export async function addGlobal(wanted: Spec[], flags: string[], session: Session): Promise<number> {
   const dir = openGlobal(session);
-  const specs = await pinSpecs(sourced, dir);
+  const specs = await pinSpecs(wanted, dir);
   const before = readManifest(dir)?.dependencies ?? {};
   const code = await upm(['add', ...specs, ...flags, '--dir', dir], session);
   if (code !== 0) return code;
@@ -47,10 +47,7 @@ export async function removeGlobal(names: string[], flags: string[], session: Se
   const dir = openGlobal(session);
   const deps = readManifest(dir)?.dependencies ?? {};
   const missing = names.filter(name => !Object.hasOwn(deps, name));
-  if (missing.length > 0) {
-    fail(`not installed globally: ${missing.join(', ')}`);
-    return 1;
-  }
+  if (missing.length > 0) return fail(`not installed globally: ${missing.join(', ')}`);
 
   const bins = binDir();
   const unlinked: string[] = [];

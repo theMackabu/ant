@@ -28,16 +28,14 @@ function importsOthers(name: string, files: readonly FileEntry[], read: (file: F
     if (!SCRIPT.test(file.path)) continue;
     for (const match of read(file).matchAll(SPECIFIER)) {
       const imported = packageName(match[2]!);
-      if (!imported || imported === name || NODE_BUILTINS.has(imported)) continue;
-      return true;
+      if (imported && imported !== name && !NODE_BUILTINS.has(imported)) return true;
     }
   }
   return false;
 }
 
 function platformBound(manifest: Manifest, files: readonly FileEntry[]): boolean {
-  const { os, cpu } = manifest as { os?: unknown; cpu?: unknown };
-  return os !== undefined || cpu !== undefined || files.some(file => NATIVE.test(file.path));
+  return manifest.os !== undefined || manifest.cpu !== undefined || files.some(file => NATIVE.test(file.path));
 }
 
 export function shareSelfContained(): void {

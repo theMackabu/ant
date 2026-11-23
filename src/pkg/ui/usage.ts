@@ -5,7 +5,7 @@ import { binDir, configPath, globalDir } from '../paths.ts';
 import { CONFIG_KEYS } from '../settings.ts';
 
 export function installUsage(): void {
-  const keys = Object.entries(CONFIG_KEYS).map(([key, values]) => `  ${key.padEnd(32)} ${values.join(' | ')}`).join('\n');
+  const keys = CONFIG_KEYS.map(({ key, values }) => `  ${key.padEnd(32)} ${values.join(' | ')}`).join('\n');
   setUsage(`ant ${process.versions.ant} — package manager
 
 Usage

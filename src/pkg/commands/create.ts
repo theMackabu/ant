@@ -20,17 +20,11 @@ export async function create(args: string[], session: Session): Promise<number> 
   if (!github) return await exec([createPackage(template), ...rest], session);
 
   const dest = rest.find(arg => !arg.startsWith('-')) ?? template.replace(/\.git$/, '').split('/').pop()!;
-  if (fs.existsSync(dest)) {
-    fail(`${dest} already exists`);
-    return 1;
-  }
+  if (fs.existsSync(dest)) return fail(`${dest} already exists`);
 
   const url = template.startsWith('https://') || template.startsWith('git@') ? template : `https://github.com/${template}.git`;
   const clone = spawnSync('git', ['clone', '--quiet', '--depth', '1', url, dest], { stdio: 'inherit' });
-  if (clone.status !== 0) {
-    fail(`could not clone ${url}`);
-    return 1;
-  }
+  if (clone.status !== 0) return fail(`could not clone ${url}`);
   fs.rmSync(path.join(dest, '.git'), { recursive: true, force: true });
 
   summary('created', [dest, `from ${template}`]);
