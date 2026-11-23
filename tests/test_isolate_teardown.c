@@ -114,7 +114,7 @@ static void *run_scenario(void *arg) {
   const scenario_t *sc = arg;
   volatile char stack_base;
   ant_t *js = create((void *)&stack_base);
-  ant_value_t r = js_eval_bytecode_eval(js, sc->script, strlen(sc->script));
+  ant_value_t r = js_eval_bytecode_eval(js, sc->script, strlen(sc->script), false);
   if (is_err(r)) {
     fprintf(stderr, "%s: script failed\n", sc->name);
     exit(1);

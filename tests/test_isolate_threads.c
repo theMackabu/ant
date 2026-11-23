@@ -55,7 +55,7 @@ static double run_once(void) {
   ant_runtime_init(js, 1, argv0, NULL);
   ant_bootstrap_modules(js);
 
-  ant_value_t r = js_eval_bytecode_eval(js, script, sizeof(script) - 1);
+  ant_value_t r = js_eval_bytecode_eval(js, script, sizeof(script) - 1, false);
   assert(!is_err(r));
   js_run_event_loop(js);
 
