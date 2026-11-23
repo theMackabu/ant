@@ -23,13 +23,12 @@ function packageName(specifier: string): string | undefined {
   return PACKAGE_NAME.test(name) && name !== 'node_modules' ? name : undefined;
 }
 
-function importsOthers(manifest: Manifest, name: string, files: readonly FileEntry[], read: (file: FileEntry) => string): boolean {
-  const dev = manifest.devDependencies ?? {};
+function importsOthers(name: string, files: readonly FileEntry[], read: (file: FileEntry) => string): boolean {
   for (const file of files) {
     if (!SCRIPT.test(file.path)) continue;
     for (const match of read(file).matchAll(SPECIFIER)) {
       const imported = packageName(match[2]!);
-      if (!imported || imported === name || NODE_BUILTINS.has(imported) || Object.hasOwn(dev, imported)) continue;
+      if (!imported || imported === name || NODE_BUILTINS.has(imported)) continue;
       return true;
     }
   }
@@ -47,6 +46,6 @@ export function shareSelfContained(): void {
     const hasGyp = () => files.some(file => file.path === 'binding.gyp');
     if (buildScripts(manifest, hasGyp).length > 0) return false;
     if (platformBound(manifest, files)) return false;
-    return !importsOthers(manifest, pkg.name, files, read);
+    return !importsOthers(pkg.name, files, read);
   });
 }

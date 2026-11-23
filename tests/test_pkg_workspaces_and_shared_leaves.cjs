@@ -122,6 +122,29 @@ async function sharedLeaf(registry) {
   ok(await antIn(dir, 'config', 'set', 'install.sharedLeaves', 'on'), 'turn shared leaves on');
 }
 
+async function undeclaredImport(registry) {
+  const dir = project('undeclared-import', { name: 'plugin-app', private: true, dependencies: { hostpkg: '1.0.0', pluginpkg: '1.0.0' } }, {
+    '.npmrc': `registry=${registry}/\n`,
+  });
+  ok(await antIn(dir, 'install'), 'undeclared import install');
+  const ran = spawnSync(ant, ['-e', "console.log(require('pluginpkg'))"], { cwd: dir, encoding: 'utf8' });
+  assert.strictEqual(ran.status, 0, `a package importing its devDependency resolves it from the project\n${ran.stderr}`);
+  assert.strictEqual(ran.stdout.trim(), 'host');
+}
+
+async function platformStrings(registry) {
+  const dir = project('platform-strings', { name: 'platform-app', private: true, dependencies: { herepkg: '1.0.0' }, optionalDependencies: { glibcpkg: '1.0.0' } }, {
+    '.npmrc': `registry=${registry}/\n`,
+  });
+  ok(await antIn(dir, 'install'), 'install of packages naming os, cpu and libc as bare strings');
+  const { packages } = JSON.parse(fs.readFileSync(path.join(dir, 'ant.lock'), 'utf8'));
+  assert.deepStrictEqual(packages['herepkg@1.0.0'].os, [process.platform]);
+  assert.deepStrictEqual(packages['herepkg@1.0.0'].cpu, [process.arch]);
+  assert.deepStrictEqual(packages['glibcpkg@1.0.0'].libc, ['glibc']);
+  const again = ok(await antIn(dir, 'install'), 'reinstall from the written lock');
+  assert.match(again.stdout + again.stderr, /up to date/);
+}
+
 async function execBesideForeignWorkspaces(registry) {
   const dir = project('pnpm-workspace', { name: 'root', private: true }, {
     '.npmrc': `registry=${registry}/\n`,
@@ -142,10 +165,18 @@ async function main() {
   publish(registry, { name: 'exectool', version: '1.0.0', bin: { exectool: 'bin.sh' } }, {
     'bin.sh': { text: '#!/bin/sh\necho exectool ran\n', mode: 0o755 },
   });
+  publish(registry, { name: 'hostpkg', version: '1.0.0', main: 'index.js' }, { 'index.js': { text: "module.exports = 'host';\n" } });
+  publish(registry, { name: 'pluginpkg', version: '1.0.0', main: 'index.js', devDependencies: { hostpkg: '1.0.0' } }, {
+    'index.js': { text: "module.exports = require('hostpkg');\n" },
+  });
+  publish(registry, { name: 'herepkg', version: '1.0.0', main: 'index.js', os: process.platform, cpu: process.arch }, { 'index.js': { text: 'module.exports = 1;\n' } });
+  publish(registry, { name: 'glibcpkg', version: '1.0.0', main: 'index.js', libc: 'glibc' }, { 'index.js': { text: 'module.exports = 1;\n' } });
   fs.mkdirSync(home);
 
   await npmWorkspaces();
   await sharedLeaf(registry);
+  await undeclaredImport(registry);
+  await platformStrings(registry);
   await execBesideForeignWorkspaces(registry);
   console.log('ok');
 }

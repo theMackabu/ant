@@ -6,7 +6,7 @@ diff --git a/src/api.ts b/src/api.ts
  import { pruneStore, sweepEntries, sweepTemps } from "./gc.ts";
  import { shortHash } from "./keys.ts";
 -import { fromUrl, linkTree, treeStanding } from "./link.ts";
-+import { fromUrl, linkTree, sharedLayout, treeStanding } from "./link.ts";
++import { fromUrl, linkTree, sharesLeaves, treeStanding } from "./link.ts";
  import type { LinkPool } from "./link.ts";
  import {
    FOREIGN,
@@ -14,7 +14,7 @@ diff --git a/src/api.ts b/src/api.ts
      production: options.production === true,
      store: store.dir,
      hoist,
-+    shared: sharedLayout(),
++    shared: sharesLeaves(),
    });
    // A tree short of an optional a retry could still get is filled again; offline, it cannot be.
    const settled = state?.hash === hash && (state.complete || settings(ctx).offline === true);
@@ -22,7 +22,7 @@ diff --git a/src/api.ts b/src/api.ts
      store: storeOf(ctx),
      hosts: fallback ? [registry, scopes, fallback] : [registry, scopes],
      platform: currentPlatform(),
-+    shared: sharedLayout(),
++    shared: sharesLeaves(),
    };
  }
  
@@ -34,7 +34,7 @@ diff --git a/src/gc.ts b/src/gc.ts
  // refcount survives neither a second upm running nor `rm -rf node_modules`.
  import { builtin } from "./builtin.ts";
 -import { ENTRIES_DIR } from "./state.ts";
-+import { ENTRIES_DIR, LEGACY_SHARED_DIR, SHARED_DIR, SHARED_LINKS } from "./state.ts";
++import { ENTRIES_DIR, SHARED_DIR, SHARED_LINKS } from "./state.ts";
  import { createStore, isIndex } from "./store.ts";
 -import { alive, exists, list } from "./util.ts";
 +import { alive, exists, list, readLink } from "./util.ts";
@@ -49,17 +49,12 @@ diff --git a/src/gc.ts b/src/gc.ts
    const blobs = await shards(files);
    const live = new Set<string>();
    for (const file of await shards(indexes)) {
-@@ -113,6 +114,43 @@
+@@ -113,6 +114,38 @@
    }
  }
  
 +async function pruneShared(storeDir: string, cutoff: number, out: StorePrune): Promise<void> {
-+  for (const name of [SHARED_DIR, LEGACY_SHARED_DIR]) {
-+    await pruneSharedIn(builtin.path.join(storeDir, name), cutoff, out);
-+  }
-+}
-+
-+async function pruneSharedIn(shared: string, cutoff: number, out: StorePrune): Promise<void> {
++  const shared = builtin.path.join(storeDir, SHARED_DIR);
 +  for (const found of await list(shared)) {
 +    if (!found.isDirectory()) continue;
 +    const at = builtin.path.join(shared, found.name);
@@ -133,8 +128,8 @@ diff --git a/src/link.ts b/src/link.ts
 +  shareFilter = filter;
 +}
 +
-+export function sharedLayout(): string | undefined {
-+  return shareFilter ? SHARED_DIR : undefined;
++export function sharesLeaves(): boolean {
++  return shareFilter !== undefined;
 +}
 +
 +async function registerLink(shared: string, link: string): Promise<void> {
@@ -166,7 +161,7 @@ diff --git a/src/link.ts b/src/link.ts
    const hash =
 -    options.hash ?? (await stateHash(resolution, { production, store: store.dir, hoist }));
 +    options.hash ??
-+    (await stateHash(resolution, { production, store: store.dir, hoist, shared: sharedLayout() }));
++    (await stateHash(resolution, { production, store: store.dir, hoist, shared: sharesLeaves() }));
    const result: LinkResult = {
      entries: 0,
      linked: 0,
@@ -251,8 +246,8 @@ diff --git a/src/link.ts b/src/link.ts
 +    const at = join(final, "node_modules", entry.pkg.name);
 +    const link = await readLink(at);
 +    if (link === undefined) return true;
-+    const wanted = sharedPackage(entry, resolve(store.dir, SHARED_DIR, entry.key));
-+    return shareFilter !== undefined && resolve(dirname(at), link) === wanted;
++    const shared = sharedDir(entry);
++    return shared !== undefined && resolve(dirname(at), link) === sharedPackage(entry, shared);
 +  }
 +
 +  async function linkShared(entry: Entry, at: string, final: string): Promise<boolean> {
@@ -314,49 +309,54 @@ diff --git a/src/link.ts b/src/link.ts
 diff --git a/src/state.ts b/src/state.ts
 --- a/src/state.ts
 +++ b/src/state.ts
-@@ -10,6 +10,9 @@
+@@ -10,6 +10,8 @@
  import type { WorkspaceProof } from "./workspaces.ts";
  
  export const ENTRIES_DIR = ".ant";
 +export const SHARED_DIR = "leaves";
-+export const LEGACY_SHARED_DIR = "shared";
 +export const SHARED_LINKS = ".links";
  export const STATE_FILE = ".ant.json";
  export const TREE_LOCK = ".ant.lock";
  
-@@ -104,6 +107,7 @@
+@@ -104,6 +106,7 @@
    store: string;
    /** `.upm/node_modules` is linked unless this is false. */
    hoist?: boolean;
-+  shared?: string;
++  shared?: boolean;
  }
  
  /** Everything the resolution and the linked tree are a function of, besides the store's content. */
-@@ -123,6 +127,7 @@
+@@ -123,6 +126,7 @@
    hosts: unknown;
    /** `currentPlatform()`. */
    platform: unknown;
-+  shared?: string;
++  shared?: boolean;
  }
  
  /**
-@@ -142,8 +147,9 @@
+@@ -142,8 +146,15 @@
  export function settingsOf(
    inputs: Omit<Inputs, "lock" | "manifest" | "workspaces" | "pnpm">,
  ): string {
 -  const { production, store, hoist, hosts, platform } = inputs;
 -  return JSON.stringify([production, builtin.path.resolve(store), hoist, hosts, platform]);
 +  const { production, store, hoist, hosts, platform, shared } = inputs;
-+  const listed = [production, builtin.path.resolve(store), hoist, hosts, platform];
-+  return JSON.stringify(shared === undefined ? listed : [...listed, shared]);
++  return JSON.stringify([
++    production,
++    builtin.path.resolve(store),
++    hoist,
++    hosts,
++    platform,
++    shared === true,
++  ]);
  }
  
  /**
-@@ -160,6 +166,7 @@
+@@ -159,6 +170,7 @@
+     `production:${flags.production ? 1 : 0}`,
      `hoist:${flags.hoist === false ? 0 : 1}`,
      `store:${builtin.path.resolve(flags.store)}`,
++    `shared:${flags.shared ? 1 : 0}`,
    ];
-+  if (flags.shared !== undefined) lines.push(`shared:${flags.shared}`);
    for (const id of Object.keys(resolution.packages).sort()) {
      const pkg = resolution.packages[id]!;
-     // integrity too: graphHash covers the store keys, not the bins we are about to link,

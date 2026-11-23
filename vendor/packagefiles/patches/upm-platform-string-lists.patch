@@ -1,0 +1,36 @@
+diff --git a/src/resolve.ts b/src/resolve.ts
+--- a/src/resolve.ts
++++ b/src/resolve.ts
+@@ -286,7 +286,7 @@
+     const key = `${m.name}@${m.version}`;
+     let hit = libcs.get(key);
+     if (!hit) {
+-      hit = registry.manifest(m.name, m.version).then((full) => full.libc);
++      hit = registry.manifest(m.name, m.version).then((full) => listed(full.libc));
+       hit.catch(() => {});
+       libcs.set(key, hit);
+     }
+@@ -1194,9 +1194,9 @@
+     optional: true,
+     dev: true,
+     bin: normalizeBin(m), // an alias renames the package, never its bins
+-    ...(m.os ? { os: m.os } : {}),
+-    ...(m.cpu ? { cpu: m.cpu } : {}),
+-    ...(m.libc ? { libc: m.libc } : {}),
++    ...(m.os ? { os: listed(m.os) } : {}),
++    ...(m.cpu ? { cpu: listed(m.cpu) } : {}),
++    ...(m.libc ? { libc: listed(m.libc) } : {}),
+     ...(m.peerDependencies ? { peerDependencies: sorted(m.peerDependencies) } : {}),
+   };
+ }
+@@ -1242,6 +1242,10 @@
+   return OTHER_OS.test(name) && !/linux/.test(name);
+ }
+ 
++function listed(list: string[] | string | undefined): string[] | undefined {
++  return typeof list === "string" ? [list] : list;
++}
++
+ /** npm semantics: `!x` blocks, a plain list allows, `any` and an empty list match all. */
+ function matches(list: string[] | string | undefined, value: string): boolean {
+   if (typeof list === "string") list = [list]; // npm accepts a bare string here

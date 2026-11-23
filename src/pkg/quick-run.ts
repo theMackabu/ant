@@ -5,7 +5,7 @@ import { LOCKFILE } from 'upm/src/lock.ts';
 import { parseManifest } from 'upm/src/package-json.ts';
 import { currentPlatform } from 'upm/src/resolve.ts';
 import { readScripts, runScript, shellLine } from 'upm/src/run.ts';
-import { readState, sameStamp, settingsOf, SHARED_DIR, stampOf } from 'upm/src/state.ts';
+import { readState, sameStamp, settingsOf, stampOf } from 'upm/src/state.ts';
 import type { InstallState, Stamp, TarballStamp } from 'upm/src/state.ts';
 import { findRoot, workspacesOf } from 'upm/src/workspaces.ts';
 import type { Root } from 'upm/src/workspaces.ts';
@@ -40,7 +40,7 @@ function declares(manifest: NonNullable<Root['manifest']>): boolean {
   return groups.some(group => group && Object.keys(group).length > 0);
 }
 
-async function installed(root: Root, sharing: boolean): Promise<boolean> {
+async function installed(root: Root, shared: boolean): Promise<boolean> {
   const { dir, manifest } = root;
   if (!manifest || fs.existsSync(path.join(dir, PNPM_WORKSPACE))) return false;
 
@@ -55,7 +55,6 @@ async function installed(root: Root, sharing: boolean): Promise<boolean> {
   const { registry, scopes, fallback, hoist } = readConfig(dir);
   const hosts = fallback ? [registry, scopes, fallback] : [registry, scopes];
   const production = state.production === true;
-  const shared = sharing ? SHARED_DIR : undefined;
   if (settingsOf({ production, store: state.store, hoist, hosts, platform: currentPlatform(), shared }) !== stamps.settings) return false;
 
   const listed = root.listed ?? (await workspacesOf(dir, manifest, true));
