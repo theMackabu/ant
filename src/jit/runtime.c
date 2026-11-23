@@ -229,12 +229,7 @@ void sv_jit_gc_mark_roots(ant_t *js) {
   sv_jit_ctx_t *jc = js->jit_ctx;
   if (!jc) return;
   
-  if (js->cstk.base) 
-    jit_code_mark_stack(jc, js, gc_native_sp(), (uintptr_t)js->cstk.base);
-  
-  if (js->cstk.main_base && js->cstk.main_lo)
-    jit_code_mark_stack(jc, js, (uintptr_t)js->cstk.main_lo, (uintptr_t)js->cstk.main_base);
-  
+  jit_code_mark_stack(jc, js);
   opt_tier_gc_mark_roots(js);
 }
 

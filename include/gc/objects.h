@@ -91,9 +91,11 @@ static inline __attribute__((always_inline)) uintptr_t gc_native_sp(void) {
 }
 
 typedef void (*gc_extra_roots_fn)(ant_t *js);
+typedef void (*gc_stack_range_fn)(ant_t *js, void *ctx, uintptr_t lo, uintptr_t hi);
 
 uint64_t gc_get_epoch(ant_t *js);
 uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots);
+void gc_stack_live_ranges(ant_t *js, gc_stack_range_fn fn, void *ctx);
 
 uint32_t gc_array_storage_fit(uint32_t cap);
 int gc_array_storage_fit_class(uint32_t cap);

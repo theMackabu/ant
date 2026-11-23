@@ -331,12 +331,21 @@ static int opt_code_address_order(const void *a, const void *b) {
   return x < y ? -1 : x > y;
 }
 
+typedef struct {
+  opt_code_t **codes;
+  uint32_t count;
+  uint64_t epoch;
+} opt_stack_scan_t;
+
 __attribute__((no_sanitize("address")))
-static void opt_scan_stack_range(uintptr_t from, uintptr_t to, opt_code_t **codes, uint32_t count, uint64_t epoch) {
-  uintptr_t lo = from < to ? from : to, hi = from < to ? to : from;
+static void opt_scan_stack_range(ant_t *js, void *ctx, uintptr_t lo, uintptr_t hi) {
+  (void)js;
+  const opt_stack_scan_t *scan = ctx;
+  opt_code_t **codes = scan->codes;
+  uint32_t count = scan->count;
   uintptr_t first = (uintptr_t)codes[0]->executable.address;
   uintptr_t last = (uintptr_t)codes[count - 1]->executable.address + codes[count - 1]->executable.size;
-  for (uintptr_t at = (lo + 7) & ~(uintptr_t)7; at + sizeof(uintptr_t) <= hi; at += sizeof(uintptr_t)) {
+  for (uintptr_t at = lo; at + sizeof(uintptr_t) <= hi; at += sizeof(uintptr_t)) {
     uintptr_t word = *(const uintptr_t *)at;
     if (word < first || word >= last) continue;
     uint32_t low = 0, high = count;
@@ -345,7 +354,7 @@ static void opt_scan_stack_range(uintptr_t from, uintptr_t to, opt_code_t **code
       if ((uintptr_t)codes[mid]->executable.address <= word) low = mid + 1;
       else high = mid;
     }
-    if (low && word < (uintptr_t)codes[low - 1]->executable.address + codes[low - 1]->executable.size) codes[low - 1]->active_epoch = epoch;
+    if (low && word < (uintptr_t)codes[low - 1]->executable.address + codes[low - 1]->executable.size) codes[low - 1]->active_epoch = scan->epoch;
   }
 }
 
@@ -383,9 +392,7 @@ void opt_tier_gc_mark_roots(ant_t *js) {
   state->scan_len = count;
   if (!count) return;
   qsort(state->scan, count, sizeof *state->scan, opt_code_address_order);
-  opt_scan_stack_range(gc_native_sp(), (uintptr_t)js->cstk.base, state->scan, count, epoch);
-  if (js->cstk.main_base && js->cstk.main_lo)
-    opt_scan_stack_range((uintptr_t)js->cstk.main_lo, (uintptr_t)js->cstk.main_base, state->scan, count, epoch);
+  gc_stack_live_ranges(js, opt_scan_stack_range, &(opt_stack_scan_t){.codes = state->scan, .count = count, .epoch = epoch});
   for (uint32_t i = 0; i < count; i++) {
     opt_code_t *code = state->scan[i];
     if (code->active_epoch != epoch) continue;
