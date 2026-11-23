@@ -67,7 +67,12 @@ static ant_value_t dns_get_default_result_order(ant_params_t) {
 
 static ant_value_t dns_resolver_cancel(ant_params_t) {
   dns_channel_t *channel = dns_this_channel(js, call_this);
-  if (channel && channel->ares) ares_cancel(channel->ares);
+  if (!channel || !channel->ares) return Ant_Value_Undefined;
+
+  dns_channel_enter(channel);
+  ares_cancel(channel->ares);
+  dns_channel_leave(channel);
+
   return Ant_Value_Undefined;
 }
 

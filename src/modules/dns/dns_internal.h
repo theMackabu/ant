@@ -44,6 +44,7 @@ struct dns_channel_s {
   uv_timer_t timer;
   int queries;
   int open_handles;
+  int entered;
   bool destroyed;
 };
 
@@ -81,6 +82,8 @@ int dns_ip_family(const char *address);
 
 void dns_request_free(dns_request_t *req);
 void dns_channel_destroy(dns_channel_t *channel);
+void dns_channel_enter(dns_channel_t *channel);
+void dns_channel_leave(dns_channel_t *channel);
 void dns_channel_schedule(dns_channel_t *channel);
 void dns_channel_query_started(dns_channel_t *channel);
 void dns_channel_query_finished(dns_channel_t *channel);

@@ -247,6 +247,7 @@ export function targets() {
     'test_assert_rejects_thenable.cjs',
     'test_dns_lookup.cjs',
     'test_dns_resolver.cjs',
+    'test_dns_resolver_gc.cjs',
     'test_class_strict_yield_await.cjs',
     'test_primitive_prototype_values.cjs',
     'test_array_join_cycles.cjs',
