@@ -150,5 +150,23 @@ const thrower = (a) => (b) => { return a.nope.deep; };
   eq('error stack through fusion', caught, true);
 }
 
+function builderSlotAfterDeadFeedback() {
+  const holder = { o: null };
+  const other = Object.create({ base: 7 });
+  const piece = 'x'.repeat(100);
+  let bad = 0;
+  for (let round = 0; round < 8; round++) {
+    const mk = new Function('return (a) => (b) => a.base + b.length;')();
+    const fire = new Function('mk', 'other', 'piece', 'holder',
+      'let s = "";' + 's += piece;'.repeat(8) + 'holder.o = null; const r = mk(other)(s); return r;');
+    holder.o = Object.create({ base: 5 });
+    let warm = 0;
+    for (let i = 0; i < 20000; i++) warm += mk(holder.o)('abc');
+    if (warm !== 160000 || fire(mk, other, piece, holder) !== 807) bad++;
+  }
+  return bad;
+}
+eq('deferred builder slot after callee feedback died', builderSlotAfterDeadFeedback(), 0);
+
 if (failed) { console.log(`${failed} FAILED`); process.exit(1); }
 console.log('OK');

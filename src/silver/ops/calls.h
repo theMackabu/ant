@@ -475,7 +475,8 @@ static inline bool sv_op_call_call_fused(
       uint32_t kidx = sv_get_u32(f1->code + 1);
       sv_func_t *f2 = (sv_func_t *)vptr(f1->constants[kidx]);
       sv_func_note_multi_closure(f2);
-      if (!f2->jit_code) return false;
+      sv_jit_func_t jit_fn = f2->jit_code;
+      if (!jit_fn) return false;
 
       if (materialize_args2) {
         ant_value_t err = sv_materialize_builder_args(js, args2, n2);
@@ -483,6 +484,9 @@ static inline bool sv_op_call_call_fused(
           *result_out = err;
           return true;
         }
+
+        jit_fn = f2->jit_code;
+        if (!jit_fn) return false;
       }
 
       if (sv_check_c_stack_overflow(js)) {
@@ -520,7 +524,7 @@ static inline bool sv_op_call_call_fused(
         else fake.inline_upvals[i] = &cell;
       }
 
-      ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, f2->jit_code, vm, &(sv_call_ctx_t){
+      ant_value_t result = sv_jit_invoke(js, SV_JIT_FROM_INTERP, jit_fn, vm, &(sv_call_ctx_t){
         .this_val = Ant_Value_Undefined,
         .new_target = Ant_Value_Undefined,
         .super_val = Ant_Value_Undefined,
