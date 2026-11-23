@@ -39,7 +39,6 @@ js_eval_result_t js_eval_bytecode_repl(ant_t *, const char *, size_t);
 bool Ant_Eval_WithoutSideEffects(ant_t *js, const char *expr, size_t len, ant_value_t *out);
 
 bool js_chkargs(ant_value_t *, int, const char *);
-void js_stats(ant_t *, size_t *total, size_t *min, size_t *cstacksize);
 
 void js_check_unhandled_rejections(ant_t *js);
 void js_setup_import_meta(ant_t *js, const char *filename);
