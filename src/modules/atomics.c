@@ -180,13 +180,6 @@ static int async_waiter_notify(int32_t *address, int count) {
   return notified;
 }
 
-void wait_queue_add(WaitQueue *queue, WaitQueueEntry *entry) {
-  pthread_mutex_lock(&queue->lock);
-  entry->next = queue->head;
-  queue->head = entry;
-  pthread_mutex_unlock(&queue->lock);
-}
-
 void wait_queue_remove(WaitQueue *queue, WaitQueueEntry *entry) {
   pthread_mutex_lock(&queue->lock);
   WaitQueueEntry **current = &queue->head;

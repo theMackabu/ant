@@ -1648,14 +1648,6 @@ bool eventemitter_remove_listener(
   return false;
 }
 
-ant_value_t eventemitter_sole_listener(ant_value_t target, const char *event_type) {
-  EventType *evt = is_object_type(target) && event_type ? find_emitter_event_type_cstr_cached(target, event_type) : NULL;
-  if (!evt || utarray_len(evt->listeners) != 1) return 0;
-
-  EventListenerEntry *entry = (EventListenerEntry *)utarray_eltptr(evt->listeners, 0);
-  return entry->meta == 0 && entry->dead_gen == 0 ? entry->callback : 0;
-}
-
 ant_offset_t eventemitter_listener_count(
   ant_t *js,
   ant_value_t target, const char *event_type

@@ -124,7 +124,6 @@ bool buffer_fast_length_getter(ant_value_t getter, ant_value_t obj, double *out)
 bool buffer_typedarray_length_fast(ant_t *js, ant_object_t *ptr, double *out);
 bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len);
 bool buffer_typedarray_data_read_index(ant_t *js, const TypedArrayData *ta_data, size_t index, ant_value_t *out);
-bool buffer_typedarray_read_index(ant_t *js, ant_value_t value, size_t index, ant_value_t *out);
 bool buffer_typedarray_get_index(ant_t *js, ant_value_t obj, uint32_t index, ant_value_t *out);
 bool buffer_typedarray_set_index(ant_t *js, ant_value_t obj, uint32_t index, ant_value_t value, ant_value_t *result);
 

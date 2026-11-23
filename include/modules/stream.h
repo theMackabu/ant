@@ -33,7 +33,6 @@ ant_value_t stream_readable_end(ant_t *js, ant_value_t stream_obj);
 ant_value_t stream_readable_resume(ant_t *js, ant_value_t stream_obj);
 ant_value_t stream_readable_pause(ant_t *js, ant_value_t stream_obj);
 ant_value_t stream_destroy(ant_t *js, ant_value_t stream_obj, ant_value_t error);
-ant_value_t stream_writable_begin_end(ant_t *js, ant_value_t stream_obj, ant_value_t callback);
 
 void stream_init_readable_object(ant_t *js, ant_value_t obj, ant_value_t options);
 void stream_init_writable_object(ant_t *js, ant_value_t obj, ant_value_t options);

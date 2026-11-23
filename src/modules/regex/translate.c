@@ -809,16 +809,6 @@ static size_t regexp_translate(
   return builder.length;
 }
 
-size_t js_to_pcre2_pattern(
-  const char *src,
-  size_t src_len,
-  char *dst,
-  size_t dst_size,
-  uint8_t flags
-) {
-  return regexp_translate(src, src_len, dst, dst_size, flags, false, NULL);
-}
-
 js_cstr_t regexp_translate_cstr(
   const char *src, size_t src_len,
   char *stack_buf, size_t stack_size,

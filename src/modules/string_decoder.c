@@ -289,15 +289,6 @@ ant_value_t string_decoder_decode_value(
   return sd_do_write(js, st, src, len, flush);
 }
 
-ant_value_t string_decoder_decode_bytes(
-  ant_t *js, ant_value_t decoder,
-  const uint8_t *src, size_t len, bool flush
-) {
-  sd_state_t *st = sd_get_state(decoder);
-  if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid StringDecoder");
-  return sd_do_write(js, st, src, len, flush);
-}
-
 // StringDecoder.call(this, enc)
 static __attribute__((noinline)) ant_value_t sd_init_this(ant_t *js, ant_value_t self, ant_value_t encoding) {
   if (sd_get_state(self)) return self;

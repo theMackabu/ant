@@ -31,6 +31,5 @@ ant_value_t ant_port_end_post(ant_t *js, ant_port_end_t *end, ant_value_t value,
 ant_value_t ant_port_binding_post(ant_t *js, ant_port_binding_t *binding, ant_value_t value, ant_value_t transfer);
 ant_port_binding_t *ant_port_end_bind(ant_t *js, ant_port_end_t *end, ant_value_t target, ant_port_message_fn on_message);
 
-ant_value_t ant_message_port_proto(ant_t *js);
 ant_value_t ant_message_port_adopt(ant_t *js, ant_port_end_t *end);
 ant_port_end_t *ant_message_port_take(ant_t *js, ant_value_t port);

@@ -479,10 +479,6 @@ static ant_value_t message_port_create(ant_t *js, ant_port_end_t *end) {
   return obj;
 }
 
-ant_value_t ant_message_port_proto(ant_t *js) {
-  return js->builtins.message_port_proto;
-}
-
 ant_value_t ant_message_port_adopt(ant_t *js, ant_port_end_t *end) {
   ant_value_t port = message_port_create(js, end);
   if (is_err(port)) ant_port_end_release(end);

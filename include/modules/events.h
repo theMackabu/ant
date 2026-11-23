@@ -28,7 +28,6 @@ ant_value_t events_library(ant_t *js);
 ant_value_t eventemitter_prototype(ant_t *js);
 
 ant_offset_t eventemitter_listener_count(ant_t *js, ant_value_t target, const char *event_type);
-ant_value_t eventemitter_sole_listener(ant_value_t target, const char *event_type);
 ant_value_t eventemitter_sole_listener_ref(ant_value_t target, eventemitter_ref_t *ref);
 ant_offset_t eventemitter_listener_count_ref(ant_value_t target, eventemitter_ref_t *ref);
 
