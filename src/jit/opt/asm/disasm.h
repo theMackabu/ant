@@ -25,7 +25,6 @@ static inline void asm_listing(asm_listing_t *out, asm_arch_t arch, const uint8_
 }
 
 void asm_listing_free(asm_listing_t *listing);
-void asm_listing_print(FILE *out, const asm_listing_t *listing);
 
 size_t asm_disasm_x64(const uint8_t *code, size_t len, size_t offset, asm_insn_t *out);
 size_t asm_disasm_a64(const uint8_t *code, size_t len, size_t offset, asm_insn_t *out);

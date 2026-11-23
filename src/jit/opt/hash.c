@@ -6,11 +6,6 @@ void opt_map_init(opt_map_t *map, opt_arena_t *arena, uint32_t key_words) {
   *map = (opt_map_t){.arena = arena, .key_words = key_words};
 }
 
-void opt_map_clear(opt_map_t *map) {
-  if (map->cap) memset(map->used, 0, map->cap);
-  map->len = 0;
-}
-
 static inline uint32_t opt_map_slot(const opt_map_t *map, const uint64_t *key) {
   return (uint32_t)(opt_hash_words(key, map->key_words) >> 32) & (map->cap - 1);
 }
@@ -30,15 +25,6 @@ static void opt_map_resize(opt_map_t *map, uint32_t cap) {
     if (!old.used[slot]) continue;
     *opt_map_entry(map, opt_map_key_at(&old, slot), NULL) = old.values[slot];
   }
-}
-
-void opt_map_clone(opt_map_t *dst, const opt_map_t *src, opt_arena_t *arena) {
-  *dst = *src;
-  dst->arena = arena;
-  if (!src->cap) return;
-  dst->keys = opt_arena_dup(arena, src->keys, (size_t)src->cap * src->key_words * sizeof(uint64_t));
-  dst->values = opt_arena_dup(arena, src->values, (size_t)src->cap * sizeof(uint64_t));
-  dst->used = opt_arena_dup(arena, src->used, src->cap);
 }
 
 uint64_t *opt_map_get(const opt_map_t *map, const uint64_t *key) {

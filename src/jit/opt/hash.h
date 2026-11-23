@@ -26,8 +26,6 @@ typedef struct {
 } opt_map_t;
 
 void opt_map_init(opt_map_t *map, opt_arena_t *arena, uint32_t key_words);
-void opt_map_clone(opt_map_t *dst, const opt_map_t *src, opt_arena_t *arena);
-void opt_map_clear(opt_map_t *map);
 
 uint64_t *opt_map_get(const opt_map_t *map, const uint64_t *key);
 uint64_t *opt_map_entry(opt_map_t *map, const uint64_t *key, bool *inserted);

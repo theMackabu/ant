@@ -142,8 +142,6 @@ typedef enum : uint8_t {
   IR_CMP_ABOVE_OR_EQUAL,
 } ir_comparison_t;
 
-int ir_comparison_equality(ir_comparison_t comparison);
-
 typedef enum : uint8_t {
   IR_UNARY_ABS,
   IR_UNARY_NEGATE,
