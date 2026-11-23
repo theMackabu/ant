@@ -488,7 +488,7 @@ static sv_upvalue_t *sv_eval_env_ic_outer_cell(
   const sv_eval_env_state_t *state = sv_eval_env_object_state(holder);
   if (!state || state->scope != scope || ic->cached_index >= state->cell_count) return NULL;
 
-  sv_upvalue_t *cell = state->cells[ic->cached_index];
+  sv_upvalue_t *cell = sv_eval_state_cell(state, ic->cached_index);
   if (!cell || is_empty_slot(*cell->location)) return NULL;
   if (owner) *owner = state;
 
@@ -497,6 +497,10 @@ static sv_upvalue_t *sv_eval_env_ic_outer_cell(
 
 static inline bool sv_eval_env_ic_unfilled(const ant_t *js, ant_value_t env, const sv_ic_entry_t *ic) {
   return ic && ic->epoch != js->ic.epoch && !((const ant_object_t *)vptr(env))->prop_count;
+}
+
+static inline bool sv_eval_env_ic_is_cell(const sv_ic_entry_t *ic) {
+  return ic && (ic->eval_depth == SV_EVAL_IC_CELL || ic->eval_depth == SV_EVAL_IC_OUTER_CELL);
 }
 
 static __attribute__((noinline)) bool sv_eval_env_ic_outer_get(ant_t *js, ant_value_t env, const sv_ic_entry_t *ic, ant_value_t *out) {
@@ -906,7 +910,7 @@ static __attribute__((noinline)) ant_value_t sv_eval_env_get_interned_miss(
   sv_ic_entry_t *ic, bool *found
 ) {
   ant_value_t out = Ant_Value_Undefined;
-  if (ic && ic->eval_depth == SV_EVAL_IC_OUTER_CELL && sv_eval_env_ic_outer_get(js, env, ic, &out)) {
+  if (sv_eval_env_ic_is_cell(ic) && sv_eval_env_ic_outer_get(js, env, ic, &out)) {
     if (found) *found = true;
     return out;
   }
@@ -963,7 +967,7 @@ static __attribute__((noinline)) ant_value_t sv_eval_env_put_interned_miss(
   const char *interned, uint32_t len,
   ant_value_t val, bool is_strict, sv_ic_entry_t *ic
 ) {
-  if (ic && ic->eval_depth == SV_EVAL_IC_OUTER_CELL && sv_eval_env_ic_outer_put(js, env, ic, val)) return val;
+  if (sv_eval_env_ic_is_cell(ic) && sv_eval_env_ic_outer_put(js, env, ic, val)) return val;
   if (sv_eval_env_ic_chain_serves(ic) && sv_eval_env_ic_chain_put(js, env, ic, interned, len, val)) return val;
 
   ant_value_t result = sv_env_put(js, env, interned, len, val, is_strict);

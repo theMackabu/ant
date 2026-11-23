@@ -30,6 +30,7 @@ libant_tests = [
   'code-unit-lifetime',
   'code-unit-ctor-proto',
   'eval-cache-scope-keys',
+  'eval-leaf-env-gc',
   'ic-poly-shape-release',
   'gc-two-isolates',
   'arena-chunks',

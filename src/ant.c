@@ -444,30 +444,11 @@ static inline __attribute__((always_inline)) ant_value_t js_execute_compiled_eva
   return result;
 }
 
-static inline __attribute__((always_inline)) js_eval_result_t js_eval_source_from(
+static __attribute__((noinline)) js_eval_result_t js_eval_source_miss(
   ant_t *js, const char *buf, size_t len,
-  sv_compile_mode_t mode, bool strict, js_eval_scope_t scope, sv_frame_t *caller
+  sv_compile_mode_t mode, bool strict, const js_eval_scope_t *scope, sv_frame_t *caller,
+  uint16_t shadows, const sv_eval_cache_key_t *cache_key, bool bound
 ) {
-  if (len == (size_t)~0U) len = strlen(buf);
-  
-  bool is_eval = sv_compile_mode_is_eval(mode);
-  uint16_t shadows = is_eval ? sv_eval_shadow_bits(js, &scope, buf, len) : 0;
-  
-  sv_eval_cache_key_t cache_key;
-  bool cacheable = is_eval && sv_eval_cache_key(
-    js, &cache_key, buf, len,
-    (uint16_t)(shadows | (strict ? 4 : 0) | (mode == SV_COMPILE_EVAL_FUNCTION ? 8 : 0)), scope.layout);
-  bool bound = (shadows & SV_EVAL_SCOPE_ENV_BOUND) != 0;
-  if (bound && cacheable) cacheable = sv_eval_cache_key_bind(js, &cache_key, scope.env);
-  
-  sv_func_t *cached = !cacheable ? NULL : bound ? sv_eval_cache_find_bound(js, &cache_key) : sv_eval_cache_find(js, &cache_key);
-  if (cached) {
-    sv_code_unit_pin(cached->unit);
-    ant_value_t value = js_execute_compiled_eval_bytecode(js, cached, scope, caller);
-    sv_code_unit_unpin(cached->unit);
-    return (js_eval_result_t){ .value = value, .async_coro = NULL, .kind = JS_EVAL_COMPLETE };
-  }
-  
   code_arena_mark_t parse_mark = parse_arena_mark(js);
   sv_parse_goal_t goal =
     mode == SV_COMPILE_MODULE ? SV_PARSE_MODULE :
@@ -484,7 +465,7 @@ static inline __attribute__((always_inline)) js_eval_result_t js_eval_source_fro
     return (js_eval_result_t){ .value = value, .async_coro = NULL, .kind = JS_EVAL_COMPLETE };
   }
 
-  sv_func_t *func = js_compile_parsed_bytecode(js, program, buf, len, mode, shadows, scope.env);
+  sv_func_t *func = js_compile_parsed_bytecode(js, program, buf, len, mode, shadows, scope->env);
   parse_arena_rewind(js, parse_mark);
 
   if (!func) {
@@ -498,11 +479,11 @@ static inline __attribute__((always_inline)) js_eval_result_t js_eval_source_fro
   coroutine_t *async_coro = NULL;
   ant_value_t value;
   
-  if (cacheable) sv_eval_cache_store(js, &cache_key, func, bound);
+  if (cache_key) sv_eval_cache_store(js, cache_key, func, bound);
   switch (mode) {
     case SV_COMPILE_EVAL:
     case SV_COMPILE_EVAL_FUNCTION:
-      value = js_execute_compiled_eval_bytecode(js, func, scope, caller);
+      value = js_execute_compiled_eval_bytecode(js, func, *scope, caller);
       break;
     case SV_COMPILE_REPL:
       value = js_execute_compiled_repl_bytecode(js, func, &async_coro);
@@ -524,6 +505,35 @@ static inline __attribute__((always_inline)) js_eval_result_t js_eval_source_fro
   };
 }
 
+static inline uint16_t js_eval_key_bits(uint16_t shadows, bool strict, sv_compile_mode_t mode) {
+  return (uint16_t)(shadows | (strict ? 4 : 0) | (mode == SV_COMPILE_EVAL_FUNCTION ? 8 : 0));
+}
+
+static inline __attribute__((always_inline)) js_eval_result_t js_eval_source_from(
+  ant_t *js, const char *buf, size_t len,
+  sv_compile_mode_t mode, bool strict, js_eval_scope_t scope, sv_frame_t *caller
+) {
+  if (len == (size_t)~0U) len = strlen(buf);
+  
+  bool is_eval = sv_compile_mode_is_eval(mode);
+  uint16_t shadows = is_eval ? sv_eval_shadow_bits(js, &scope, buf, len) : 0;
+  
+  sv_eval_cache_key_t cache_key;
+  bool cacheable = is_eval && sv_eval_cache_key(js, &cache_key, buf, len, js_eval_key_bits(shadows, strict, mode), scope.layout);
+  bool bound = (shadows & SV_EVAL_SCOPE_ENV_BOUND) != 0;
+  if (bound && cacheable) cacheable = sv_eval_cache_key_bind(js, &cache_key, scope.env);
+  
+  sv_func_t *cached = !cacheable ? NULL : bound ? sv_eval_cache_find_bound(js, &cache_key) : sv_eval_cache_find(js, &cache_key);
+  if (cached) {
+    sv_code_unit_pin(cached->unit);
+    ant_value_t value = js_execute_compiled_eval_bytecode(js, cached, scope, caller);
+    sv_code_unit_unpin(cached->unit);
+    return (js_eval_result_t){ .value = value, .async_coro = NULL, .kind = JS_EVAL_COMPLETE };
+  }
+  
+  return js_eval_source_miss(js, buf, len, mode, strict, &scope, caller, shadows, cacheable ? &cache_key : NULL, bound);
+}
+
 js_eval_result_t js_eval_source(
   ant_t *js, const char *buf, size_t len,
   sv_compile_mode_t mode, bool strict, js_eval_scope_t scope
@@ -531,11 +541,65 @@ js_eval_result_t js_eval_source(
   return js_eval_source_from(js, buf, len, mode, strict, scope, NULL);
 }
 
-js_eval_result_t js_eval_source_in_frame(
-  ant_t *js, const char *buf, size_t len,
-  sv_compile_mode_t mode, bool strict, js_eval_scope_t scope, sv_frame_t *caller
+static inline bool js_eval_snapshots_arguments(const sv_func_t *unit_func, const sv_frame_t *frame, const sv_eval_scope_t *layout) {
+  return
+    (unit_func->unit->eval_arguments & SV_EVAL_WRITES_NAMES) && layout->binds_params &&
+    frame->func->is_strict && vtype(frame->arguments_obj) == kTypeUndefined;
+}
+
+static const uint16_t js_eval_env_bits = SV_EVAL_SCOPE_ENV_BOUND | SV_EVAL_SCOPE_PRIVATE | SV_EVAL_SCOPE_THIS_BINDING;
+
+static __attribute__((noinline)) ant_value_t js_eval_in_frame_with_env(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, const char *source, size_t len, js_eval_scope_t *scope, sv_compile_mode_t mode, bool strict
 ) {
-  return js_eval_source_from(js, buf, len, mode, strict, scope, caller);
+  scope->env = sv_eval_capture_scope_env(vm, js, frame, scope->layout);
+  if (is_err(scope->env)) return scope->env;
+  return js_eval_source_from(js, source, len, mode, strict, *scope, frame).value;
+}
+
+ant_value_t js_eval_in_frame(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, const char *source, size_t len,
+  const sv_eval_scope_t *layout, ant_value_t new_target
+) {
+  sv_compile_mode_t mode = frame->func->allows_new_target ? SV_COMPILE_EVAL_FUNCTION : SV_COMPILE_EVAL;
+  bool strict = sv_frame_is_strict(frame) || sv_is_strict_context(js);
+  ant_value_t result;
+
+  GC_ROOT_SAVE(root_mark, js);
+  js_eval_scope_t scope = {
+    .this_val = frame->this, .env = Ant_Value_Undefined,
+    .new_target = new_target, .layout = layout,
+  };
+  GC_ROOT_PIN(js, scope.env);
+
+  if (layout->eval_bits & js_eval_env_bits) {
+    result = js_eval_in_frame_with_env(vm, js, frame, source, len, &scope, mode, strict);
+    GC_ROOT_RESTORE(js, root_mark);
+    return result;
+  }
+
+  uint16_t shadows = sv_eval_frame_shadow_bits(js, frame, layout, source, len);
+  sv_eval_cache_key_t cache_key;
+  bool cacheable = sv_eval_cache_key(js, &cache_key, source, len, js_eval_key_bits(shadows, strict, mode), layout);
+  sv_func_t *cached = cacheable ? sv_eval_cache_find(js, &cache_key) : NULL;
+  bool leaf = cached && cached->unit->eval_leaf && !layout->parent && !js_eval_snapshots_arguments(cached, frame, layout);
+
+  scope.env = leaf
+    ? sv_eval_leaf_env_acquire(vm, js, frame, layout)
+    : sv_eval_capture_scope_env(vm, js, frame, layout);
+
+  if (is_err(scope.env)) result = scope.env;
+  else if (!cached) result = js_eval_source_miss(
+    js, source, len, mode, strict, &scope, frame, shadows, cacheable ? &cache_key : NULL, false).value;
+  else {
+    sv_code_unit_pin(cached->unit);
+    result = js_execute_compiled_eval_bytecode(js, cached, scope, frame);
+    sv_code_unit_unpin(cached->unit);
+    if (leaf) sv_eval_leaf_env_release(scope.env);
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
 }
 
 static const js_eval_scope_t js_eval_no_scope = {

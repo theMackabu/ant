@@ -28,6 +28,7 @@ struct sv_code_unit {
   uint32_t pins;
   bool compiling;
   uint8_t eval_arguments;
+  bool eval_leaf;
 };
 
 typedef struct sv_eval_cache sv_eval_cache_t;

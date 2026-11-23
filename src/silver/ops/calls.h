@@ -402,7 +402,6 @@ static inline __attribute__((noinline)) ant_value_t sv_op_new_spread(sv_vm_t *vm
   return sv_new_call_args(vm, js, ip, true);
 }
 
-__attribute__((noinline)) 
 static inline ant_value_t sv_eval_in_frame(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, const char *source,
   ant_offset_t source_len, uint32_t scope_index, ant_value_t new_target
@@ -410,29 +409,7 @@ static inline ant_value_t sv_eval_in_frame(
   sv_func_t *caller = frame ? frame->func : NULL;
   
   if (!caller) return js_eval_bytecode_eval(js, source, source_len, false);
-  GC_ROOT_SAVE(root_mark, js);
-  
-  const sv_eval_scope_t *eval_scope = sv_func_eval_scope(caller, scope_index);
-  ant_value_t env = sv_eval_capture_scope_env(vm, js, frame, eval_scope);
-  if (is_err(env)) { 
-    GC_ROOT_RESTORE(js, root_mark); 
-    return env;
-  }
-  
-  GC_ROOT_PIN(js, env);
-  js_eval_scope_t scope = { 
-    .this_val = frame->this, 
-    .env = env, .new_target = new_target,
-    .layout = eval_scope,
-  };
-  
-  ant_value_t result = js_eval_source_in_frame(
-    js, source, source_len,
-    caller->allows_new_target ? SV_COMPILE_EVAL_FUNCTION : SV_COMPILE_EVAL,
-    sv_frame_is_strict(frame) || sv_is_strict_context(js), scope, frame).value;
-  
-  GC_ROOT_RESTORE(js, root_mark);
-  return result;
+  return js_eval_in_frame(vm, js, frame, source, (size_t)source_len, sv_func_eval_scope(caller, scope_index), new_target);
 }
 
 static inline ant_value_t sv_op_eval(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {

@@ -27,6 +27,11 @@ bool sv_eval_env_shadows_global(
   const char *name, uint32_t len
 );
 
+bool sv_eval_scope_shadows_global(
+  ant_t *js, const struct sv_frame *frame, const struct sv_eval_scope *scope,
+  const char *name, uint32_t len
+);
+
 ant_value_t sv_eval_read_import(
   ant_t *js, ant_value_t value, 
   const char *name, uint32_t len, bool is_default

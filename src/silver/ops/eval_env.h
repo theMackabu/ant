@@ -11,10 +11,14 @@
 typedef struct sv_eval_env_state {
   sv_func_t *func;
   const sv_eval_scope_t *scope;
+  sv_frame_t *frame;
   uint32_t cell_count;
+  uint32_t cell_cap;
   bool is_variable;
   bool has_arguments;
   bool arguments_deferred;
+  bool leaf_busy;
+  bool lazy_cells;
   ant_value_t arguments_obj;
   ant_value_t arguments_value;
   uint64_t serial;
@@ -109,6 +113,7 @@ static inline sv_eval_env_state_t *sv_eval_env_state_create(
   state->func = frame->func;
   state->scope = scope;
   state->cell_count = scope->count;
+  state->cell_cap = scope->count;
   state->arguments_obj = frame->arguments_obj;
 
   sv_eval_capture_cursor_t cursor = {0};
@@ -118,6 +123,13 @@ static inline sv_eval_env_state_t *sv_eval_env_state_create(
   }
   
   return state;
+}
+
+__attribute__((noinline)) sv_upvalue_t *sv_eval_lazy_cell(sv_eval_env_state_t *state, uint32_t index);
+
+static inline sv_upvalue_t *sv_eval_state_cell(const sv_eval_env_state_t *state, uint32_t index) {
+  sv_upvalue_t *cell = state->cells[index];
+  return cell || !state->lazy_cells ? cell : sv_eval_lazy_cell((sv_eval_env_state_t *)state, index);
 }
 
 static inline bool sv_eval_env_state_current(
@@ -176,7 +188,7 @@ static inline bool sv_eval_binding_load(
   ptrdiff_t index = binding - state->scope->bindings;
   
   if (index < 0 || (uint32_t)index >= state->cell_count) return false;
-  sv_upvalue_t *uv = state->cells[index];
+  sv_upvalue_t *uv = sv_eval_state_cell(state, (uint32_t)index);
   
   if (!uv) return false;
   *out = *uv->location;
@@ -193,7 +205,7 @@ static inline bool sv_eval_binding_store(
   ptrdiff_t index = binding - state->scope->bindings;
   
   if (index < 0 || (uint32_t)index >= state->cell_count) return false;
-  sv_upvalue_t *uv = state->cells[index];
+  sv_upvalue_t *uv = sv_eval_state_cell(state, (uint32_t)index);
   
   if (!uv) return false;
   sv_upvalue_store(js, uv, value);
@@ -258,6 +270,19 @@ ant_value_t sv_eval_capture_scope_env(
 ant_value_t sv_eval_capture_closure_env(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint32_t scope_index
 );
+
+ant_value_t sv_eval_leaf_env_acquire(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, const sv_eval_scope_t *scope
+);
+
+static inline void sv_eval_leaf_env_release(ant_value_t env) {
+  sv_eval_env_state_t *state = (sv_eval_env_state_t *)ant_object_eval_env_state((ant_object_t *)vptr(env));
+  state->leaf_busy = false;
+  state->cell_count = 0;
+  state->frame = NULL;
+  state->func = NULL;
+  state->arguments_obj = Ant_Value_Undefined;
+}
 
 static inline ant_value_t sv_eval_init_variable_env(sv_vm_t *vm, ant_t *js, sv_frame_t *frame) {
   ant_value_t env = js_mkobj_with_proto(js, sv_frame_eval_env(js, frame));
@@ -641,6 +666,76 @@ ant_value_t sv_eval_capture_scope_env(
   } else state->arguments_deferred = provides;
   GC_ROOT_RESTORE(js, mark);
   return env;
+}
+
+static __attribute__((noinline)) ant_value_t sv_eval_leaf_env_create(
+  ant_t *js, ant_value_t parent, uint32_t count
+) {
+  uint32_t cap = count < 8 ? 8 : count;
+  ant_value_t env = js_mkobj_with_proto(js, parent);
+  if (is_err(env)) return env;
+
+  sv_eval_env_state_t *state = calloc(1, sizeof(*state) + (size_t)cap * (sizeof(sv_upvalue_t *) + sizeof(sv_upvalue_t)));
+  if (!state || !sv_eval_env_state_attach(env, state)) {
+    free(state);
+    return js_mkerr(js, "failed to capture eval environment");
+  }
+
+  state->cell_cap = cap;
+  return env;
+}
+
+ant_value_t sv_eval_leaf_env_acquire(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, const sv_eval_scope_t *scope
+) {
+  ant_value_t parent = sv_frame_eval_env(js, frame);
+  ant_value_t env = js->eval_leaf_env;
+  sv_eval_env_state_t *state = vtype(env) == kTypeObject
+    ? (sv_eval_env_state_t *)ant_object_eval_env_state((ant_object_t *)vptr(env)) : NULL;
+
+  if (state && !state->leaf_busy && state->cell_cap >= scope->count) {
+    ant_object_set_proto(js, (ant_object_t *)vptr(env), parent);
+  } else {
+    env = sv_eval_leaf_env_create(js, parent, scope->count);
+    if (is_err(env)) return env;
+    state = sv_eval_env_state(env);
+    js->eval_leaf_env = env;
+  }
+
+  state->leaf_busy = true;
+  state->lazy_cells = true;
+  state->serial = 0;
+  state->func = frame->func;
+  state->scope = scope;
+  state->frame = frame;
+  state->arguments_obj = frame->arguments_obj;
+  state->cell_count = scope->count;
+  memset(state->cells, 0, (size_t)scope->count * sizeof(state->cells[0]));
+
+  return env;
+}
+
+sv_upvalue_t *sv_eval_lazy_cell(sv_eval_env_state_t *state, uint32_t index) {
+  const sv_runtime_binding_t *binding = &state->scope->bindings[index];
+  sv_frame_t *frame = state->frame;
+  sv_upvalue_t *cell = (sv_upvalue_t *)(state->cells + state->cell_cap) + index;
+  ant_value_t *slot = NULL;
+
+  switch (binding->kind & SV_EVAL_BIND_KIND_MASK) {
+    case SV_EVAL_BIND_PARAM:
+      if (frame->bp && (int)binding->index < sv_frame_arg_slots(frame)) slot = &frame->bp[binding->index];
+      break;
+    case SV_EVAL_BIND_LOCAL:
+      if (frame->lp && binding->index < (uint16_t)frame->func->max_locals) slot = &frame->lp[binding->index];
+      break;
+    default:
+      if (!frame->upvalues || binding->index >= (uint16_t)frame->upvalue_count) return NULL;
+      return state->cells[index] = frame->upvalues[binding->index];
+  }
+
+  if (!slot) return NULL;
+  cell->location = slot;
+  return state->cells[index] = cell;
 }
 
 __attribute__((noinline)) ant_value_t sv_eval_bind_scope_arguments(
