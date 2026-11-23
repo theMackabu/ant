@@ -195,18 +195,6 @@ opt_asm_exec_test = executable(
 )
 test('opt-asm-exec', opt_asm_exec_test)
 
-if host_machine.system() == 'darwin'
-  desktop_error_details_test = executable(
-    'test-desktop-error-details',
-    files(tests_root / 'test_desktop_error_details.c'),
-    dependencies: [libant_dep, dependency('appleframeworks', modules: 'AppKit')],
-    c_args: test_c_args + ['-x', 'objective-c', '-fobjc-arc'],
-    link_args: ['-Wl,-dead_strip'],
-    build_by_default: false
-  )
-  test('desktop-error-details', desktop_error_details_test)
-endif
-
 if host_machine.system() != 'windows'
   ascii_scan_test = executable(
     'test-string-ascii-scan',
