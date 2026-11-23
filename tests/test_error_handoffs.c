@@ -165,7 +165,7 @@ static void CheckFinallyCompletionRoots(ant_t *js) {
   init_iterator_module(js);
   init_generator_module(js);
   js_set(js, js->global, "__collectFinally", Ant_Function_Create(collect_finally_completion));
-  uintptr_t stack_base = (uintptr_t)js->cstk.main_base;
+  uintptr_t stack_base = (uintptr_t)js->cstk.base;
   js_setstackbase(js, NULL);
   const char *active =
     "globalThis.__finallyResult = (() => {"
@@ -256,7 +256,7 @@ static void CheckAwaitValueRoots(ant_t *js) {
     if (input_kind == 1) js_resolve_promise(js, awaited, value);
     GC_ROOT_RESTORE(js, input_mark);
 
-    uintptr_t stack_base = (uintptr_t)js->cstk.main_base;
+    uintptr_t stack_base = (uintptr_t)js->cstk.base;
     js_setstackbase(js, NULL);
     gc_run_minor(js);
     gc_run(js);

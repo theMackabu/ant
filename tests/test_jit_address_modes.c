@@ -63,7 +63,7 @@ static void check_index_guard(void) {
   MIR_load_module(ctx, module); MIR_link(ctx, MIR_set_gen_interface, NULL);
   int64_t (*guard)(double) = (int64_t (*)(double))MIR_gen(ctx, function);
   const double cases[] = {0, -0.0, 1, 0.5, 1.5, 2147483648.0, 4294967294.0,
-    4294967294.5, 4294967295.0, -1, INFINITY, -INFINITY, NAN};
+    4294967294.5, 4294967295.0, -1, (double)INFINITY, -(double)INFINITY, (double)NAN};
   for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
     double d = cases[i];
     int64_t expected = !signbit(d) && isfinite(d) && d <= 4294967294.0 && trunc(d) == d
@@ -72,7 +72,7 @@ static void check_index_guard(void) {
   }
   for (int exponent = 0; exponent <= 31; exponent++) {
     double center = ldexp(1.0, exponent);
-    const double nearby[] = {nextafter(center, 0), center, nextafter(center, INFINITY)};
+    const double nearby[] = {nextafter(center, 0), center, nextafter(center, (double)INFINITY)};
     for (size_t i = 0; i < 3; i++) {
       double d = nearby[i];
       assert(guard(d) == (trunc(d) == d ? (int64_t)d : -1));

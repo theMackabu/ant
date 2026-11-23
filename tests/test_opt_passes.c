@@ -1234,7 +1234,7 @@ static void overflow_checks_removed_by_bounds_checks_check_the_counters_of_their
     ir_block_id_t merge = BLOCK(&graph, 0, 1);
     opt_vec_push(&graph.arena, &graph.osr_entries, ((ir_osr_entry_t){.bc_off = 7, .block = 1}));
     if (failed_before) opt_vec_push(&graph.arena, &graph.exit_sites, ((ir_exit_site_t){.bc_off = 7, .kind = OPT_EXIT_OUT_OF_BOUNDS}));
-    ir_frame_state_t state = {.bc_off = 7, .mode = OPT_RESUME_AT, .dst = OPT_INVALID_SLOT, .parent = IR_NONE, .passed_argument_count = IR_NONE};
+    ir_frame_state_t state = {.bc_off = 3, .site_off = 7, .mode = OPT_RESUME_AT, .dst = OPT_INVALID_SLOT, .parent = IR_NONE, .passed_argument_count = IR_NONE};
     ir_frame_state_id_t at_entry = ir_add_frame_state(&graph, &state);
     ir_node_id_t hundred = NODE0(&graph, constant(100), OPT_REPR_INT32), one = NODE0(&graph, constant(1), OPT_REPR_INT32);
     set_control(&graph, 0, NODE0(&graph, jump(merge), OPT_REPR_NONE));

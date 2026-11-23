@@ -42,7 +42,6 @@ static constexpr uint32_t RS_CONTROLLER_NATIVE_TAG = Ant_NativeTag("RSCT");
 
 __attribute__((cold)) 
 void init_readable_stream_module(ant_t *js);
-void gc_mark_readable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));
 
 bool rs_is_stream(ant_value_t obj);
 bool rs_is_reader(ant_value_t obj);
