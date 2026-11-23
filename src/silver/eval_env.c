@@ -21,7 +21,7 @@ void sv_eval_env_gc_mark(ant_t *js, ant_object_t *obj) {
   if (state->func) gc_mark_value(js, mkref(kTypeFunctionInfo, state->func));
   gc_mark_value(js, state->arguments_obj);
   gc_mark_value(js, state->arguments_value);
-  gc_mark_upvalue_cells(js, state->cells, state->cell_count);
+  if (!state->lazy_cells) gc_mark_upvalue_cells(js, state->cells, state->cell_count);
 }
 
 void sv_eval_env_gc_free(ant_object_t *obj) {
@@ -88,6 +88,21 @@ const sv_eval_scope_flags_t *sv_eval_env_flags(ant_value_t env) {
   if (!is_object_type(env)) return &none;
   const sv_eval_env_state_t *state = sv_eval_env_state(env);
   return state && state->scope ? &state->scope->flags : &none;
+}
+
+bool sv_eval_scope_shadows_global(
+  ant_t *js, const sv_frame_t *frame, const sv_eval_scope_t *scope, const char *name, uint32_t len
+) {
+  for (;;) {
+    for (uint32_t i = 0; i < scope->count; i++) {
+      const sv_runtime_binding_t *binding = &scope->bindings[i];
+      if (sv_eval_binding_visible(binding) && binding->len == len && memcmp(binding->name, name, len) == 0) return true;
+    }
+    if (!scope->parent) break;
+    scope = sv_func_eval_scope(frame->func, scope->parent - 1);
+  }
+
+  return sv_eval_env_shadows_global(js, sv_frame_eval_env(js, frame), name, len);
 }
 
 bool sv_eval_env_shadows_global(ant_t *js, ant_value_t env, const char *name, uint32_t len) {

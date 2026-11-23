@@ -414,15 +414,20 @@ void sv_code_units_sweep(ant_t *js, uint64_t epoch) {
 static constexpr uint32_t SV_EVAL_CACHE_SLOTS = 128;
 static constexpr uint32_t SV_EVAL_CACHE_SEEN = 512;
 static constexpr size_t SV_EVAL_CACHE_MAX_SOURCE = 8192;
+static constexpr uint8_t SV_EVAL_CACHE_MAX_FORKS = 3;
 
 typedef struct {
   uint64_t hash;
   char *source;
   sv_func_t *func;
+  const void *scope;
+  const char *filename;
   uint32_t len;
   uint16_t bits;
   uint8_t layout_count;
   bool used;
+  bool shared;
+  uint8_t forks;
   const void *layout[SV_EVAL_LAYOUT_MAX];
 } sv_eval_cache_entry_t;
 
@@ -438,15 +443,18 @@ static void eval_cache_drop(sv_eval_cache_entry_t *entry) {
   *entry = (sv_eval_cache_entry_t){0};
 }
 
-bool sv_eval_cache_key(ant_t *js, sv_eval_cache_key_t *key, const char *source, size_t len, uint16_t bits) {
+bool sv_eval_cache_key(
+  ant_t *js, sv_eval_cache_key_t *key, const char *source, size_t len, uint16_t bits, const void *scope
+) {
   if (
     len == 0 || len > SV_EVAL_CACHE_MAX_SOURCE ||
     js->realm != js->main_realm || is_object_type(js->global_sandbox) ||
-    js->codegen_blocked || memchr(source, '`', len)
+    js->codegen_blocked
   ) return false;
 
   key->hash = ant_hash_mix(hash_key(source, len), ant_hash_secret[3] ^ bits);
   key->source = source;
+  key->scope = scope;
   key->len = (uint32_t)len;
   key->bits = bits;
 
@@ -459,33 +467,73 @@ bool sv_eval_cache_key_bind(ant_t *js, sv_eval_cache_key_t *key, ant_value_t env
 
   for (uint32_t i = 0; i < count; i++) key->hash = ant_hash_mix(key->hash, (uint64_t)(uintptr_t)key->layout[i]);
   key->layout_count = (uint8_t)count;
+  key->fork = false;
   return true;
 }
 
-static inline sv_eval_cache_entry_t *eval_cache_match(ant_t *js, const sv_eval_cache_key_t *key) {
+static inline sv_eval_cache_entry_t *eval_cache_match(ant_t *js, uint64_t hash, const sv_eval_cache_key_t *key) {
   sv_eval_cache_t *cache = js->code_units.eval_cache;
   if (!cache) return NULL;
 
-  sv_eval_cache_entry_t *entry = &cache->entries[key->hash & (SV_EVAL_CACHE_SLOTS - 1)];
+  sv_eval_cache_entry_t *entry = &cache->entries[hash & (SV_EVAL_CACHE_SLOTS - 1)];
   if (
-    !entry->func || entry->hash != key->hash || entry->len != key->len ||
-    entry->bits != key->bits || !entry->func->debug || entry->func->debug->filename != js->filename ||
+    entry->hash != hash || entry->len != key->len ||
+    entry->bits != key->bits || entry->filename != js->filename ||
     memcmp(entry->source, key->source, key->len) != 0
   ) return NULL;
 
   return entry;
 }
 
-__attribute__((always_inline)) sv_func_t *sv_eval_cache_find(ant_t *js, const sv_eval_cache_key_t *key) {
-  sv_eval_cache_entry_t *entry = eval_cache_match(js, key);
+static inline uint64_t eval_cache_fork_hash(const sv_eval_cache_key_t *key) {
+  return ant_hash_mix(key->hash, (uint64_t)(uintptr_t)key->scope ^ ant_hash_secret[2]);
+}
+
+static inline bool eval_cache_sighted(sv_eval_cache_t *cache, uint64_t hash) {
+  uint32_t *seen = &cache->seen[(hash >> 8) & (SV_EVAL_CACHE_SEEN - 1)];
+  uint32_t print = (uint32_t)(hash >> 32) | 1u;
+  if (*seen == print) return true;
+
+  *seen = print;
+  return false;
+}
+
+static __attribute__((noinline)) sv_func_t *eval_cache_find_scope(
+  ant_t *js, sv_eval_cache_entry_t *entry, sv_eval_cache_key_t *key
+) {
+  uint64_t hash = eval_cache_fork_hash(key);
+  sv_eval_cache_entry_t *fork = eval_cache_match(js, hash, key);
+  key->fork = false;
+
+  if (fork) {
+    fork->used = true;
+    if (entry) entry->used = true;
+    return fork->func;
+  }
+
   if (!entry) return NULL;
+  entry->used = true;
+
+  if (!eval_cache_sighted(js->code_units.eval_cache, hash)) return entry->func;
+  if (entry->forks == SV_EVAL_CACHE_MAX_FORKS || ((hash ^ key->hash) & (SV_EVAL_CACHE_SLOTS - 1)) == 0) {
+    entry->shared = true;
+    return entry->func;
+  }
+
+  key->fork = true;
+  return NULL;
+}
+
+__attribute__((always_inline)) sv_func_t *sv_eval_cache_find(ant_t *js, sv_eval_cache_key_t *key) {
+  sv_eval_cache_entry_t *entry = eval_cache_match(js, key->hash, key);
+  if (!entry || !((entry->scope == key->scope) | entry->shared)) return eval_cache_find_scope(js, entry, key);
 
   entry->used = true;
   return entry->func;
 }
 
 sv_func_t *sv_eval_cache_find_bound(ant_t *js, const sv_eval_cache_key_t *key) {
-  sv_eval_cache_entry_t *entry = eval_cache_match(js, key);
+  sv_eval_cache_entry_t *entry = eval_cache_match(js, key->hash, key);
   if (
     !entry || entry->layout_count != key->layout_count ||
     memcmp(entry->layout, key->layout, key->layout_count * sizeof(key->layout[0])) != 0
@@ -496,7 +544,7 @@ sv_func_t *sv_eval_cache_find_bound(ant_t *js, const sv_eval_cache_key_t *key) {
 }
 
 void sv_eval_cache_store(ant_t *js, const sv_eval_cache_key_t *key, sv_func_t *func, bool bound) {
-  if (!func || !func->unit) return;
+  if (!func || !func->unit || !func->debug || memchr(key->source, '`', key->len)) return;
   uint8_t layout_count = bound ? key->layout_count : 0;
   sv_eval_cache_t *cache = js->code_units.eval_cache;
   
@@ -506,24 +554,20 @@ void sv_eval_cache_store(ant_t *js, const sv_eval_cache_key_t *key, sv_func_t *f
     js->code_units.eval_cache = cache;
   }
 
-  uint32_t *seen = &cache->seen[(key->hash >> 8) & (SV_EVAL_CACHE_SEEN - 1)];
-  uint32_t print = (uint32_t)(key->hash >> 32) | 1u;
-  
-  if (*seen != print) {
-    *seen = print;
-    return;
-  }
+  uint64_t hash = key->fork ? eval_cache_fork_hash(key) : key->hash;
+  if (!key->fork && !eval_cache_sighted(cache, hash)) return;
 
   char *source = malloc(key->len);
   if (!source) return;
   memcpy(source, key->source, key->len);
 
-  sv_eval_cache_entry_t *entry = &cache->entries[key->hash & (SV_EVAL_CACHE_SLOTS - 1)];
+  if (key->fork) cache->entries[key->hash & (SV_EVAL_CACHE_SLOTS - 1)].forks++;
+  sv_eval_cache_entry_t *entry = &cache->entries[hash & (SV_EVAL_CACHE_SLOTS - 1)];
   eval_cache_drop(entry);
   sv_code_unit_pin(func->unit);
   
   *entry = (sv_eval_cache_entry_t){
-    .hash = key->hash, .source = source, .func = func,
+    .hash = hash, .source = source, .func = func, .scope = key->scope, .filename = func->debug->filename,
     .len = key->len, .bits = key->bits, .layout_count = layout_count, .used = true,
   };
   for (uint8_t i = 0; i < layout_count; i++) entry->layout[i] = key->layout[i];

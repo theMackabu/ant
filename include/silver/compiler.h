@@ -25,9 +25,9 @@ js_eval_result_t js_eval_source(
   sv_compile_mode_t mode, bool strict, js_eval_scope_t scope
 );
 
-js_eval_result_t js_eval_source_in_frame(
-  ant_t *js, const char *buf, size_t len,
-  sv_compile_mode_t mode, bool strict, js_eval_scope_t scope, struct sv_frame *caller
+ant_value_t js_eval_in_frame(
+  struct sv_vm *vm, ant_t *js, struct sv_frame *frame, const char *source, size_t len,
+  const struct sv_eval_scope *layout, ant_value_t new_target
 );
 
 static inline bool sv_compile_mode_is_eval(sv_compile_mode_t mode) {
@@ -249,6 +249,7 @@ typedef struct {
   uint32_t parent;
   int local_count;
   bool binds_arguments;
+  bool binds_params;
   sv_eval_scope_flags_t flags;
 } sv_eval_scope_builder_t;
 
@@ -363,6 +364,7 @@ typedef struct sv_compiler {
   bool eval_shadows_global_this;
   ant_value_t eval_env;
   bool eval_reads_arguments;
+  bool eval_writes_names;
 
   sv_eval_decl_t *eval_vars;
   uint32_t *eval_var_index;
@@ -499,6 +501,9 @@ enum {
 
 uint16_t sv_eval_scope_bits(const sv_eval_scope_flags_t *flags);
 uint16_t sv_eval_shadow_bits(ant_t *js, const js_eval_scope_t *scope, const char *source, size_t len);
+uint16_t sv_eval_frame_shadow_bits(
+  ant_t *js, const struct sv_frame *frame, const struct sv_eval_scope *layout, const char *source, size_t len
+);
 
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,

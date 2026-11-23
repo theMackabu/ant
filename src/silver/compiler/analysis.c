@@ -4,9 +4,11 @@ typedef struct sv_write_scan sv_write_scan_t;
 
 struct sv_write_scan {
   void (*mark)(sv_write_scan_t *scan, const char *name, uint32_t len);
+  void (*eval)(sv_write_scan_t *scan, const sv_ast_t *call);
   void *data;
   uint32_t used;
   bool repeated;
+  bool nested;
   bool arguments_poisons;
   bool poisoned;
 };
@@ -45,9 +47,17 @@ static bool write_scan_repeats(const sv_ast_t *node, const sv_ast_t *child) {
   }
 }
 
+static bool write_scan_nests(const sv_ast_t *node) {
+  switch (node->type) {
+    case N_FUNC: case N_ARROW: case N_CLASS: case N_METHOD: case N_STATIC_BLOCK: return true;
+    default: return false;
+  }
+}
+
 static void write_scan(sv_write_scan_t *scan, const sv_ast_t *node) {
   if (!node || scan->poisoned) return;
   bool repeated = scan->repeated;
+  bool nested = scan->nested;
   switch (node->type) {
     case N_NUMBER: case N_STRING: case N_BIGINT: case N_BOOL:
     case N_NULL: case N_UNDEF: case N_THIS: case N_GLOBAL_THIS:
@@ -59,8 +69,10 @@ static void write_scan(sv_write_scan_t *scan, const sv_ast_t *node) {
       scan->poisoned = true;
       return;
     case N_CALL:
-      if (node->left && node->left->type == N_IDENT && is_ident_str(node->left->str, node->left->len, "eval", 4))
-        scan->poisoned = true;
+      if (node->left && node->left->type == N_IDENT && is_ident_str(node->left->str, node->left->len, "eval", 4)) {
+        if (scan->eval) scan->eval(scan, node);
+        else scan->poisoned = true;
+      }
       break;
     case N_ASSIGN: write_scan_mark_target(scan, node->left); break;
     case N_UPDATE: write_scan_mark_target(scan, node->right); break;
@@ -79,15 +91,18 @@ static void write_scan(sv_write_scan_t *scan, const sv_ast_t *node) {
   sv_ast_children_t it = sv_ast_children(node);
   for (const sv_ast_t *child; (child = sv_ast_next_child(&it));) {
     scan->repeated = repeated || write_scan_repeats(node, sv_ast_child_is_arg(&it) ? NULL : child);
+    scan->nested = nested || write_scan_nests(node);
     write_scan(scan, child);
   }
   
   scan->repeated = repeated;
+  scan->nested = nested;
 }
 
 typedef struct {
   const sv_ast_t *params;
   uint64_t written;
+  sv_compiler_t *c;
 } sv_value_params_t;
 
 static void value_params_mark(sv_write_scan_t *scan, const char *name, uint32_t len) {
@@ -113,6 +128,29 @@ bool param_captured_by_value(sv_compiler_t *c, int local) {
     c->value_params_known = true;
   }
   return (c->value_params >> local) & 1;
+}
+
+static void eval_params_literal(void *data, const sv_ast_t *program) {
+  if (!program || program->type != N_PROGRAM) return;
+  for (int i = 0; i < program->args.count; i++) write_scan(data, program->args.items[i]);
+}
+
+static void eval_params_eval(sv_write_scan_t *scan, const sv_ast_t *call) {
+  sv_value_params_t *params = scan->data;
+  if (scan->nested) {
+    params->written = ~0ull;
+    return;
+  }
+  
+  const sv_ast_t *source = call->args.count > 0 ? call->args.items[0] : NULL;
+  if (source && source->type == N_STRING) eval_source_visit(params->c, source, eval_params_literal, scan);
+}
+
+uint64_t eval_written_params(sv_compiler_t *c, const sv_ast_t *fn) {
+  sv_value_params_t params = {.params = fn, .c = c};
+  sv_write_scan_t scan = {.mark = value_params_mark, .eval = eval_params_eval, .data = &params};
+  write_scan(&scan, fn->body);
+  return scan.poisoned || fn->args.count > 64 ? ~0ull : params.written;
 }
 
 static sv_write_count_t *write_count_slot(sv_write_count_t *table, uint32_t cap, const char *name, uint32_t len) {
