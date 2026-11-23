@@ -227,6 +227,7 @@ static ant_value_t dns_query_issue(
 
   bool completed = false;
   req->completed = &completed;
+  dns_channel_enter(channel);
   dns_channel_query_started(channel);
   ares_query_dnsrec(channel->ares, qname, ARES_CLASS_IN, dns_rr_info[rr].type, dns_query_cb, req, NULL);
   
@@ -236,6 +237,7 @@ static ant_value_t dns_query_issue(
   }
   
   dns_channel_schedule(channel);
+  dns_channel_leave(channel);
 
   GC_ROOT_RESTORE(js, mark);
   return result;

@@ -34,12 +34,17 @@ static void dns_channel_refresh_refs(dns_channel_t *channel) {
   for (dns_poll_t *poll = channel->polls; poll; poll = poll->next) dns_channel_set_ref((uv_handle_t *)&poll->handle, ref);
 }
 
+static void dns_channel_process(dns_channel_t *channel, ares_socket_t read_fd, ares_socket_t write_fd) {
+  if (!channel->ares) return;
+  dns_channel_enter(channel);
+  ares_process_fd(channel->ares, read_fd, write_fd);
+  dns_channel_schedule(channel);
+  dns_channel_leave(channel);
+}
+
 static void dns_timer_cb(uv_timer_t *timer) {
   GC_UV_CALLBACK();
-  dns_channel_t *channel = timer->data;
-  if (!channel->ares) return;
-  ares_process_fd(channel->ares, ARES_SOCKET_BAD, ARES_SOCKET_BAD);
-  dns_channel_schedule(channel);
+  dns_channel_process(timer->data, ARES_SOCKET_BAD, ARES_SOCKET_BAD);
 }
 
 void dns_channel_schedule(dns_channel_t *channel) {
@@ -58,13 +63,9 @@ void dns_channel_schedule(dns_channel_t *channel) {
 static void dns_poll_cb(uv_poll_t *handle, int status, int events) {
   GC_UV_CALLBACK();
   dns_poll_t *poll = handle->data;
-  dns_channel_t *channel = poll->channel;
-  if (!channel->ares) return;
-
   ares_socket_t read_fd = status < 0 || (events & UV_READABLE) ? poll->fd : ARES_SOCKET_BAD;
   ares_socket_t write_fd = status < 0 || (events & UV_WRITABLE) ? poll->fd : ARES_SOCKET_BAD;
-  ares_process_fd(channel->ares, read_fd, write_fd);
-  dns_channel_schedule(channel);
+  dns_channel_process(poll->channel, read_fd, write_fd);
 }
 
 static void dns_sock_state_cb(void *data, ares_socket_t fd, int readable, int writable) {
@@ -156,15 +157,7 @@ void dns_channel_query_finished(dns_channel_t *channel) {
   if (--channel->queries == 0 && !channel->destroyed) dns_channel_refresh_refs(channel);
 }
 
-void dns_channel_destroy(dns_channel_t *channel) {
-  if (!channel || channel->destroyed) return;
-  ant_t *js = channel->js;
-
-  channel->destroyed = true;
-  if (channel->owner_ref) *channel->owner_ref = NULL;
-  Ant_List_Remove(channel);
-  if (js->dns_default_channel == channel) js->dns_default_channel = NULL;
-
+static void dns_channel_close(dns_channel_t *channel) {
   if (channel->ares) {
     ares_destroy(channel->ares);
     channel->ares = NULL;
@@ -180,6 +173,26 @@ void dns_channel_destroy(dns_channel_t *channel) {
 
   uv_timer_stop(&channel->timer);
   uv_close((uv_handle_t *)&channel->timer, dns_timer_close_cb);
+}
+
+void dns_channel_enter(dns_channel_t *channel) {
+  channel->entered++;
+}
+
+void dns_channel_leave(dns_channel_t *channel) {
+  if (--channel->entered == 0 && channel->destroyed) dns_channel_close(channel);
+}
+
+void dns_channel_destroy(dns_channel_t *channel) {
+  if (!channel || channel->destroyed) return;
+  ant_t *js = channel->js;
+
+  channel->destroyed = true;
+  if (channel->owner_ref) *channel->owner_ref = NULL;
+  Ant_List_Remove(channel);
+  if (js->dns_default_channel == channel) js->dns_default_channel = NULL;
+
+  if (!channel->entered) dns_channel_close(channel);
 }
 
 ant_value_t dns_channel_get_servers(ant_t *js, dns_channel_t *channel) {
@@ -292,7 +305,9 @@ ant_value_t dns_channel_set_servers(ant_t *js, dns_channel_t *channel, ant_value
     used += (size_t)snprintf(csv + used, cap - used, "%s%s", used ? "," : "", server);
   }
 
+  dns_channel_enter(channel);
   int status = ares_set_servers_ports_csv(channel->ares, csv);
+  dns_channel_leave(channel);
   free(csv);
 
   if (status != ARES_SUCCESS) {
