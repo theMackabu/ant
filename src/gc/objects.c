@@ -1295,6 +1295,7 @@ static inline void gc_walk_current_stack(ant_t *js, gc_stack_range_fn fn, void *
 #endif
   fn(js, ctx, lo, hi);
 }
+
 __attribute__((always_inline))
 static inline void gc_walk_other_stacks(ant_t *js, gc_stack_range_fn fn, void *ctx) {
   if (js->cstk.main_base && js->cstk.main_lo) {

@@ -93,6 +93,16 @@ static inline __attribute__((always_inline)) uintptr_t gc_native_sp(void) {
 typedef void (*gc_extra_roots_fn)(ant_t *js);
 typedef void (*gc_stack_range_fn)(ant_t *js, void *ctx, uintptr_t lo, uintptr_t hi);
 
+typedef struct gc_shared_elements {
+  uint32_t refs;
+  uint32_t count;
+  bool copy_on_create;
+  bool outgrown;
+  bool has_holes;
+  bool has_heap;
+  ant_value_t values[];
+} gc_shared_elements_t;
+
 uint64_t gc_get_epoch(ant_t *js);
 uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots);
 
@@ -131,16 +141,6 @@ void gc_shared_elements_mark(ant_t *js, const gc_shared_elements_t *block);
 void gc_shared_elements_finalize(ant_t *js, ant_object_t *obj);
 void gc_root_pending_promise(ant_t *js, ant_object_t *obj);
 void gc_unroot_pending_promise(ant_t *js, ant_object_t *obj);
-
-typedef struct gc_shared_elements {
-  uint32_t refs;
-  uint32_t count;
-  bool copy_on_create;
-  bool outgrown;
-  bool has_holes;
-  bool has_heap;
-  ant_value_t values[];
-} gc_shared_elements_t;
 
 gc_shared_elements_t *gc_shared_elements_alloc(ant_t *js, const ant_value_t *values, uint32_t count);
 void gc_shared_elements_release(ant_t *js, gc_shared_elements_t *block);
