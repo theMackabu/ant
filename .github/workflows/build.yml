@@ -2,6 +2,8 @@ name: Build All Platforms
 
 on:
   pull_request:
+  schedule:
+    - cron: '17 5 * * *'
   workflow_dispatch:
     inputs:
       channel:
@@ -112,7 +114,7 @@ jobs:
       - name: Generate build summary
         id: version
         env:
-          CHANNEL: ${{ inputs.channel || 'stable' }}
+          CHANNEL: ${{ github.event_name == 'schedule' && 'canary' || inputs.channel || 'stable' }}
         run: |
           VERSIONS=()
           for dir in versions/version-*; do
@@ -213,7 +215,7 @@ jobs:
       - name: Refresh manifest
         env:
           MANIFEST_REFRESH_TOKEN: ${{ secrets.MANIFEST_REFRESH_TOKEN }}
-          CHANNEL: ${{ inputs.channel || 'stable' }}
+          CHANNEL: ${{ github.event_name == 'schedule' && 'canary' || inputs.channel || 'stable' }}
         if: ${{ env.MANIFEST_REFRESH_TOKEN != '' }}
         run: |
           curl -fsS -X POST -G https://manifest.antjs.org/v1/refresh \

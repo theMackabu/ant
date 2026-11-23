@@ -91,7 +91,7 @@ runs:
     - name: Configure and build
       shell: bash
       env:
-        ANT_CANARY: ${{ github.event.inputs.channel == 'canary' && '1' || '0' }}
+        ANT_CANARY: ${{ (github.event_name == 'schedule' || github.event.inputs.channel == 'canary') && '1' || '0' }}
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           MSYS2_PATH=$(cygpath "$RUNNER_TEMP/msys64/clang64/bin")
