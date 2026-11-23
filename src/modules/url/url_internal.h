@@ -51,10 +51,6 @@ static inline bool url_fmt_append_n(url_fmt_buf_t *b, const char *s, size_t n) {
   return true;
 }
 
-static inline bool url_fmt_append(url_fmt_buf_t *b, const char *s) {
-  return s ? url_fmt_append_n(b, s, strlen(s)) : true;
-}
-
 static inline bool url_fmt_append_c(url_fmt_buf_t *b, char c) {
   if (!url_fmt_reserve(b, 1)) return false;
   b->buf[b->len++] = c;

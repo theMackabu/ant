@@ -752,14 +752,6 @@ bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *
   return true;
 }
 
-bool sv_lookup_srcspan(sv_func_t *func, int bc_offset, uint32_t *src_off, uint32_t *src_end) {
-  const sv_srcpos_t *pos = sv_srcpos_at(func, bc_offset);
-  if (!pos) return false;
-  if (src_off) *src_off = pos->src_off;
-  if (src_end) *src_end = pos->src_end < pos->src_off ? pos->src_off : pos->src_end;
-  return true;
-}
-
 static inline ant_flat_string_t *sv_string_builder_flat_ptr(ant_value_t value) {
   if (vtype(value) != kTypeString || str_is_heap_rope(value) || str_is_heap_builder(value)) return NULL;
   return (ant_flat_string_t *)vptr(value);

@@ -1358,20 +1358,6 @@ int utf16_index_to_byte_offset(
   return (int)utf16_idx;
 }
 
-size_t utf16_index_to_byte_offset_floor(
-  const char *str,
-  size_t byte_len,
-  size_t utf16_idx
-) {
-  if (str_is_ascii(str)) return utf16_idx < byte_len ? utf16_idx : byte_len;
-
-  utf16_pos_t pos;
-  utf16_pos_open(&pos, str, byte_len);
-  size_t byte = utf16_pos_seek_to(&pos, utf16_idx, false);
-  utf16_pos_store(&pos);
-  return byte;
-}
-
 static __attribute__((noinline)) utf16_range_splits_t utf16_range_to_byte_range_slow(
   const char *str,
   size_t byte_len,

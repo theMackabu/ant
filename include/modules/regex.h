@@ -36,7 +36,6 @@ ant_value_t reject_regexp_arg(ant_t *js, ant_value_t value, const char *method_n
 ant_value_t regexp_create_literal(ant_t *js, ant_value_t pattern, ant_value_t flags);
 ant_value_t regexp_split_limit(ant_t *js, ant_value_t limit, uint32_t *out);
 
-size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, size_t dst_size, uint8_t flags);
 js_cstr_t js_to_pcre2_pattern_cstr(const char *src, size_t src_len, char *stack_buf, size_t stack_size, uint8_t flags);
 
 bool regexp_exec_truthy_try_fast(

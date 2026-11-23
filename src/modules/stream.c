@@ -2921,11 +2921,6 @@ static ant_value_t stream_ws_begin_end(ant_t *js, stream_private_state_t *priv, 
   return stream_obj;
 }
 
-ant_value_t stream_writable_begin_end(ant_t *js, ant_value_t stream_obj, ant_value_t callback) {
-  stream_private_state_t *priv = stream_writable_of(stream_obj);
-  return priv ? stream_ws_begin_end(js, priv, callback) : stream_obj;
-}
-
 static ant_value_t stream_writable_end_after_write(ant_params_t) {
   stream_op_t *op = stream_op_current(js, call_func);
   if (op->called) return Ant_Value_Undefined;

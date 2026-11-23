@@ -97,14 +97,6 @@ size_t form_urlencode_into(char *out, const char *str, size_t len) {
   return j;
 }
 
-char *form_urlencode_n(const char *str, size_t len) {
-  if (!str) return strdup("");
-  char *out = malloc(len * 3 + 1);
-  if (!out) return strdup("");
-  out[form_urlencode_into(out, str, len)] = '\0';
-  return out;
-}
-
 static char *url_decoded_utf8(char *out, size_t len, size_t *out_len) {
   size_t valid = utf8_valid_prefix(out, len, NULL);
   if (valid < len) {
@@ -145,42 +137,12 @@ char *form_urldecode_n(const char *str, size_t len, size_t *out_len) {
   return url_decoded_utf8(out, j, out_len);
 }
 
-char *url_decode_component_len(const char *str, size_t *out_len) {
-  if (out_len) *out_len = 0;
-  if (!str) return strdup("");
-  size_t len = strlen(str);
-  char *out = malloc(len + 1);
-
-  if (!out) return strdup("");
-  size_t j = 0;
-
-  for (size_t i = 0; i < len; i++) {
-    if (
-      str[i] == '%' && i + 2 < len &&
-      isxdigit((unsigned char)str[i+1]) &&
-      isxdigit((unsigned char)str[i+2])
-    ) {
-      int hi = isdigit((unsigned char)str[i+1]) ? str[i+1]-'0' : tolower((unsigned char)str[i+1])-'a'+10;
-      int lo = isdigit((unsigned char)str[i+2]) ? str[i+2]-'0' : tolower((unsigned char)str[i+2])-'a'+10;
-      out[j++] = (char)((hi << 4) | lo);
-      i += 2;
-    } else out[j++] = str[i];
-  }
-
-  out[j] = '\0';
-  return url_decoded_utf8(out, j, out_len);
-}
-
 char *form_urldecode_len(const char *str, size_t *out_len) {
   return form_urldecode_n(str, str ? strlen(str) : 0, out_len);
 }
 
 char *form_urldecode(const char *str) {
   return form_urldecode_len(str, NULL);
-}
-
-char *url_decode_component(const char *str) {
-  return url_decode_component_len(str, NULL);
 }
 
 int ada_url_to_state(ada_url url, url_state_t *s) {

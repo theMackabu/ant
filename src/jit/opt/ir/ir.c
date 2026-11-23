@@ -54,16 +54,6 @@ bool ir_binary_is_bitwise(ir_binary_op_t op) {
   }
 }
 
-int ir_comparison_equality(ir_comparison_t comparison) {
-  switch (comparison) {
-    case IR_CMP_STRICTLY_EQUALS:
-    case IR_CMP_LOOSELY_EQUALS: return 1;
-    case IR_CMP_STRICTLY_INEQUALS:
-    case IR_CMP_LOOSELY_INEQUALS: return 0;
-    default: return -1;
-  }
-}
-
 bool ir_condition_equal(ir_condition_t a, ir_condition_t b) {
   if (a.kind != b.kind) return false;
   switch (a.kind) {

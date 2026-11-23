@@ -189,10 +189,6 @@ int ant_xdg_cache_path(char *out, size_t out_size, const char *suffix) {
   return ant_xdg_path(out, out_size, "XDG_CACHE_HOME", ".cache", suffix);
 }
 
-int ant_xdg_data_path(char *out, size_t out_size, const char *suffix) {
-  return ant_xdg_path(out, out_size, "XDG_DATA_HOME", ".local/share", suffix);
-}
-
 int ant_xdg_state_path(char *out, size_t out_size, const char *suffix) {
   return ant_xdg_path(out, out_size, "XDG_STATE_HOME", ".local/state", suffix);
 }

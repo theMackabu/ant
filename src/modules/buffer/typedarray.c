@@ -79,11 +79,6 @@ bool buffer_typedarray_data_read_index(ant_t *js, const TypedArrayData *ta_data,
   #undef BUFFER_TA_READ_BIGINT
 }
 
-bool buffer_typedarray_read_index(ant_t *js, ant_value_t value, size_t index, ant_value_t *out) {
-  TypedArrayData *ta_data = buffer_get_typedarray_data(value);
-  return buffer_typedarray_data_read_index(js, ta_data, index, out);
-}
-
 void typedarray_view_refresh(TypedArrayData *ta) {
   ArrayBufferData *backing = ta->backing;
   size_t size = get_element_size(ta->type);

@@ -80,19 +80,6 @@ static inline bool sv_env_try_get_interned(
   return false;
 }
 
-static inline ant_value_t sv_env_get(
-  ant_t *js, ant_value_t env, const char *str, uint32_t len
-) {
-  if (!str) return Ant_Value_Undefined;
-
-  const char *interned = intern_string(js, str, len);
-  if (!interned) return Ant_Value_Undefined;
-
-  ant_value_t val = Ant_Value_Undefined;
-  (void)sv_env_try_get_interned(js, env, interned, len, &val);
-  return val;
-}
-
 static inline ant_value_t sv_env_put(
   ant_t *js, ant_value_t env, const char *str, uint32_t len,
   ant_value_t val, bool is_strict

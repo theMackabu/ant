@@ -36,7 +36,6 @@ typedef struct {
   bool valid;
 } js_error_site_t;
 
-js_err_type_t get_error_type(ant_t *js);
 const char *js_err_type_name(js_err_type_t err_type);
 
 ant_value_t js_mkerr_code(ant_t *js, js_err_type_t type, const char *code, const char *message);

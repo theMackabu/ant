@@ -2809,10 +2809,6 @@ static ant_value_t esm_import_cstr_attrs(
   return ns;
 }
 
-ant_value_t js_esm_import_sync_cstr_from_require(ant_t *js, const char *specifier, size_t spec_len, const char *base_path) {
-  return esm_require_cstr(js, specifier, spec_len, base_path, false);
-}
-
 ant_value_t js_esm_import_sync_cstr_from(ant_t *js, const char *specifier, size_t spec_len, const char *base_path) {
   return esm_import_cstr_attrs(js, specifier, spec_len, base_path, Ant_Value_Undefined, false);
 }
@@ -3093,17 +3089,6 @@ ant_value_t js_esm_import_sync_from(ant_t *js, ant_value_t specifier, const char
   return esm_import_from_attrs(js, specifier, base_path, Ant_Value_Undefined);
 }
 
-ant_value_t js_esm_import_sync_from_require(ant_t *js, ant_value_t specifier, const char *base_path) {
-  if (vtype(specifier) != kTypeString)
-    return js_mkerr(js, "require() expects a string specifier");
-    
-  ant_offset_t spec_len = 0;
-  ant_offset_t spec_off = vstr(js, specifier, &spec_len);
-  const char *spec_str = (const char *)(uintptr_t)(spec_off);
-
-  return js_esm_import_sync_cstr_from_require(js, spec_str, (size_t)spec_len, base_path);
-}
-
 ant_value_t js_esm_import_sync(ant_t *js, ant_value_t specifier) {
   return js_esm_import_sync_from(js, specifier, NULL);
 }
@@ -3119,10 +3104,6 @@ ant_value_t js_esm_import_sync_typed(ant_t *js, ant_value_t specifier, const cha
   GC_ROOT_RESTORE(js, root_mark);
   
   return ns;
-}
-
-ant_value_t js_esm_import_dynamic(ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t *out_tla_promise) {
-  return js_esm_import_dynamic_ex(js, specifier, base_path, Ant_Value_Undefined, out_tla_promise);
 }
 
 ant_value_t js_esm_import_dynamic_ex(ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t attrs, ant_value_t *out_tla_promise) {

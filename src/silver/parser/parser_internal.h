@@ -337,15 +337,6 @@ static inline bool is_lexical_decl_stmt(sv_ast_t *n) {
   );
 }
 
-static inline bool var_decl_has_initializer(sv_ast_t *n) {
-  if (!n || n->type != N_VAR) return false;
-  for (int i = 0; i < n->args.count; i++) {
-    sv_ast_t *decl = n->args.items[i];
-    if (decl && decl->type == N_VARDECL && decl->right) return true;
-  }
-  return false;
-}
-
 static inline sv_ast_t *mk_ident_from_tok(sv_parser_t *p) {
   if (p->lx.st.tok == TOK_BIGINT) {
     uint32_t key_len = 0;

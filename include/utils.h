@@ -37,7 +37,6 @@ int ant_user_bin_path(char *out, size_t out_size);
 int ant_get_exe_path(char *out, size_t out_len, int argc, char **argv);
 
 int ant_xdg_cache_path(char *out, size_t out_size, const char *suffix);
-int ant_xdg_data_path(char *out, size_t out_size, const char *suffix);
 int ant_xdg_state_path(char *out, size_t out_size, const char *suffix);
 
 bool ant_env_bool(const char *value, bool default_value);

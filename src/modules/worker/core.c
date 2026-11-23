@@ -227,10 +227,6 @@ ant_value_t ant_worker_exit(ant_t *js, int code) {
   return js_interrupt_raise(js);
 }
 
-bool ant_worker_is_worker(ant_t *js) {
-  return js->worker != NULL;
-}
-
 uint64_t ant_worker_thread_id(ant_t *js) {
   return js->worker ? js->worker->thread_id : 0;
 }

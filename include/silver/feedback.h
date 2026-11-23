@@ -314,12 +314,6 @@ static inline uint8_t *sv_tfb_specialization_site(
   return site;
 }
 
-static inline void sv_tfb_record_specialization_at(
-  sv_func_t *func, uint8_t *site, uint8_t old, bool matches
-) {
-  sv_tfb_site_update(func, site, old, sv_tfb_add_specialization_sample(old, old, matches));
-}
-
 static inline bool sv_tfb_specialization_ready(uint8_t feedback) {
   uint8_t count = (uint8_t)((feedback & SV_TFB_SPEC_COUNT_MASK) >> SV_TFB_SPEC_COUNT_SHIFT);
   return count >= SV_TFB_SPEC_MIN_SAMPLES && (feedback & SV_TFB_SPEC_MISMATCH) == 0;
@@ -382,13 +376,6 @@ static inline bool sv_tfb_dense_element(
   if (vtype(*candidate) == kTypeSentinel) return false;
   if (slot) *slot = *candidate;
 
-  return true;
-}
-
-static inline bool sv_tfb_dense_numeric_element(ant_value_t object, ant_value_t key, ant_value_t *slot) {
-  ant_value_t element;
-  if (!sv_tfb_dense_element(object, key, &element) || vtype(element) != kTypeNumber) return false;
-  if (slot) *slot = element;
   return true;
 }
 

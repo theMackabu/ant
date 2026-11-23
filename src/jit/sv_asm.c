@@ -54,20 +54,8 @@ void sv_asm_jump(const sv_asm_t *a, sv_asm_label_t label) {
   MIR_append_insn(a->ctx, a->fn, MIR_new_insn(a->ctx, MIR_JMP, sv_asm_l(a, label)));
 }
 
-void sv_asm_bt(const sv_asm_t *a, sv_asm_label_t label, MIR_reg_t cond) {
-  sv_asm_emit(a, MIR_BT, sv_asm_l(a, label), sv_asm_r(a, cond));
-}
-
-void sv_asm_bf(const sv_asm_t *a, sv_asm_label_t label, MIR_reg_t cond) {
-  sv_asm_emit(a, MIR_BF, sv_asm_l(a, label), sv_asm_r(a, cond));
-}
-
 void sv_asm_mov_imm(const sv_asm_t *a, MIR_reg_t dst, uint64_t imm) {
   sv_asm_emit(a, MIR_MOV, sv_asm_r(a, dst), MIR_new_uint_op(a->ctx, imm));
-}
-
-void sv_asm_f64_mov_imm(const sv_asm_t *a, MIR_reg_t dst, double imm) {
-  sv_asm_emit(a, MIR_DMOV, sv_asm_r(a, dst), MIR_new_double_op(a->ctx, imm));
 }
 
 void sv_asm_load(const sv_asm_t *a, MIR_type_t type, MIR_reg_t dst, MIR_reg_t base, MIR_disp_t disp) {
@@ -76,10 +64,6 @@ void sv_asm_load(const sv_asm_t *a, MIR_type_t type, MIR_reg_t dst, MIR_reg_t ba
 
 void sv_asm_store(const sv_asm_t *a, MIR_type_t type, MIR_reg_t base, MIR_disp_t disp, MIR_reg_t src) {
   sv_asm_emit(a, sv_asm_move_code(type), sv_asm_mem(a, type, base, disp), sv_asm_r(a, src));
-}
-
-void sv_asm_store_imm(const sv_asm_t *a, MIR_type_t type, MIR_reg_t base, MIR_disp_t disp, uint64_t imm) {
-  sv_asm_emit(a, MIR_MOV, sv_asm_mem(a, type, base, disp), MIR_new_uint_op(a->ctx, imm));
 }
 
 void sv_asm_load_index(

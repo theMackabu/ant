@@ -5,7 +5,6 @@
 #include "../ir/ir.h"
 
 void pass_optimize(ir_graph_t *graph, const ir_frame_layout_t *layout, bool verify);
-void pass_optimize_with_dumps(ir_graph_t *graph, const ir_frame_layout_t *layout, bool verify, opt_text_t *dumps);
 
 void pass_simplify(ir_graph_t *graph);
 void pass_truncation(ir_graph_t *graph);

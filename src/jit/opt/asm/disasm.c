@@ -1162,13 +1162,4 @@ void asm_listing_free(asm_listing_t *listing) {
   *listing = (asm_listing_t){ 0 };
 }
 
-void asm_listing_print(FILE *out, const asm_listing_t *listing) {
-  for (size_t i = 0; i < listing->count; i++) {
-    const asm_insn_t *insn = &listing->items[i];
-    fprintf(out, "%6zx  %s", insn->offset, insn->text);
-    if (insn->has_constant && insn->text[0] != '.') fprintf(out, "  ; 0x%" PRIx64, insn->constant);
-    fputc('\n', out);
-  }
-}
-
 #pragma clang attribute pop

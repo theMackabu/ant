@@ -686,11 +686,6 @@ bool js_array_iteration_default(ant_t *js, ant_value_t arr) {
     next == js->sym.array_iterator_next;
 }
 
-ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src) {
-  if (!Ant_Array_UnshareValue(js, dst)) return js_mkerr(js, "oom");
-  return js_arr_spread_into_owned(js, dst, src);
-}
-
 ant_value_t js_arr_spread_into_owned(ant_t *js, ant_value_t dst, ant_value_t src) {
   ant_offset_t len = 0;
   ant_value_t len_result = array_like_length_checked(js, src, &len);
@@ -1466,18 +1461,6 @@ ant_value_t proxy_aware_length_slow(ant_t *js, ant_value_t obj, ant_offset_t *ou
     return Ant_Value_Undefined;
   }
   return array_like_length_checked(js, obj, out_len);
-}
-
-ant_value_t proxy_aware_get_elem(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
-  if (is_proxy(obj)) return proxy_get(js, obj, key, key_len);
-  ant_prop_loc_t off = lkp(js, obj, key, key_len);
-  return off.obj ? js_prop_load(off) : Ant_Value_Undefined;
-}
-
-ant_value_t proxy_delete_index(ant_t *js, ant_value_t obj, ant_offset_t idx) {
-  char idxstr[24];
-  size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)idx);
-  return proxy_delete(js, obj, idxstr, idxlen);
 }
 
 bool array_method_dense_element(ant_value_t arr, ant_offset_t idx, ant_value_t *out) {
