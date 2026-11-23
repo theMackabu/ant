@@ -570,17 +570,20 @@ void sv_jit_forget_dying(ant_t *js, uint64_t epoch) {
 }
 
 __attribute__((no_sanitize("address")))
-void jit_code_mark_stack(sv_jit_ctx_t *jc, ant_t *js, uintptr_t from, uintptr_t to) {
-  struct jit_code_registry *reg = jc ? jc->code_registry : NULL;
-  if (!reg || !reg->len) return;
-  
-  uintptr_t lo = from < to ? from : to, hi = from < to ? to : from;
-  for (uintptr_t at = (lo + 7) & ~(uintptr_t)7; at + sizeof(uintptr_t) <= hi; at += sizeof(uintptr_t)) {
+static void jit_code_mark_range(ant_t *js, void *ctx, uintptr_t lo, uintptr_t hi) {
+  struct jit_code_registry *reg = ctx;
+  for (uintptr_t at = lo; at + sizeof(uintptr_t) <= hi; at += sizeof(uintptr_t)) {
     uintptr_t word = *(const uintptr_t *)at;
     
     jit_code_range_t *r = jit_code_range_at(reg, word);
     if (r) gc_mark_func_ref(js, r->func);
   }
+}
+
+void jit_code_mark_stack(sv_jit_ctx_t *jc, ant_t *js) {
+  struct jit_code_registry *reg = jc ? jc->code_registry : NULL;
+  if (!reg || !reg->len) return;
+  gc_stack_live_ranges(js, jit_code_mark_range, reg);
 }
 
 int sv_jit_frames_at(ant_t *js, uintptr_t pc, sv_jit_frame_t *out, int cap) {

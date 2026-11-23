@@ -78,7 +78,7 @@ void jit_code_info(
 
 void jit_code_unregister(sv_jit_ctx_t *jc, const void *code);
 void jit_code_registry_destroy(sv_jit_ctx_t *jc);
-void jit_code_mark_stack(sv_jit_ctx_t *jc, ant_t *js, uintptr_t from, uintptr_t to);
+void jit_code_mark_stack(sv_jit_ctx_t *jc, ant_t *js);
 void jit_drop_all_code(sv_jit_ctx_t *jc);
 
 typedef struct {

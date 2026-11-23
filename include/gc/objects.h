@@ -91,38 +91,7 @@ static inline __attribute__((always_inline)) uintptr_t gc_native_sp(void) {
 }
 
 typedef void (*gc_extra_roots_fn)(ant_t *js);
-
-uint64_t gc_get_epoch(ant_t *js);
-uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots);
-
-uint32_t gc_array_storage_fit(uint32_t cap);
-int gc_array_storage_fit_class(uint32_t cap);
-
-bool gc_obj_is_marked(ant_t *js, const ant_object_t *obj);
-bool gc_value_is_weak(ant_value_t value);
-bool gc_value_is_marked(ant_t *js, ant_value_t value);
-
-void gc_mark_str(ant_t *js, ant_value_t v);
-void gc_mark_value(ant_t *js, ant_value_t v);
-void gc_mark_closure(ant_t *js, sv_closure_t *c);
-void gc_mark_coroutine(ant_t *js, coroutine_t *coro);
-void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count);
-void gc_mark_arguments_cells(ant_t *js, ant_value_t obj);
-void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size);
-
-void gc_objects_run_minor(ant_t *js);
-void gc_pin_existing_objects(ant_t *js);
-void gc_object_free(ant_t *js, ant_object_t *obj);
-void gc_mark_func_ref(ant_t *js, sv_func_t *func);
-
-ant_value_t *gc_array_storage_alloc(ant_t *js, uint32_t cap);
-ant_value_t *gc_array_storage_grow(ant_t *js, ant_value_t *data, uint32_t old_cap, uint32_t new_cap);
-
-void gc_array_storage_release(ant_t *js, ant_value_t *data, uint32_t cap);
-size_t gc_array_storage_cached_bytes(ant_t *js);
-
-void gc_array_storage_trim(ant_t *js);
-void gc_array_storage_cache_destroy(ant_t *js);
+typedef void (*gc_stack_range_fn)(ant_t *js, void *ctx, uintptr_t lo, uintptr_t hi);
 
 typedef struct gc_shared_elements {
   uint32_t refs;
@@ -134,22 +103,52 @@ typedef struct gc_shared_elements {
   ant_value_t values[];
 } gc_shared_elements_t;
 
+uint64_t gc_get_epoch(ant_t *js);
+uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots);
+
+uint32_t gc_array_storage_fit(uint32_t cap);
+int gc_array_storage_fit_class(uint32_t cap);
+struct ant_promise_state *gc_promise_state_alloc(ant_t *js);
+
+bool gc_obj_is_marked(ant_t *js, const ant_object_t *obj);
+bool gc_value_is_weak(ant_value_t value);
+bool gc_value_is_marked(ant_t *js, ant_value_t value);
+
+void gc_mark_str(ant_t *js, ant_value_t v);
+void gc_mark_value(ant_t *js, ant_value_t v);
+void gc_mark_closure(ant_t *js, sv_closure_t *c);
+void gc_mark_coroutine(ant_t *js, coroutine_t *coro);
+void gc_mark_arguments_cells(ant_t *js, ant_value_t obj);
+void gc_mark_func_ref(ant_t *js, sv_func_t *func);
+void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count);
+void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size);
+
+void gc_closures_destroy(ant_t *js);
+void gc_objects_run_minor(ant_t *js);
+void gc_pin_existing_objects(ant_t *js);
+void gc_object_free(ant_t *js, ant_object_t *obj);
+void gc_stack_live_ranges(ant_t *js, gc_stack_range_fn fn, void *ctx);
+
+ant_value_t *gc_array_storage_alloc(ant_t *js, uint32_t cap);
+ant_value_t *gc_array_storage_grow(ant_t *js, ant_value_t *data, uint32_t old_cap, uint32_t new_cap);
+
+void gc_array_storage_release(ant_t *js, ant_value_t *data, uint32_t cap);
+size_t gc_array_storage_cached_bytes(ant_t *js);
+
+void gc_array_storage_trim(ant_t *js);
+void gc_array_storage_cache_destroy(ant_t *js);
+void gc_shared_elements_mark(ant_t *js, const gc_shared_elements_t *block);
+void gc_shared_elements_finalize(ant_t *js, ant_object_t *obj);
+void gc_root_pending_promise(ant_t *js, ant_object_t *obj);
+void gc_unroot_pending_promise(ant_t *js, ant_object_t *obj);
+
 gc_shared_elements_t *gc_shared_elements_alloc(ant_t *js, const ant_value_t *values, uint32_t count);
 void gc_shared_elements_release(ant_t *js, gc_shared_elements_t *block);
 
 static inline void gc_shared_elements_retain(gc_shared_elements_t *block) {
   block->refs++;
 }
-void gc_shared_elements_mark(ant_t *js, const gc_shared_elements_t *block);
-void gc_shared_elements_finalize(ant_t *js, ant_object_t *obj);
 
 static inline gc_shared_elements_t *gc_shared_elements_of(ant_value_t *data) {
   return (gc_shared_elements_t *)(void *)((char *)data - offsetof(gc_shared_elements_t, values));
 }
-
-void gc_closures_destroy(ant_t *js);
-
-struct ant_promise_state *gc_promise_state_alloc(ant_t *js);
-
-void gc_root_pending_promise(ant_t *js, ant_object_t *obj);
-void gc_unroot_pending_promise(ant_t *js, ant_object_t *obj);
