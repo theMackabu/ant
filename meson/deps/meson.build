@@ -201,8 +201,4 @@ if sqlite_mode != 'disabled'
   endif
 endif
 
-if get_option('unsafe_c').enabled()
-  ant_deps += [declare_dependency(compile_args: ['-DANT_HAVE_UNSAFE_C=1'])]
-endif
-
 ant_slim_deps = ant_deps

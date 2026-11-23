@@ -7,7 +7,6 @@ option('sandbox', type: 'feature', value: 'auto', description: 'build the microV
 option('temporal', type: 'feature', value: 'enabled', description: 'build the Temporal API from temporal_capi')
 option('encoding_rs', type: 'feature', value: 'enabled', description: 'decode legacy TextDecoder encodings with encoding_rs')
 option('sqlite', type: 'combo', choices: ['auto', 'bundled', 'system', 'disabled'], value: 'auto', description: 'node:sqlite backend: bundled amalgamation, the system library loaded at runtime, or auto (bundled on Linux, system on macOS and Windows)')
-option('unsafe_c', type: 'feature', value: 'disabled', description: 'build Ant.unsafe.c, which compiles C at runtime with c2mir')
 option('native_tuning', type: 'feature', value: 'disabled', description: 'optimize generated code for the current build host CPU')
 option('pgo', type: 'feature', value: 'auto', description: 'use meson/pgo/profiles profile data for the current platform when available')
 option('pgo_profile', type: 'string', value: '', description: 'override the LLVM profile path, absolute or relative to the source root; empty uses the platform profile')

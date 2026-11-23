@@ -3,7 +3,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <signal.h>
-#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -566,32 +565,6 @@ static void spawn_reporter(const char *payload, size_t payload_len) {
 }
 #endif
 
-#ifndef _WIN32
-typedef struct ant_crash_recovery {
-  sigjmp_buf jump;
-  struct ant_crash_recovery *previous;
-  volatile sig_atomic_t signal_number;
-  volatile uintptr_t fault_address;
-} ant_crash_recovery_t;
-
-static _Thread_local ant_crash_recovery_t *crash_recovery;
-
-int ant_crash_guard_native_call(
-  ant_crash_guarded_call_t call,
-  void *context, uintptr_t *fault_address
-) {
-  ant_crash_recovery_t recovery = {.previous = crash_recovery,};
-  crash_recovery = &recovery;
-
-  int jumped = sigsetjmp(recovery.jump, 1);
-  if (jumped == 0) call(context);
-
-  crash_recovery = recovery.previous;
-  if (fault_address) *fault_address = recovery.fault_address;
-  return jumped == 0 ? 0 : recovery.signal_number;
-}
-#endif
-
 static void crash_report_print_upload_failed(void) {
   if (crash_report_status_inline) crfprintf(stderr, "\r\033[2K <red>Crash report upload failed.</red>\n");
   else crfprintf(stderr, "<red>Crash report upload failed.</red>\n");
@@ -971,15 +944,6 @@ static int install_altstack(void) {
 }
 
 static void crash_handler(int sig, siginfo_t *info, void *ucontext) {
-  bool recoverable_native_signal = sig == SIGABRT || (info && info->si_code > 0);
-
-  if (crash_recovery && recoverable_native_signal) {
-    crash_recovery->signal_number = sig;
-    crash_recovery->fault_address = sig != SIGABRT && info
-      ? (uintptr_t)info->si_addr : 0;
-    siglongjmp(crash_recovery->jump, 1);
-  }
-
   struct sigaction dfl;
   memset(&dfl, 0, sizeof(dfl));
   
@@ -1045,15 +1009,6 @@ void ant_crash_init(int argc, char **argv) {
 
 #else // _WIN32
 #include <process.h>
-
-int ant_crash_guard_native_call(
-  ant_crash_guarded_call_t call,
-  void *context, uintptr_t *fault_address
-) {
-  call(context);
-  if (fault_address) *fault_address = 0;
-  return 0;
-}
 
 static LPTOP_LEVEL_EXCEPTION_FILTER previous_filter;
 static volatile LONG crash_in_progress;

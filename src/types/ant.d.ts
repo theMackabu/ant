@@ -111,59 +111,6 @@ interface AntRaw {
   gcMarkProfileReset(): void;
 }
 
-type AntCNumberType =
-  | 'int8'
-  | 'uint8'
-  | 'int16'
-  | 'uint16'
-  | 'int'
-  | 'int32'
-  | 'uint32'
-  | 'float'
-  | 'double';
-
-type AntCBigIntType = 'int64' | 'uint64';
-
-type AntCArgumentType =
-  | AntCNumberType
-  | AntCBigIntType;
-
-type AntCReturnType = 'string' | AntCArgumentType;
-type AntCReturnValue<T extends AntCReturnType> =
-  T extends 'string' ? string | null :
-  T extends AntCBigIntType ? bigint : number;
-type AntCArgumentValues<T extends readonly AntCArgumentType[]> = {
-  [K in keyof T]: T[K] extends AntCBigIntType ? bigint : number;
-};
-
-interface AntCOptions<TReturn extends AntCReturnType> {
-  entry: string;
-  returns: TReturn;
-}
-
-interface AntCFunctionOptions<
-  TReturn extends AntCReturnType,
-  TArgs extends readonly AntCArgumentType[],
-> extends AntCOptions<TReturn> {
-  args: TArgs;
-}
-
-interface AntUnsafeC {
-  (strings: TemplateStringsArray, ...values: unknown[]): number;
-  <
-    TReturn extends AntCReturnType,
-    const TArgs extends readonly AntCArgumentType[],
-  >(options: AntCFunctionOptions<TReturn, TArgs>):
-    (strings: TemplateStringsArray, ...values: unknown[]) =>
-      (...args: AntCArgumentValues<TArgs>) => AntCReturnValue<TReturn>;
-  <TReturn extends AntCReturnType>(options: AntCOptions<TReturn>):
-    (strings: TemplateStringsArray, ...values: unknown[]) => AntCReturnValue<TReturn>;
-}
-
-interface AntUnsafe {
-  c?: AntUnsafeC;
-}
-
 interface AntGcMarkProfile {
   enabled: boolean;
   collections: number;
@@ -292,7 +239,6 @@ interface AntStatic {
   typeof(t: unknown): AntType | '??';
 
   raw: AntRaw;
-  unsafe: AntUnsafe;
   stats(): AntStatsResult;
   suppressReporting(): void;
 
