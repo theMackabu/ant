@@ -29,8 +29,6 @@ static int unit_targets(const sv_func_t *func) {
 
 int main(void) {
   char stack_base;
-  // compiled code would make the unit immortal (sv_code_unit_make_immortal)
-  sv_debug_enable(SV_DEBUG_JITLESS);
   ant_t *js = Ant_Create(nullptr);
   assert(js);
   js_setstackbase(js, &stack_base);
@@ -39,15 +37,18 @@ int main(void) {
   // record feedback, then everything that could reach inner is dropped
   run(js,
     "globalThis.outer = function () {"
-    "  return function inner(f) { let s = 0; for (let i = 0; i < 2000; i++) s += f(i); return s; };"
+    "  return function inner(f) { let s = 0; for (let i = 0; i < 8; i++) s += f(i); return s; };"
     "};"
     "globalThis.inner = outer();"
     "globalThis.dyn = new Function('x', 'return x + 1');"
-    "inner(dyn); inner(dyn);");
+    "inner(dyn); inner(dyn); inner(dyn); inner(dyn);");
 
   sv_closure_t *closure = js_func_closure(js_get(js, js->global, "inner"));
   assert(closure && closure->func && !closure->func->unit);
   sv_func_t *inner = closure->func;
+  sv_func_t *dyn = js_func_closure(js_get(js, js->global, "dyn"))->func;
+  assert(dyn && dyn->unit);
+  assert(!inner->jit_code && !dyn->jit_code);
   assert(unit_targets(inner) == 1);
   assert(inner->fb_unit_watched);
 
