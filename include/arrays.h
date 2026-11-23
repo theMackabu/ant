@@ -143,8 +143,6 @@ static inline ant_value_t proxy_aware_length(ant_t *js, ant_value_t obj, ant_off
   }
   return proxy_aware_length_slow(js, obj, out_len);
 }
-ant_value_t proxy_aware_get_elem(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
-ant_value_t proxy_delete_index(ant_t *js, ant_value_t obj, ant_offset_t idx);
 
 bool array_method_dense_element(ant_value_t arr, ant_offset_t idx, ant_value_t *out);
 ant_object_t *array_method_elements(ant_value_t arr);

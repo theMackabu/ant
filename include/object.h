@@ -332,11 +332,6 @@ static inline ant_extra_slots_t *ant_object_extra_block(const ant_object_t *obj)
   return ((ant_object_sidecar_t *)(raw & ~ant_sidecar))->extra_slots;
 }
 
-static inline ant_extra_slot_t *ant_object_extra_slots_ptr(const ant_object_t *obj) {
-  ant_extra_slots_t *block = ant_object_extra_block(obj);
-  return block ? block->entries : NULL;
-}
-
 static inline uint8_t ant_object_extra_count(const ant_object_t *obj) {
   ant_extra_slots_t *block = ant_object_extra_block(obj);
   return block ? block->count : 0;

@@ -1281,26 +1281,6 @@ bool js_proxy_set_is_plain(ant_t *js, ant_value_t proxy) {
   return data && !data->host && proxy_handler_plain_for_set(js, data);
 }
 
-ant_value_t js_proxy_set(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value) {
-  return proxy_set(js, proxy, key, key_len, value);
-}
-
-ant_value_t js_proxy_set_sym(ant_t *js, ant_value_t proxy, ant_value_t sym, ant_value_t value) {
-  ant_value_t target = Ant_Value_Undefined;
-  
-  ant_value_t result = proxy_set_sym(js, proxy, sym, value, proxy, &target);
-  if (is_err(result) || result == Ant_Value_True || result == Ant_Value_False) return result;
-
-  
-  if (!js_proxy_set_is_plain(js, proxy)) return js_set_with_receiver(js, target, sym, value, proxy);
-
-  bool declined = false;
-  ant_value_t stored = setprop_impl_receiver(js, target, proxy, sym, value, false, &declined);
-  if (is_err(stored)) return stored;
-  
-  return Ant_Value_FromBool(!declined);
-}
-
 ant_value_t js_set_reporting(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value) {
   sv_vm_t *vm = js->vm;
   int saved_fp = vm->jit.mode_fp;
@@ -1803,10 +1783,6 @@ static ant_value_t proxy_define_trapped(
     GC_ROOT_RESTORE(js, root_mark);
     return violation ? proxy_trap_error(js, "defineProperty", violation) : Ant_Value_True;
   }
-}
-
-ant_value_t proxy_define_property(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t descriptor) {
-  return proxy_define_property_impl(js, proxy, key_val, descriptor, false);
 }
 
 ant_value_t proxy_define_property_raw(ant_t *js, ant_value_t proxy, ant_value_t key_val, const define_desc_raw_t *raw, bool reflect) {

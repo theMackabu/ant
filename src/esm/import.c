@@ -399,12 +399,6 @@ ant_value_t js_create_module_context(ant_t *js, const char *filename, bool is_ma
   return module_ctx;
 }
 
-ant_value_t js_create_import_meta(ant_t *js, const char *filename, bool is_main) {
-  ant_value_t module_ctx = js_create_module_context(js, filename, is_main);
-  if (is_err(module_ctx)) return module_ctx;
-  return js_get_module_ctx_import_meta(module_ctx);
-}
-
 ant_value_t js_get_module_import_binding(ant_t *js) {
   GC_ROOT_SAVE(root_mark, js);
   

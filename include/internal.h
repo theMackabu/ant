@@ -271,8 +271,6 @@ ant_value_t js_vm_script_compile(ant_t *js, const char *buf, size_t len);
 ant_value_t js_vm_script_run(ant_t *js, ant_value_t compiled);
 ant_value_t js_function_from_source(ant_t *js, ant_value_t *params_and_body, int nargs);
 
-ant_value_t js_proxy_set(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value);
-ant_value_t js_proxy_set_sym(ant_t *js, ant_value_t proxy, ant_value_t sym, ant_value_t value);
 ant_value_t js_set_reporting(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value);
 ant_value_t js_set_with_receiver(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t value, ant_value_t receiver);
 ant_value_t js_set_with_receiver_interned(ant_t *js, ant_value_t target, const char *interned, size_t key_len, ant_value_t value, ant_value_t receiver);
@@ -298,7 +296,6 @@ ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_pr
 
 ant_value_t js_get_module_import_binding(ant_t *js);
 ant_value_t js_builtin_import(ant_params_t);
-ant_value_t js_create_import_meta(ant_t *js, const char *filename, bool is_main);
 ant_value_t js_create_module_context(ant_t *js, const char *filename, bool is_main);
 const char *js_module_ctx_filename(ant_value_t module_ctx);
 ant_value_t js_create_arguments_object(ant_t *js, sv_vm_t *vm, ant_value_t callee, sv_frame_t *frame, int argc, int mapped_count, bool is_strict);
@@ -336,7 +333,6 @@ ant_value_t js_mkarr_dense_literal(ant_t *js, const ant_value_t *elements, uint3
 ant_value_t Ant_Array_CreateRest(ant_t *js, const ant_value_t *args, uint32_t argc, uint32_t start);
 ant_value_t js_mkarr_dense_uninit(ant_t *js, uint32_t count, ant_value_t **out_data);
 ant_value_t Ant_Array_CreateUninit(ant_t *js, uint32_t count, uint32_t capacity, ant_value_t **out_data);
-ant_value_t js_arr_spread_into(ant_t *js, ant_value_t dst, ant_value_t src);
 ant_value_t js_arr_spread_into_owned(ant_t *js, ant_value_t dst, ant_value_t src);
 
 void js_arr_set_index(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val);

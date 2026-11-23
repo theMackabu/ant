@@ -141,13 +141,6 @@ bool print_unhandled_promise_rejection(ant_t *js, ant_value_t value) {
   return true;
 }
 
-js_err_type_t get_error_type(ant_t *js) {
-  if (!Ant_Exception_Pending(js)) return JS_ERR_GENERIC;
-  ant_value_t err_type = js_get_slot(Ant_Exception_Value(js, Ant_Exception_Peek(js)), SLOT_ERR_TYPE);
-  if (vtype(err_type) != kTypeNumber) return JS_ERR_GENERIC;
-  return (js_err_type_t)((int)Ant_Value_AsNumberUnchecked(err_type) & ~JS_ERR_FLAG_MASK);
-}
-
 ant_value_t Ant_Exception_CreateRecord(ant_t *js, ant_value_t value, ant_value_t stack) {
   GC_ROOT_SAVE(mark, js);
   GC_ROOT_PIN(js, value);
