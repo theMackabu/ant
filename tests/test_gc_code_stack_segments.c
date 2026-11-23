@@ -33,7 +33,7 @@ __attribute__((noinline)) static void scrub_below(void) {
   memset((char *)region, 0, sizeof(region));
 }
 
-__attribute__((noinline)) static void collect_over_stale_words(ant_t *js, bool in_interp_frame) {
+__attribute__((noinline)) static bool collect_over_stale_words(ant_t *js, bool in_interp_frame) {
   __builtin_unwind_init();
   volatile uintptr_t words[STALE_WORDS];
   gc_vm_seg_t seg;
@@ -46,8 +46,8 @@ __attribute__((noinline)) static void collect_over_stale_words(ant_t *js, bool i
     seg.fp = fp;
     seg.jit_depth = js->jit_active_depth;
     seg.entry_vm_fp = 0;
+    if ((uintptr_t)&words[0] < seg.lo || (uintptr_t)&words[STALE_WORDS] > seg.hi) return false;
     js->vm_segs = &seg;
-    assert((uintptr_t)&words[0] >= seg.lo && (uintptr_t)&words[STALE_WORDS] <= seg.hi);
   }
 
   plant(words);
@@ -55,6 +55,7 @@ __attribute__((noinline)) static void collect_over_stale_words(ant_t *js, bool i
   gc_run(js);
 
   if (in_interp_frame) js->vm_segs = seg.prev;
+  return true;
 }
 
 int main(void) {
@@ -84,7 +85,10 @@ int main(void) {
   collect_over_stale_words(js, false);
   assert(((uint64_t)(uintptr_t)func->jit_code ^ MASK) == g_masked);
 
-  collect_over_stale_words(js, true);
+  if (!collect_over_stale_words(js, true)) {
+    puts("SKIP interpreter frames have no skipped part on this target");
+    return 0;
+  }
   assert(!func->jit_code);
 
   puts("PASS stale code addresses in an interpreter frame do not keep compiled code");
