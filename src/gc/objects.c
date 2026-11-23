@@ -1225,9 +1225,8 @@ static bool gc_next_interp_stub_save(ant_t *js, gc_stub_walk_t *w, uintptr_t *sa
   return false;
 }
 
-static inline __attribute__((always_inline)) void gc_walk_segmented(
-  ant_t *js, uintptr_t lo, uintptr_t hi, gc_stack_range_fn fn, void *ctx
-) {
+__attribute__((always_inline))
+static inline void gc_walk_segmented(ant_t *js, uintptr_t lo, uintptr_t hi, gc_stack_range_fn fn, void *ctx) {
   gc_stub_walk_t walk = { 
     .fp = (uintptr_t)__builtin_frame_address(0), 
     .lo = lo, .hi = hi 
@@ -1284,9 +1283,8 @@ static void gc_scan_live_range(ant_t *js, void *ctx, uintptr_t lo, uintptr_t hi)
   gc_scan_range(js, lo, hi);
 }
 
-static inline __attribute__((always_inline)) void gc_walk_current_stack(
-  ant_t *js, gc_stack_range_fn fn, void *ctx
-) {
+__attribute__((always_inline))
+static inline void gc_walk_current_stack(ant_t *js, gc_stack_range_fn fn, void *ctx) {
   uintptr_t lo, hi;
   if (!gc_get_stack_bounds((uintptr_t)js->cstk.base, gc_native_sp(), &lo, &hi)) return;
 #if GC_SCAN_SEGMENTED
@@ -1297,10 +1295,8 @@ static inline __attribute__((always_inline)) void gc_walk_current_stack(
 #endif
   fn(js, ctx, lo, hi);
 }
-
-static inline __attribute__((always_inline)) void gc_walk_other_stacks(
-  ant_t *js, gc_stack_range_fn fn, void *ctx
-) {
+__attribute__((always_inline))
+static inline void gc_walk_other_stacks(ant_t *js, gc_stack_range_fn fn, void *ctx) {
   if (js->cstk.main_base && js->cstk.main_lo) {
     uintptr_t lo, hi;
     if (gc_get_stack_bounds(
