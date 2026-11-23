@@ -580,7 +580,6 @@ static inline uintptr_t sv_gf_ic_pack_aux(uint8_t warmup, uint8_t miss_streak, b
 
 const sv_srcpos_t *sv_srcpos_at(sv_func_t *func, int bc_offset);
 bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *col);
-bool sv_lookup_srcspan(sv_func_t *func, int bc_offset, uint32_t *src_off, uint32_t *src_end);
 ant_value_t Ant_Value_LooseEquals(ant_t *js, ant_value_t l, ant_value_t r);
 
 typedef struct {

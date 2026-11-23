@@ -313,11 +313,6 @@ int add_upvalue_binding(
   return idx;
 }
 
-int add_upvalue_tdz(sv_compiler_t *c, uint16_t index, bool is_local, bool may_tdz) {
-  sv_binding_meta_t binding = {.may_tdz = may_tdz};
-  return add_upvalue_binding(c, index, is_local, false, false, false, &binding);
-}
-
 int resolve_upvalue_to(sv_compiler_t *c, sv_compiler_t *owner, int local) {
   sv_compiler_t *enc = c->enclosing;
   if (!enc || local < 0) return -1;
