@@ -54,6 +54,33 @@ void sv_compile_ctx_init_root(
   ctx->private_scope = NULL;
 }
 
+static inline void ctx_free(void *ptr) {
+  if (ptr) free(ptr);
+}
+
+static void type_seed_adopt(sv_type_scratch_t *types, const sv_compiler_t *enclosing) {
+  sv_type_seed_t *seed = enclosing->type_seed;
+  if (!seed) return;
+  types->seed = seed;
+  types->deps = seed->deps;
+  types->dep_cap = (int)(sizeof(seed->deps) / sizeof(seed->deps[0]));
+  types->uses = seed->uses;
+  types->use_cap = (int)(sizeof(seed->uses) / sizeof(seed->uses[0]));
+  types->promos = seed->promos;
+  types->promo_cap = (int)(sizeof(seed->promos) / sizeof(seed->promos[0]));
+}
+
+static inline bool type_seed_holds(const sv_type_seed_t *seed, const void *items) {
+  return seed && (const char *)items >= (const char *)seed && (const char *)items < (const char *)(seed + 1);
+}
+
+void *sv_compile_ctx_grow_types(const sv_type_scratch_t *types, void *items, size_t used, size_t size) {
+  if (!type_seed_holds(types->seed, items)) return realloc(items, size);
+  void *next = malloc(size);
+  if (next) memcpy(next, items, used);
+  return next;
+}
+
 void sv_compile_ctx_init_child(
   sv_compiler_t *ctx,
   sv_compiler_t *enclosing,
@@ -91,57 +118,60 @@ void sv_compile_ctx_init_child(
   ctx->param_count = node ? node->args.count : 0;
   ctx->private_scope = enclosing->private_scope;
   enclosing->type_child_count++;
-  ctx->types = enclosing->types ? enclosing->types : &ctx->type_storage;
+  if (enclosing->types) ctx->types = enclosing->types;
+  else {
+    ctx->types = &ctx->type_storage;
+    type_seed_adopt(&ctx->type_storage, enclosing);
+  }
   ctx->type_dep_mark = ctx->types->dep_count;
   ctx->type_use_mark = ctx->types->use_count;
   ctx->type_promo_mark = ctx->types->promo_count;
 }
 
 void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
-  free(ctx->code);
-  free(ctx->constants);
-  free(ctx->atoms);
-  free(ctx->atom_index);
-  free(ctx->map_templates);
-  free(ctx->locals);
-  free(ctx->local_lookup_heads);
-  free(ctx->upval_descs);
-  free(ctx->upval_bindings);
-  free(ctx->write_counts);
+  ctx_free(ctx->code);
+  ctx_free(ctx->constants);
+  ctx_free(ctx->atoms);
+  ctx_free(ctx->atom_index);
+  ctx_free(ctx->map_templates);
+  ctx_free(ctx->locals);
+  ctx_free(ctx->local_lookup_heads);
+  ctx_free(ctx->upval_descs);
+  ctx_free(ctx->upval_bindings);
+  ctx_free(ctx->write_counts);
   if (ctx->types == &ctx->type_storage) {
-    free(ctx->type_storage.deps);
-    free(ctx->type_storage.uses);
-    free(ctx->type_storage.promos);
+    const sv_type_seed_t *seed = ctx->type_storage.seed;
+    if (!type_seed_holds(seed, ctx->type_storage.deps)) ctx_free(ctx->type_storage.deps);
+    if (!type_seed_holds(seed, ctx->type_storage.uses)) ctx_free(ctx->type_storage.uses);
+    if (!type_seed_holds(seed, ctx->type_storage.promos)) ctx_free(ctx->type_storage.promos);
   } else {
     ctx->types->dep_count = ctx->type_dep_mark;
     ctx->types->use_count = ctx->type_use_mark;
     ctx->types->promo_count = ctx->type_promo_mark;
   }
   for (int i = 0; i < ctx->eval_scope_count; i++)
-    free(ctx->eval_scopes[i].bindings);
-  free(ctx->eval_scopes);
-  free(ctx->eval_vars);
-  if (ctx->eval_var_index) free(ctx->eval_var_index);
-  if (ctx->upvalue_index) free(ctx->upvalue_index);
-  free(ctx->global_lexicals);
-  free(ctx->loops);
-  free(ctx->with_scopes);
-  if (ctx->spills) {
-    free(ctx->spills);
-    free(ctx->spill_heads);
-  }
-  free(ctx->unwind_kinds);
-  free(ctx->unwind_marks);
-  free(ctx->srcpos);
-  free(ctx->slot_types);
-  free(ctx->deferred_exports);
-  free(ctx->using_cleanups);
-  free(ctx->shaped_sites);
-  free(ctx->shaped_keys);
+    ctx_free(ctx->eval_scopes[i].bindings);
+  ctx_free(ctx->eval_scopes);
+  ctx_free(ctx->eval_vars);
+  ctx_free(ctx->eval_var_index);
+  ctx_free(ctx->upvalue_index);
+  ctx_free(ctx->global_lexicals);
+  ctx_free(ctx->loops);
+  ctx_free(ctx->with_scopes);
+  ctx_free(ctx->spills);
+  ctx_free(ctx->spill_heads);
+  ctx_free(ctx->unwind_kinds);
+  ctx_free(ctx->unwind_marks);
+  ctx_free(ctx->srcpos);
+  ctx_free(ctx->slot_types);
+  ctx_free(ctx->deferred_exports);
+  ctx_free(ctx->using_cleanups);
+  ctx_free(ctx->shaped_sites);
+  ctx_free(ctx->shaped_keys);
   for (int i = 0; i < ctx->literal_site_count; i++)
     if (ctx->literal_sites[i].block) gc_shared_elements_release(ctx->js, ctx->literal_sites[i].block);
-  free(ctx->literal_sites);
-  free(ctx->literal_keys);
+  ctx_free(ctx->literal_sites);
+  ctx_free(ctx->literal_keys);
 
   const_dedup_entry_t *entry;
   const_dedup_entry_t *tmp;

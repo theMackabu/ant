@@ -244,7 +244,8 @@ static sv_ast_t *parse_program(
   if (p->lx.strict) program->flags |= FN_PARSE_STRICT;
   if (program_has_module_syntax(program)) program->flags |= FN_MODULE_SYNTAX;
 
-  program->flags |= scope_facts_eval_yield(&program->args, NULL);  
+  program->flags |= scope_facts_eval_yield(&program->args, NULL);
+  program->op = p->program_syntax;
   return program;
 }
 
@@ -299,6 +300,7 @@ sv_ast_t *sv_parse_expression(ant_t *js, const char *code, ant_offset_t clen) {
 
   sv_ast_list_push(js, &program->args, expr);
   program->flags |= scope_facts_eval_yield(&program->args, NULL);
+  program->op = p->program_syntax;
   return program;
 }
 

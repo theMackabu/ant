@@ -269,6 +269,7 @@ sv_ast_t *parse_yield(sv_parser_t *p) {
   if (sv_parse_stack_overflow(p)) return mk(N_EMPTY);
   p->lx.st.consumed = 1;
   sv_ast_t *n = mk(N_YIELD);
+  p->program_syntax |= SV_PROGRAM_SUSPEND;
   uint8_t next = sv_lexer_next(&p->lx);
   if (p->lx.st.had_newline) return n;
   if (next == TOK_MUL) {

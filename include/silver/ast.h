@@ -135,6 +135,12 @@ enum {
 };
 
 enum {
+  SV_PROGRAM_NEW_TARGET = 1 << 0,
+  SV_PROGRAM_SUSPEND    = 1 << 1,
+  SV_PROGRAM_SUPER      = 1 << 2,
+};
+
+enum {
   EX_DEFAULT   = 1 << 0,
   EX_DECL      = 1 << 1,
   EX_NAMED     = 1 << 2,
@@ -216,6 +222,10 @@ bool ast_mentions_name(const sv_ast_t *node, const char *name, uint32_t len);
 bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender);
 bool ast_closure_captures_name(const sv_ast_t *node, const char *name, uint32_t len);
 bool ast_contains_direct_suspend(const sv_ast_t *node, const sv_ast_t **out_offender);
+
+static inline bool sv_program_has_syntax(const sv_ast_t *program, uint8_t syntax) {
+  return (program->op & syntax) != 0;
+}
 
 static inline sv_ast_children_t sv_ast_children(const sv_ast_t *node) {
   return (sv_ast_children_t){.node = node};

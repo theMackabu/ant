@@ -59,17 +59,29 @@ uint16_t sv_eval_shadow_bits(ant_t *js, const js_eval_scope_t *scope, const char
   return bits & (uint16_t)~SV_EVAL_SCOPE_PRIVATE;
 }
 
+static bool program_uses_new_target(const sv_ast_t *program) {
+  if (program->flags & FN_SCOPE_FACTS) {
+    if (program->flags & FN_DIRECT_EVAL) return true;
+  } else if (ast_contains_direct_eval(program)) return true;
+  return
+    sv_program_has_syntax(program, SV_PROGRAM_NEW_TARGET | SV_PROGRAM_SUPER) &&
+    ast_references_new_target(program);
+}
+
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program, sv_compile_mode_t mode,
   const char *source, ant_offset_t source_len, uint16_t eval_shadows, ant_value_t eval_env
 ) {
   if (!program || program->type != N_PROGRAM) return NULL;
-  if (mode != SV_COMPILE_EVAL_FUNCTION && ast_contains_lexical_new_target(program)) {
+  if (
+    mode != SV_COMPILE_EVAL_FUNCTION && sv_program_has_syntax(program, SV_PROGRAM_NEW_TARGET) &&
+    ast_contains_lexical_new_target(program)
+  ) {
     js_mkerr_typed(js, JS_ERR_SYNTAX, "new.target is only valid in functions");
     return NULL;
   }
 
-  if (sv_compile_mode_is_eval(mode)) {
+  if (sv_compile_mode_is_eval(mode) && sv_program_has_syntax(program, SV_PROGRAM_SUSPEND)) {
     const sv_ast_t *offender = NULL;
     for (int i = 0; i < program->args.count; i++)
       if (ast_contains_direct_suspend(program->args.items[i], &offender)) break;
@@ -116,11 +128,7 @@ sv_func_t *sv_compile(
   top_fn.body->args = program->args;
   top_fn.flags |= program->flags & (FN_SCOPE_FACTS | FN_DIRECT_EVAL | FN_OWN_YIELD);
   
-  if (
-    sv_compile_mode_is_eval(mode) && 
-    (ast_references_new_target(program) || 
-    ast_contains_direct_eval(program))
-  ) top_fn.flags |= FN_USES_NEW_TARGET;
+  if (sv_compile_mode_is_eval(mode) && program_uses_new_target(program)) top_fn.flags |= FN_USES_NEW_TARGET;
 
   sv_code_unit_t *unit = sv_compile_mode_is_eval(mode) || mode == SV_COMPILE_REPL ? sv_code_unit_begin(js) : NULL;
   const char *text = copy_source_text(js, source, source_len);
@@ -132,11 +140,13 @@ sv_func_t *sv_compile(
   }
 
   sv_compiler_t root;
+  sv_type_seed_t type_seed;
   sv_compile_ctx_init_root(
     &root, js, js->filename, text,
     source_len, mode,
     (program->flags & FN_PARSE_STRICT) != 0,  NULL
   );
+  root.type_seed = &type_seed;
   
   root.eval_shadows_undefined = (eval_shadows & SV_EVAL_SHADOWS_UNDEFINED) != 0;
   root.eval_shadows_global_this = (eval_shadows & SV_EVAL_SHADOWS_GLOBAL_THIS) != 0;
@@ -202,7 +212,9 @@ sv_func_t *sv_compile_function(ant_t *js, const sv_function_parts_t *parts) {
   }
 
   sv_compiler_t root;
+  sv_type_seed_t type_seed;
   sv_compile_ctx_init_root(&root, js, js->filename, text, parts->len, SV_COMPILE_SCRIPT, false, NULL);
+  root.type_seed = &type_seed;
   
   root.allows_new_target = true;
   root.function_ctor_root = true;
@@ -305,12 +317,14 @@ sv_func_t *sv_compile_function_with_params(
   }
 
   sv_compiler_t root;
+  sv_type_seed_t type_seed;
   
   sv_compile_ctx_init_root(
     &root, js, js->filename, text,
     (ant_offset_t)body_len, SV_COMPILE_SCRIPT,
     (program->flags & FN_PARSE_STRICT) != 0, NULL
   );
+  root.type_seed = &type_seed;
   
   root.allows_new_target = true;
   root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)body_len);

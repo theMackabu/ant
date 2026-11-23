@@ -119,6 +119,12 @@ typedef struct {
 } sv_type_use_t;
 
 typedef struct {
+  sv_type_dep_t deps[16];
+  sv_type_use_t uses[32];
+  sv_type_dep_t promos[16];
+} sv_type_seed_t;
+
+typedef struct {
   uint32_t fact_next;
   uint32_t dep_seq;
   const sv_ast_t *cache_node;
@@ -138,6 +144,7 @@ typedef struct {
   sv_type_dep_t *promos;
   int promo_count;
   int promo_cap;
+  sv_type_seed_t *seed;
 } sv_type_scratch_t;
 
 typedef struct {
@@ -320,6 +327,7 @@ typedef struct sv_compiler {
 
   sv_type_scratch_t *types;
   sv_type_scratch_t type_storage;
+  sv_type_seed_t *type_seed;
   int type_dep_mark;
   int type_use_mark;
   int type_promo_mark;
