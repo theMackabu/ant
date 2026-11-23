@@ -570,6 +570,8 @@ static void spawn_reporter(const char *payload, size_t payload_len) {
 typedef struct ant_crash_recovery {
   sigjmp_buf jump;
   struct ant_crash_recovery *previous;
+  ant_crash_guarded_call_t abandon;
+  void *context;
   volatile sig_atomic_t signal_number;
   volatile uintptr_t fault_address;
 } ant_crash_recovery_t;
@@ -577,10 +579,10 @@ typedef struct ant_crash_recovery {
 static _Thread_local ant_crash_recovery_t *crash_recovery;
 
 int ant_crash_guard_native_call(
-  ant_crash_guarded_call_t call,
+  ant_crash_guarded_call_t call, ant_crash_guarded_call_t abandon,
   void *context, uintptr_t *fault_address
 ) {
-  ant_crash_recovery_t recovery = {.previous = crash_recovery,};
+  ant_crash_recovery_t recovery = {.previous = crash_recovery, .abandon = abandon, .context = context};
   crash_recovery = &recovery;
 
   int jumped = sigsetjmp(recovery.jump, 1);
@@ -977,6 +979,7 @@ static void crash_handler(int sig, siginfo_t *info, void *ucontext) {
     crash_recovery->signal_number = sig;
     crash_recovery->fault_address = sig != SIGABRT && info
       ? (uintptr_t)info->si_addr : 0;
+    if (crash_recovery->abandon) crash_recovery->abandon(crash_recovery->context);
     siglongjmp(crash_recovery->jump, 1);
   }
 
@@ -1047,9 +1050,10 @@ void ant_crash_init(int argc, char **argv) {
 #include <process.h>
 
 int ant_crash_guard_native_call(
-  ant_crash_guarded_call_t call,
+  ant_crash_guarded_call_t call, ant_crash_guarded_call_t abandon,
   void *context, uintptr_t *fault_address
 ) {
+  (void)abandon;
   call(context);
   if (fault_address) *fault_address = 0;
   return 0;

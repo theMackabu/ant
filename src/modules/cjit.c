@@ -22,6 +22,7 @@
 #include "internal.h"
 #include "modules/bigint.h"
 #include "modules/cjit.h"
+#include "silver/engine.h"
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmacro-redefined"
@@ -109,10 +110,12 @@ typedef struct {
 } ant_c_function_t;
 
 typedef struct {
+  ant_t *js;
   ffi_cif *cif;
   void (*entry)(void);
   void *result;
   void **args;
+  sv_native_unwind_t unwind;
 } ant_c_ffi_call_t;
 
 static const ant_c_arg_mapping_t ANT_C_ARG_MAPPINGS[] = {
@@ -506,12 +509,22 @@ static ant_value_t ant_c_native_fault(
   );
 }
 
+static void ant_c_abandon_ffi(void *context) {
+  ant_c_ffi_call_t *call = context;
+  Silver_NativeUnwind_Abandon(call->js, &call->unwind);
+}
+
 static int ant_c_call_ffi_guarded(
-  ffi_cif *cif, void (*entry)(void), void *result, void **args,
+  ant_t *js, ffi_cif *cif, void (*entry)(void), void *result, void **args,
   uintptr_t *fault_address
 ) {
-  ant_c_ffi_call_t call = { .cif = cif, .entry = entry, .result = result, .args = args };
-  return ant_crash_guard_native_call(ant_c_invoke_ffi, &call, fault_address);
+  ant_c_ffi_call_t call = { .js = js, .cif = cif, .entry = entry, .result = result, .args = args };
+  Silver_NativeUnwind_Save(js, &call.unwind);
+
+  int signal_number = ant_crash_guard_native_call(ant_c_invoke_ffi, ant_c_abandon_ffi, &call, fault_address);
+  if (signal_number != 0) Silver_NativeUnwind_Restore(js, &call.unwind);
+
+  return signal_number;
 }
 
 static void ant_c_function_destroy(ant_c_function_t *function) {
@@ -630,7 +643,7 @@ static ant_value_t ant_c_function_call(ant_params_t) {
   uintptr_t fault_address = 0;
 
   int signal_number = ant_c_call_ffi_guarded(
-    &function->cif, function->entry_item->addr, &result,
+    js, &function->cif, function->entry_item->addr, &result,
     function->arg_count == 0 ? NULL : ffi_args, &fault_address
   );
 
@@ -718,7 +731,7 @@ static ant_value_t ant_c_call_configured_entry(
   ant_c_arg_value_t native_result = {0};
   uintptr_t fault_address = 0;
   
-  int signal_number = ant_c_call_ffi_guarded(&cif, entry_item->addr, &native_result, NULL, &fault_address);
+  int signal_number = ant_c_call_ffi_guarded(js, &cif, entry_item->addr, &native_result, NULL, &fault_address);
   if (signal_number != 0) return ant_c_native_fault(js, signature->entry_name, signal_number, fault_address);
   
   return ant_c_result_to_js(js, signature->returns, signature->return_type, &native_result);
@@ -748,7 +761,7 @@ static ant_value_t ant_c_call_status_entry(
   int result = 0;
   uintptr_t fault_address = 0;
   int signal_number = ant_c_call_ffi_guarded(
-    &cif, entry_item->addr, &result,
+    js, &cif, entry_item->addr, &result,
     entry_func->nargs == 0 ? NULL : args, &fault_address
   );
   

@@ -74,8 +74,7 @@ static bool vm_interrupt_outer_fired(vm_interrupt_t *it) {
   return false;
 }
 
-ant_value_t vm_interrupt_end(vm_interrupt_t *it, ant_value_t result) {
-  if (!it->timeout_ms && !it->sigint) return result;
+static uint8_t vm_interrupt_stop(vm_interrupt_t *it) {
   ant_t *js = it->js;
   js->interrupt_run = it->outer;
 
@@ -99,7 +98,18 @@ ant_value_t vm_interrupt_end(vm_interrupt_t *it, ant_value_t result) {
     uv_mutex_destroy(&it->lock);
   }
 
-  uint8_t fired = atomic_load(&it->fired);
+  return atomic_load(&it->fired);
+}
+
+void vm_interrupt_unwind(ant_t *js, vm_interrupt_t *outer) {
+  while (js->interrupt_run && js->interrupt_run != outer) vm_interrupt_stop(js->interrupt_run);
+}
+
+ant_value_t vm_interrupt_end(vm_interrupt_t *it, ant_value_t result) {
+  if (!it->timeout_ms && !it->sigint) return result;
+  ant_t *js = it->js;
+
+  uint8_t fired = vm_interrupt_stop(it);
   if (!fired) return result;
 
   if (is_err(result)) js_take_thrown(js, result);

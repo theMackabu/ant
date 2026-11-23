@@ -1444,6 +1444,40 @@ static_assert(
   "fields read by compiled-code entry stubs need short immediate offsets"
 );
 
+typedef struct {
+  gc_vm_seg_t *vm_segs;
+  struct gc_uv_seg *uv_segs;
+  struct gc_temp_root_scope *temp_roots;
+  struct coroutine *async_coro;
+  vm_interrupt_t *interrupt_run;
+  ant_array_join_frame_t *array_join_stack;
+  ant_stringify_ctx_t *stringify;
+  ant_module_t *module_stack;
+  sv_code_unit_t *code_unit;
+  sv_native_frame_t *native_frame;
+  ant_realm_t *realm;
+  ant_value_t import_meta;
+  uintptr_t uv_run_sp;
+  uintptr_t native_sp;
+  uintptr_t native_lo;
+  size_t root_count;
+  void *cstk_floor;
+  uint32_t jit_active_depth;
+  uint32_t vm_exec_depth;
+  uint32_t proxy_descriptor_depth;
+  int fp;
+  int sp;
+  int handler_depth;
+  bool microtasks_draining;
+  bool async_inline_deferred;
+  typeof(((struct sv_vm *)0)->jit) jit;
+  typeof(((struct sv_vm *)0)->suspend) suspend;
+} sv_native_unwind_t;
+
+void Silver_NativeUnwind_Save(ant_t *js, sv_native_unwind_t *at);
+void Silver_NativeUnwind_Abandon(ant_t *js, const sv_native_unwind_t *at);
+void Silver_NativeUnwind_Restore(ant_t *js, const sv_native_unwind_t *at);
+
 int sv_async_entry_begin(sv_vm_t *vm, uint8_t next_op);
 
 static inline uint8_t sv_get_u8(const uint8_t *ip)  { return ip[0]; }

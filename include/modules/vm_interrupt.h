@@ -29,4 +29,5 @@ struct vm_interrupt {
 };
 
 void vm_interrupt_begin(vm_interrupt_t *it);
+void vm_interrupt_unwind(ant_t *js, vm_interrupt_t *outer);
 ant_value_t vm_interrupt_end(vm_interrupt_t *it, ant_value_t result);

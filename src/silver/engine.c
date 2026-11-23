@@ -20,6 +20,13 @@
 #include "modules/promise.h"
 #include "modules/regex.h"
 #include "silver/glue.h"
+#include "silver/vm.h"
+#include "gc/uv.h"
+
+#ifndef ANT_WASM_EMBED
+#include "modules/vm_interrupt.h"
+#endif
+
 #define SV_OPS_IMPLEMENTATION
 #include "ops/literals.h"
 #include "ops/stack.h"
@@ -1697,6 +1704,112 @@ static void sv_async_inline_discard(sv_vm_t *vm, ant_t *js, int min_fp) {
     coroutine_release(coro);
   }
 }
+
+#ifndef ANT_WASM_EMBED
+void Silver_NativeUnwind_Save(ant_t *js, sv_native_unwind_t *at) {
+  sv_vm_t *vm = js->vm;
+  uintptr_t base = (uintptr_t)js->cstk.base;
+  size_t span = os_thread_stack_size();
+
+  *at = (sv_native_unwind_t){
+    .vm_segs = js->vm_segs,
+    .uv_segs = gc_uv_segs,
+    .temp_roots = js->temp_roots,
+    .async_coro = js->active_async_coro,
+    .interrupt_run = js->interrupt_run,
+    .array_join_stack = js->array_join_stack,
+    .stringify = js->stringify,
+    .module_stack = js->modules.module_stack,
+    .code_unit = js->code_units.active,
+    .native_frame = vm->native_frame,
+    .realm = js->realm,
+    .import_meta = js->modules.import_meta,
+    .uv_run_sp = gc_uv_run_sp,
+    .native_sp = gc_native_sp(),
+    .native_lo = base > span ? base - span : 0,
+    .root_count = js->c_root_count,
+    .cstk_floor = js->cstk.floor,
+    .jit_active_depth = js->jit_active_depth,
+    .vm_exec_depth = js->vm_exec_depth,
+    .proxy_descriptor_depth = js->proxy_descriptor_depth,
+    .fp = vm->fp,
+    .sp = vm->sp,
+    .handler_depth = vm->handler_depth,
+    .microtasks_draining = js->microtasks_draining,
+    .async_inline_deferred = vm->async_inline.deferred,
+    .jit = vm->jit,
+    .suspend = vm->suspend,
+  };
+}
+
+static inline bool NativeUnwind_Abandoned(const sv_native_unwind_t *at, const ant_value_t *slot) {
+  uintptr_t addr = (uintptr_t)slot;
+  return addr >= at->native_lo && addr < at->native_sp;
+}
+
+void Silver_NativeUnwind_Abandon(ant_t *js, const sv_native_unwind_t *at) {
+  for (sv_upvalue_t **link = &js->vm->open_upvalues; *link;) {
+    sv_upvalue_t *uv = *link;
+    if (NativeUnwind_Abandoned(at, uv->location)) *link = uv->next;
+    else link = &uv->next;
+  }
+
+  ant_fixed_arena_t *ua = &js->upvalue_arena;
+  for (uint32_t chunk = 0; chunk < ua->chunk_count; chunk++) {
+    uint8_t *chunk_base = ua->chunks[chunk].base;
+    size_t used = fixed_arena_chunk_used(ua, chunk);
+
+    for (size_t off = 0; off < used; off += ua->elem_size) {
+      sv_upvalue_t *uv = (sv_upvalue_t *)(chunk_base + off);
+      if (!NativeUnwind_Abandoned(at, uv->location)) continue;
+
+      uv->closed = *uv->location;
+      uv->location = &uv->closed;
+      uv->next = NULL;
+      js->gc_remember_overflow = true;
+    }
+  }
+
+  vm_interrupt_unwind(js, at->interrupt_run);
+}
+
+void Silver_NativeUnwind_Restore(ant_t *js, const sv_native_unwind_t *at) {
+  sv_vm_t *vm = js->vm;
+
+  js->vm_segs = at->vm_segs;
+  gc_uv_segs = at->uv_segs;
+  gc_uv_run_sp = at->uv_run_sp;
+  js->temp_roots = at->temp_roots;
+  js->active_async_coro = at->async_coro;
+  js->interrupt_run = at->interrupt_run;
+  js->array_join_stack = at->array_join_stack;
+  js->stringify = at->stringify;
+  if (js->stringify) js->stringify->pprev = &js->stringify;
+  js->modules.module_stack = at->module_stack;
+  js->modules.import_meta = at->import_meta;
+  js->code_units.active = at->code_unit;
+  js->cstk.floor = at->cstk_floor;
+  js->jit_active_depth = at->jit_active_depth;
+  js->vm_exec_depth = at->vm_exec_depth;
+  js->proxy_descriptor_depth = at->proxy_descriptor_depth;
+  js->microtasks_draining = at->microtasks_draining;
+  if (at->root_count < js->c_root_count) js->c_root_count = at->root_count;
+
+  vm->native_frame = at->native_frame;
+  vm->jit = at->jit;
+  vm->suspend = at->suspend;
+  vm->async_inline.deferred = at->async_inline_deferred;
+  ant_realm_restore(js, at->realm);
+
+  sv_close_upvalues_from_slot(vm, vm->stack + at->sp);
+  sv_async_inline_discard(vm, js, at->fp + 1);
+  for (int f = vm->fp; f > at->fp; f--) sv_drop_frame_runtime_state(js, &vm->frames[f]);
+
+  vm->fp = at->fp;
+  vm->sp = at->sp;
+  vm->handler_depth = at->handler_depth;
+}
+#endif
 
 static bool sv_async_inline_reserve(sv_vm_t *vm) {
   if (vm->async_inline.len < vm->async_inline.cap) return true;
