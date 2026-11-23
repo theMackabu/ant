@@ -339,7 +339,6 @@ typedef struct {
 
 __attribute__((no_sanitize("address")))
 static void opt_scan_stack_range(ant_t *js, void *ctx, uintptr_t lo, uintptr_t hi) {
-  (void)js;
   const opt_stack_scan_t *scan = ctx;
   opt_code_t **codes = scan->codes;
   uint32_t count = scan->count;

@@ -353,7 +353,6 @@ struct ant_isolate_t {
   struct {
     void *base;
     void *main_base;
-    void *main_lo;
     size_t limit;
     void *floor;
   } cstk;

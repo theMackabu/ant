@@ -1279,7 +1279,6 @@ static inline void gc_walk_segmented(ant_t *js, uintptr_t lo, uintptr_t hi, gc_s
 #endif
 
 static void gc_scan_live_range(ant_t *js, void *ctx, uintptr_t lo, uintptr_t hi) {
-  (void)ctx;
   gc_scan_range(js, lo, hi);
 }
 
@@ -1296,21 +1295,9 @@ static inline void gc_walk_current_stack(ant_t *js, gc_stack_range_fn fn, void *
   fn(js, ctx, lo, hi);
 }
 
-__attribute__((always_inline))
-static inline void gc_walk_other_stacks(ant_t *js, gc_stack_range_fn fn, void *ctx) {
-  if (js->cstk.main_base && js->cstk.main_lo) {
-    uintptr_t lo, hi;
-    if (gc_get_stack_bounds(
-      (uintptr_t)js->cstk.main_base,
-      (uintptr_t)js->cstk.main_lo, &lo, &hi)
-    ) fn(js, ctx, lo, hi);
-  }
-}
-
 __attribute__((noinline))
 void gc_stack_live_ranges(ant_t *js, gc_stack_range_fn fn, void *ctx) {
   gc_walk_current_stack(js, fn, ctx);
-  gc_walk_other_stacks(js, fn, ctx);
 }
 
 __attribute__((noinline))
@@ -1320,10 +1307,6 @@ static void gc_scan_current_stack(ant_t *js) {
   if (setjmp(jb) != 0) return;
 #endif
   gc_walk_current_stack(js, gc_scan_live_range, NULL);
-}
-
-static void gc_scan_other_stacks(ant_t *js) {
-  gc_walk_other_stacks(js, gc_scan_live_range, NULL);
 }
 
 void gc_mark_coroutine(ant_t *js, coroutine_t *c) {
@@ -1548,7 +1531,6 @@ static void gc_mark_roots(ant_t *js) {
   if (!js->gc.minor) gc_grey_pending_promises(js, js->pending_promises_old);
 
   gc_scan_current_stack(js);
-  gc_scan_other_stacks(js);
 
   if (!js->gc.minor) {
     for (ant_object_t *obj = js->permanent_objects; obj; obj = obj->next) 
