@@ -1284,11 +1284,11 @@ static void gc_scan_live_range(ant_t *js, void *ctx, uintptr_t lo, uintptr_t hi)
   gc_scan_range(js, lo, hi);
 }
 
-static inline __attribute__((always_inline)) void gc_walk_stack(
-  ant_t *js, uintptr_t sp, gc_stack_range_fn fn, void *ctx
+static inline __attribute__((always_inline)) void gc_walk_current_stack(
+  ant_t *js, gc_stack_range_fn fn, void *ctx
 ) {
   uintptr_t lo, hi;
-  if (!gc_get_stack_bounds((uintptr_t)js->cstk.base, sp, &lo, &hi)) return;
+  if (!gc_get_stack_bounds((uintptr_t)js->cstk.base, gc_native_sp(), &lo, &hi)) return;
 #if GC_SCAN_SEGMENTED
   if (js->vm_segs || gc_uv_segs) {
     gc_walk_segmented(js, lo, hi, fn, ctx);
@@ -1312,7 +1312,7 @@ static inline __attribute__((always_inline)) void gc_walk_other_stacks(
 
 __attribute__((noinline))
 void gc_stack_live_ranges(ant_t *js, gc_stack_range_fn fn, void *ctx) {
-  gc_walk_stack(js, gc_native_sp(), fn, ctx);
+  gc_walk_current_stack(js, fn, ctx);
   gc_walk_other_stacks(js, fn, ctx);
 }
 
@@ -1322,7 +1322,7 @@ static void gc_scan_current_stack(ant_t *js) {
   jmp_buf jb;
   if (setjmp(jb) != 0) return;
 #endif
-  gc_walk_stack(js, gc_native_sp(), gc_scan_live_range, NULL);
+  gc_walk_current_stack(js, gc_scan_live_range, NULL);
 }
 
 static void gc_scan_other_stacks(ant_t *js) {

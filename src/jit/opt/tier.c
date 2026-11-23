@@ -343,6 +343,7 @@ static void opt_scan_stack_range(ant_t *js, void *ctx, uintptr_t lo, uintptr_t h
   const opt_stack_scan_t *scan = ctx;
   opt_code_t **codes = scan->codes;
   uint32_t count = scan->count;
+  uint64_t epoch = scan->epoch;
   uintptr_t first = (uintptr_t)codes[0]->executable.address;
   uintptr_t last = (uintptr_t)codes[count - 1]->executable.address + codes[count - 1]->executable.size;
   for (uintptr_t at = lo; at + sizeof(uintptr_t) <= hi; at += sizeof(uintptr_t)) {
@@ -354,7 +355,7 @@ static void opt_scan_stack_range(ant_t *js, void *ctx, uintptr_t lo, uintptr_t h
       if ((uintptr_t)codes[mid]->executable.address <= word) low = mid + 1;
       else high = mid;
     }
-    if (low && word < (uintptr_t)codes[low - 1]->executable.address + codes[low - 1]->executable.size) codes[low - 1]->active_epoch = scan->epoch;
+    if (low && word < (uintptr_t)codes[low - 1]->executable.address + codes[low - 1]->executable.size) codes[low - 1]->active_epoch = epoch;
   }
 }
 
@@ -392,7 +393,8 @@ void opt_tier_gc_mark_roots(ant_t *js) {
   state->scan_len = count;
   if (!count) return;
   qsort(state->scan, count, sizeof *state->scan, opt_code_address_order);
-  gc_stack_live_ranges(js, opt_scan_stack_range, &(opt_stack_scan_t){.codes = state->scan, .count = count, .epoch = epoch});
+  opt_stack_scan_t stack_scan = {.codes = state->scan, .count = count, .epoch = epoch};
+  gc_stack_live_ranges(js, opt_scan_stack_range, &stack_scan);
   for (uint32_t i = 0; i < count; i++) {
     opt_code_t *code = state->scan[i];
     if (code->active_epoch != epoch) continue;
