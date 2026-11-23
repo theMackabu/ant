@@ -436,6 +436,12 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
     
     func->jit_code = jit;
     sv_jit_compile_callees(js, func);
+    jit = func->jit_code;
+
+    if (!jit) {
+      if (synthetic_closure) gc_pop_roots(js, root_mark);
+      return SV_JIT_RETRY_INTERP;
+    }
 
     if (func->is_async && !func->jit_await_park && jit_loop_has_await(func, bc_offset)) {
       if (synthetic_closure) gc_pop_roots(js, root_mark);

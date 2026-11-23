@@ -19,6 +19,7 @@ libant_tests = [
   'gc-job-roots',
   'gc-parallel-stack',
   'gc-epoch-wrap',
+  'gc-fused-call-entry',
   'gc-untrusted-string-words',
   'gc-pin-permanent-oom',
   'gc-rope-table-oom',
