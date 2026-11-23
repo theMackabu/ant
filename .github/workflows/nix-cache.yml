@@ -47,6 +47,7 @@ jobs:
             runner: ubuntu-26.04-arm
           - name: macos-x64
             runner: macos-15-intel
+            cachix_install: nix profile install github:NixOS/nixpkgs/nixpkgs-26.05-darwin#cachix
           - name: macos-aarch64
             runner: macos-15
 
@@ -63,6 +64,7 @@ jobs:
         with:
           name: ant
           skipPush: true
+          installCommand: ${{ matrix.cachix_install }}
 
       - name: Configure Cachix with push access
         if: ${{ env.CACHIX_AUTH_TOKEN != '' }}
@@ -70,6 +72,7 @@ jobs:
         with:
           name: ant
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          installCommand: ${{ matrix.cachix_install }}
 
       - name: Prepare compiler cache
         run: |
