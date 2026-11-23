@@ -18,7 +18,6 @@ export function targets() {
     'test_accessor_undefined_result.cjs',
     'test_add_transition_append.cjs',
     'test_add_transition_reshapes.cjs',
-    'test_ant_c.cjs',
     'test_ant_cron.cjs',
     'test_aggregate_error_message.cjs',
     'test_ant_cron_cli.cjs',

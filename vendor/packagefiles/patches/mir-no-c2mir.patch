@@ -1,0 +1,26 @@
+--- a/meson.build
++++ b/meson.build
+@@ -30,22 +30,7 @@
+   install: false,
+ )
+ 
+-c2mir_size_args = []
+-if cc.get_argument_syntax() == 'msvc'
+-  c2mir_size_args = ['/O1']
+-elif cc.has_argument('-Oz')
+-  c2mir_size_args = ['-Oz']
+-else
+-  c2mir_size_args = ['-Os']
+-endif
+-
+-c2mir_lib = static_library(
+-  'c2mir', files('c2mir/c2mir.c'),
+-  c_args: mir_warn_args + mir_release_args + c2mir_size_args,
+-  install: false,
+-)
+-
+ mir_dep = declare_dependency(
+-  link_with: [c2mir_lib, mir_lib],
++  link_with: mir_lib,
+   include_directories: include_directories('.'),
+ )

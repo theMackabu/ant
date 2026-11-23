@@ -463,13 +463,6 @@ void init_builtin_module(ant_t *js) {
   js_set(js, hl_fn, "tags", Ant_Function_Create(js_highlight_tags));
   js_set(js, ant_obj, "highlight", hl_fn);
 
-  #ifdef ANT_HAVE_UNSAFE_C
-  #include "modules/cjit.h"
-  ant_value_t unsafe_obj = Ant_Object_Create(js);
-  init_cjit_module(js, unsafe_obj);
-  js_set(js, ant_obj, "unsafe", unsafe_obj);
-  #endif
-
   ant_value_t raw_obj = Ant_Object_Create(js);
   js_set_getter_desc(js, js_as_obj(raw_obj), "stack", 5, Ant_Function_Create(js_raw_stack), JS_DESC_C);
   js_set(js, raw_obj, "typeof", Ant_Function_Create(js_raw_typeof));
