@@ -443,13 +443,6 @@ static inline ant_value_t sv_op_check_ctor(sv_vm_t *vm, ant_t *js) {
   return Ant_Value_FromNumber(0);
 }
 
-static inline void sv_op_check_ctor_ret(sv_vm_t *vm, sv_frame_t *frame) {
-  ant_value_t val = vm->stack[vm->sp - 1];
-  if (is_object_type(val)) {
-    vm->stack[vm->sp++] = val;
-  } else vm->stack[vm->sp++] = frame->this;
-}
-
 static inline ant_value_t sv_materialize_builder_args(ant_t *js, ant_value_t *args, int n) {
   for (int i = 0; i < n; i++) {
     if (vtype(args[i]) != kTypeString || !str_is_heap_builder(args[i])) continue;

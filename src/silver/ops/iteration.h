@@ -326,15 +326,6 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js) {
   return Ant_Value_FromNumber(0);
 }
 
-static inline void sv_op_iter_get_value(sv_vm_t *vm, ant_t *js) {
-  ant_value_t obj = vm->stack[vm->sp - 1];
-  ant_value_t done = Ant_Value_Undefined;
-  ant_value_t value = Ant_Value_Undefined;
-  sv_iter_result_unpack(js, obj, &done, &value);
-  vm->stack[vm->sp - 1] = value;
-  vm->stack[vm->sp++] = mkval(kTypeBool, js_truthy(js, done));
-}
-
 ant_value_t sv_iter_close(
   sv_vm_t *vm, ant_t *js, ant_value_t iterator, bool suppress_error
 );
@@ -464,17 +455,6 @@ static inline ant_value_t sv_op_destructure_rest(sv_vm_t *vm, ant_t *js) {
   GC_ROOT_RESTORE(js, root_mark);
   vm->stack[vm->sp++] = rest;
   
-  return Ant_Value_FromNumber(0);
-}
-
-static inline ant_value_t sv_op_iter_call(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
-  ant_value_t method = vm->stack[vm->sp - 1];
-  ant_value_t iterator = vm->stack[vm->sp - 4];
-  if (!is_callable(method))
-    return js_mkerr(js, "iterator method is not callable");
-  ant_value_t result = sv_vm_call(vm, js, method, iterator, NULL, 0, NULL, Ant_Value_Undefined);
-  if (is_err(result)) return result;
-  vm->stack[vm->sp++] = result;
   return Ant_Value_FromNumber(0);
 }
 

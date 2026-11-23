@@ -664,25 +664,6 @@ void jit_emit_control(jit_compile_t *c) {
       break;
     }
 
-    case OP_NIP_CATCH: {
-      if (c->vs.sp < 2) {
-        c->ok = false;
-        break;
-      }
-      vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
-      jit_value_info_t info = vstack_value_info(&c->vs, c->vs.sp - 1);
-      MIR_reg_t a = c->vs.regs[c->vs.sp - 1];
-      MIR_reg_t below = c->vs.regs[c->vs.sp - 2];
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, below),
-                                   MIR_new_reg_op(c->ctx, a)));
-      c->vs.sp--;
-      c->vs.slot_type[c->vs.sp - 1] = SLOT_BOXED;
-      vstack_set_value_info(&c->vs, c->vs.sp - 1, info);
-      break;
-    }
-
     default:
       __builtin_unreachable();
   }

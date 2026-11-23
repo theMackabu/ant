@@ -313,11 +313,6 @@ L_GET_ELEM: {
   NEXT(OP_GET_ELEM);
 }
 
-L_GET_ELEM2: {
-  VM_CHECK(sv_op_get_elem2(vm, js, func, ip));
-  NEXT(OP_GET_ELEM2);
-}
-
 L_PUT_ELEM: {
   sv_tfb_record_dense_numeric_put(
     func, ip,
@@ -381,11 +376,6 @@ L_DEF_PRIVATE: {
 L_HAS_PRIVATE: {
   VM_CHECK(sv_op_has_private(vm, js));
   NEXT(OP_HAS_PRIVATE);
-}
-
-L_GET_SUPER: {
-  sv_op_get_super(vm, js);
-  NEXT(OP_GET_SUPER);
 }
 
 L_GET_SUPER_VAL: {
@@ -492,11 +482,6 @@ L_STR_APPEND_LOCAL: {
 L_STR_ALC_SNAPSHOT: {
   VM_CHECK(sv_op_str_append_local_snapshot(vm, js, frame, func, ip));
   NEXT(OP_STR_ALC_SNAPSHOT);
-}
-
-L_STR_FLUSH_LOCAL: {
-  VM_CHECK(sv_op_str_flush_local(vm, js, frame, ip));
-  NEXT(OP_STR_FLUSH_LOCAL);
 }
 
 L_EXP: {
@@ -611,16 +596,6 @@ L_IN: {
 L_IN_FIELD: {
   VM_CHECK(sv_op_in_field(vm, js, func, ip));
   NEXT(OP_IN_FIELD);
-}
-
-L_IS_NULLISH: {
-  sv_op_is_nullish(vm);
-  NEXT(OP_IS_NULLISH);
-}
-
-L_IS_UNDEF_OR_NULL: {
-  sv_op_is_undef_or_null(vm);
-  NEXT(OP_IS_UNDEF_OR_NULL);
 }
 
 L_BAND: {
@@ -1488,11 +1463,6 @@ L_CHECK_CTOR: {
   NEXT(OP_CHECK_CTOR);
 }
 
-L_CHECK_CTOR_RET: {
-  sv_op_check_ctor_ret(vm, frame);
-  NEXT(OP_CHECK_CTOR_RET);
-}
-
 L_HALT: VM_LEAVE(sv_op_halt(vm));
 L_THROW: VM_THROW(sv_op_throw(vm));
 L_THROW_ERROR: VM_THROW(sv_op_throw_error(vm, js, func, ip));
@@ -1530,11 +1500,6 @@ L_FINALLY: {
 L_FINALLY_DISCARD: {
   sv_op_finally_discard(vm);
   NEXT(OP_FINALLY_DISCARD);
-}
-
-L_NIP_CATCH: {
-  sv_op_nip_catch(vm);
-  NEXT(OP_NIP_CATCH);
 }
 
 L_UNWIND_JMP: {
@@ -1624,11 +1589,6 @@ L_ITER_NEXT: {
   NEXT(OP_ITER_NEXT);
 }
 
-L_ITER_GET_VALUE: {
-  sv_op_iter_get_value(vm, js);
-  NEXT(OP_ITER_GET_VALUE);
-}
-
 L_ITER_CLOSE: {
   VM_CHECK(sv_op_iter_close(vm, js, sv_get_u8(ip + 1)));
   NEXT(OP_ITER_CLOSE);
@@ -1642,11 +1602,6 @@ L_ITER_CLOSE_ASYNC: {
 L_ITER_CLOSE_CHECK: {
   VM_CHECK(sv_op_iter_close_check(vm, js));
   NEXT(OP_ITER_CLOSE_CHECK);
-}
-
-L_ITER_CALL: {
-  VM_CHECK(sv_op_iter_call(vm, js, ip));
-  NEXT(OP_ITER_CALL);
 }
 
 L_AWAIT_ITER_NEXT:  {
@@ -1859,11 +1814,6 @@ L_SPREAD: {
   NEXT(OP_SPREAD);
 }
 
-L_DEFINE_METHOD: {
-  sv_op_define_method(vm, js, func, ip);
-  NEXT(OP_DEFINE_METHOD);
-}
-
 L_DEFINE_METHOD_COMP: {
   VM_CHECK(sv_op_define_method_comp(vm, js, ip));
   NEXT(OP_DEFINE_METHOD_COMP);
@@ -1904,11 +1854,6 @@ L_DEFINE_CLASS: {
   NEXT(OP_DEFINE_CLASS);
 }
 
-L_DEFINE_CLASS_COMP: {
-  VM_CHECK(sv_op_define_class_comp(vm, js, func, ip));
-  NEXT(OP_DEFINE_CLASS_COMP);
-}
-
 L_TO_OBJECT: {
   VM_CHECK(sv_op_to_object(vm, js));
   NEXT(OP_TO_OBJECT);
@@ -1933,11 +1878,6 @@ L_TO_STRING_DEFER_NUMBER: {
 L_IS_UNDEF: {
   sv_op_is_undef(vm);
   NEXT(OP_IS_UNDEF);
-}
-
-L_IS_NULL: {
-  sv_op_is_null(vm);
-  NEXT(OP_IS_NULL);
 }
 
 L_IMPORT: {
@@ -2006,7 +1946,6 @@ L_PUT_CONST: {
   NEXT(OP_PUT_CONST);
 }
 
-L_DEBUGGER: NEXT(OP_DEBUGGER);
 L_NOP: NEXT(OP_NOP);
 
 L_LABEL:

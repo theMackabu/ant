@@ -198,12 +198,6 @@ static inline sv_finally_ret_t sv_op_finally_ret(
   return SV_FINALLY_RET_JUMP;
 }
 
-static inline void sv_op_nip_catch(sv_vm_t *vm) {
-  ant_value_t a = vm->stack[vm->sp - 1];
-  vm->stack[vm->sp - 2] = a;
-  vm->sp--;
-}
-
 static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
   ant_t *js = vm->js;
   

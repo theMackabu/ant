@@ -478,18 +478,6 @@ static inline ant_value_t sv_op_in(sv_vm_t *vm, ant_t *js) {
   return res;
 }
 
-static inline void sv_op_is_nullish(sv_vm_t *vm) {
-  ant_value_t v = vm->stack[--vm->sp];
-  uint8_t t = vtype(v);
-  vm->stack[vm->sp++] = mkval(kTypeBool, t == kTypeNull || t == kTypeUndefined);
-}
-
-static inline void sv_op_is_undef_or_null(sv_vm_t *vm) {
-  ant_value_t v = vm->stack[--vm->sp];
-  uint8_t t = vtype(v);
-  vm->stack[vm->sp++] = mkval(kTypeBool, t == kTypeNull || t == kTypeUndefined);
-}
-
 #ifdef SV_OPS_IMPLEMENTATION
 
 ant_value_t sv_push_bigint_relational(

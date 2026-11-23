@@ -371,17 +371,6 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                                      MIR_JSVAL, "lhs",
                                                      MIR_JSVAL, "rhs");
 
-  MIR_type_t sfl_ret = MIR_JSVAL;
-  c->str_flush_local_proto = MIR_new_proto(c->ctx, "sfl_proto",
-                                           1, &sfl_ret, 7,
-                                           MIR_T_I64, "vm",
-                                           MIR_T_I64, "js",
-                                           MIR_T_P, "func",
-                                           MIR_T_P, "args",
-                                           MIR_T_I32, "argc",
-                                           MIR_T_P, "locals",
-                                           MIR_T_I32, "slot_idx");
-
   MIR_type_t truthy_ret = MIR_T_I64;
   c->truthy_proto = MIR_new_proto(c->ctx, "truthy_proto",
                                   1, &truthy_ret, 2,
@@ -771,8 +760,6 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
       MIR_new_import(c->ctx, "jit_helper_str_append_local");
   c->imp_str_append_local_snapshot =
       MIR_new_import(c->ctx, "jit_helper_str_append_local_snapshot");
-  c->imp_str_flush_local =
-      MIR_new_import(c->ctx, "jit_helper_str_flush_local");
   c->imp_lt = MIR_new_import(c->ctx, "jit_helper_lt");
   c->imp_le = MIR_new_import(c->ctx, "jit_helper_le");
   c->imp_gt = MIR_new_import(c->ctx, "jit_helper_gt");
@@ -892,7 +879,6 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_throw_error = MIR_new_import(c->ctx, "jit_helper_throw_error");
   c->imp_set_proto = MIR_new_import(c->ctx, "jit_helper_set_proto");
   c->imp_copy_data_props = MIR_new_import(c->ctx, "js_copy_data_props");
-  c->imp_get_elem2 = MIR_new_import(c->ctx, "jit_helper_get_elem2");
   c->imp_get_elem_inline = MIR_new_import(c->ctx, "jit_helper_get_elem_inline");
   c->imp_band = MIR_new_import(c->ctx, "jit_helper_band");
   c->imp_bor = MIR_new_import(c->ctx, "jit_helper_bor");

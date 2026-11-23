@@ -6,31 +6,12 @@
 void jit_emit_bitwise(jit_compile_t *c) {
   const sv_asm_t *a = &c->as;
   switch (c->op) {
-    case OP_IS_UNDEF:
-    case OP_IS_NULL: {
-      vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
-      MIR_reg_t rs = vstack_top(&c->vs);
-      uint64_t cmp_val = (c->op == OP_IS_UNDEF) ? mkval(kTypeUndefined, 0) : mkval(kTypeNull, 0);
-      sv_asm_label_t is_true = sv_asm_new_label(a);
-      sv_asm_label_t is_done = sv_asm_new_label(a);
-      sv_asm_i64_beq_imm(a, is_true, rs, cmp_val);
-      mir_load_imm(c->ctx, c->jit_func, rs, Ant_Value_False);
-      sv_asm_jump(a, is_done);
-      sv_asm_bind(a, is_true);
-      mir_load_imm(c->ctx, c->jit_func, rs, Ant_Value_True);
-      sv_asm_bind(a, is_done);
-      vstack_clear_value_info(&c->vs, c->vs.sp - 1);
-      if (c->vs.known_bool) c->vs.known_bool[c->vs.sp - 1] = 1;
-      break;
-    }
-
-    case OP_IS_UNDEF_OR_NULL: {
+    case OP_IS_UNDEF: {
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t rs = vstack_top(&c->vs);
       sv_asm_label_t is_true = sv_asm_new_label(a);
       sv_asm_label_t is_done = sv_asm_new_label(a);
       sv_asm_i64_beq_imm(a, is_true, rs, mkval(kTypeUndefined, 0));
-      sv_asm_i64_beq_imm(a, is_true, rs, mkval(kTypeNull, 0));
       mir_load_imm(c->ctx, c->jit_func, rs, Ant_Value_False);
       sv_asm_jump(a, is_done);
       sv_asm_bind(a, is_true);

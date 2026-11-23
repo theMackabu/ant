@@ -1676,42 +1676,6 @@ static inline ant_value_t sv_op_get_elem(
   return Ant_Value_Undefined;
 }
 
-static inline ant_value_t sv_op_get_elem2(
-  sv_vm_t *vm, ant_t *js,
-  sv_func_t *func, uint8_t *ip
-) {
-  ant_value_t key = vm->stack[vm->sp - 1];
-  ant_value_t obj = vm->stack[vm->sp - 2];
-
-  uint8_t ot = vtype(obj);
-  if (ot == kTypeNull || ot == kTypeUndefined) {
-    js_error_site_t site = sv_error_site_at(func, ip);
-    ant_value_t err = sv_mk_nullish_read_error_by_key(js, &site, obj, key);
-    vm->sp--;
-    return err;
-  }
-
-  uint32_t idx;
-  if (vtype(obj) == kTypeArray && sv_number_key_index(key, &idx)) {
-    vm->stack[vm->sp - 1] = js_arr_get(js, obj, idx);
-    return Ant_Value_Undefined;
-  }
-
-  ant_value_t str_elem = Ant_Value_Undefined;
-  if (sv_try_index_get(js, obj, key, &str_elem)) {
-    vm->stack[vm->sp - 1] = str_elem;
-    return Ant_Value_Undefined;
-  }
-
-  ant_value_t res = sv_getprop_by_key(js, obj, key);
-  vm->sp--;
-  
-  if (is_err(res)) return res;
-  vm->stack[vm->sp++] = res;
-  
-  return Ant_Value_Undefined;
-}
-
 static inline bool sv_get_elem_string(ant_t *js, ant_value_t obj, ant_value_t key, ant_value_t *out) {
   if (vtype(key) != kTypeString || vtype(obj) != kTypeObject || str_is_heap_rope(key) || str_is_heap_builder(key)) return false;
   ant_object_t *ptr = js_obj_ptr(obj);
