@@ -307,6 +307,7 @@ export function targets() {
     'test_global_accessor_read.cjs',
     'test_headers_bytestring_wire.cjs',
     'test_eval_arguments_class_initializers.cjs',
+    'test_eval_lazy_arguments_hosts.cjs',
     'test_headers_foreach_live.cjs',
     'test_headers_sort_order.cjs',
     'test_eval_closure_scopes.cjs',

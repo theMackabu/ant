@@ -557,7 +557,7 @@ static inline ant_value_t sv_op_special_obj(
       ant_value_t env = frame ? sv_eval_variable_env(vm, js, frame) : Ant_Value_Undefined;
       if (is_err(env)) return env;
       vm->stack[vm->sp++] = env;
-      return frame ? sv_eval_bind_arguments(vm, js, frame, Ant_Value_Undefined) : Ant_Value_Undefined;
+      return frame ? sv_eval_bind_arguments(vm, js, frame, Ant_Value_Undefined, SV_EVAL_READS_ARGUMENTS) : Ant_Value_Undefined;
     }
     case SV_SPECIAL_ARGUMENTS:
       if (frame) break;

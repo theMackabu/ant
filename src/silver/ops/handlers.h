@@ -89,7 +89,6 @@ L_CLOSURE_ARGS: {
 }
 
 L_INIT_EVAL_ENV: {
-  if (!func->lazy_eval_env) VM_CHECK(sv_eval_init_variable_env(vm, js, frame));
   NEXT(OP_INIT_EVAL_ENV);
 }
 

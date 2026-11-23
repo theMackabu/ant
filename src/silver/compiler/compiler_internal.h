@@ -166,6 +166,7 @@ int add_upvalue_tdz(sv_compiler_t *c, uint16_t index, bool is_local, bool may_td
 void compile_method_function(sv_compiler_t *c, sv_ast_t *m);
 bool param_captured_by_value(sv_compiler_t *c, int local);
 bool local_written_once(sv_compiler_t *c, int local);
+uint64_t eval_written_params(sv_compiler_t *c, const sv_ast_t *fn);
 void type_dep_add(sv_compiler_t *c, int local);
 bool type_deps_live(const sv_compiler_t *c, int base);
 bool type_use_op(sv_compiler_t *c, int base, int pc);
@@ -377,6 +378,7 @@ void compile_export_emit(sv_compiler_t *c, const char *name, uint32_t len);
 bool ast_has_eval_var(const sv_ast_t *node);
 bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node);
 bool ast_literal_eval_mentions_arguments(sv_compiler_t *c, const sv_ast_t *node);
+void eval_source_visit(sv_compiler_t *c, const sv_ast_t *source, void (*visit)(void *data, const sv_ast_t *program), void *data);
 
 static inline bool is_quoted_ident_key(const sv_ast_t *node) {
   if (!node || node->type != N_IDENT || !node->str || node->len < 2) return false;
@@ -517,6 +519,11 @@ static inline bool has_implicit_arguments_obj(const sv_compiler_t *c) {
 static inline void note_eval_reads_arguments(sv_compiler_t *c) {
   while (c->enclosing) c = c->enclosing;
   c->eval_reads_arguments = true;
+}
+
+static inline void note_eval_writes_names(sv_compiler_t *c) {
+  while (c->enclosing) c = c->enclosing;
+  c->eval_writes_names = true;
 }
 
 static inline void emit_arguments_eval_env(sv_compiler_t *c, const char *name, uint32_t len) {
