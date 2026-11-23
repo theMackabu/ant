@@ -1,7 +1,7 @@
 const assert = require('node:assert');
 const { callback, FFIType } = require('ant:ffi');
 
-if (typeof Ant.unsafe.c !== 'function') {
+if (typeof Ant.unsafe?.c !== 'function') {
   console.log('FFI error boundaries skipped: built without Ant.unsafe.c');
 } else {
   const invoke = Ant.unsafe.c({ entry: 'invoke', args: ['uint64'], returns: 'int' })`

@@ -154,6 +154,7 @@ static ant_t *isolate_init(void *buf, size_t len, const ant_isolate_options_t *o
   js->modules.hooks = Ant_Value_Undefined;
   js->modules.import_meta = Ant_Value_Undefined;
   js->modules.state = NULL;
+  js->modules.main_path = NULL;
   js->length_str = Ant_String_FromLiteral(js, "length");
   
   realm_init_core(js);

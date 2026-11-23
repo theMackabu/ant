@@ -306,6 +306,7 @@ struct ant_isolate_t {
     } cjs;
     ant_esm_state_t *state;
     ant_module_t *module_stack;
+    const char *main_path;
   } modules;
 
   struct {

@@ -205,6 +205,7 @@ int ant_entry_module(ant_t *js, const char *filename, const char *cron_period) {
 
   js_set_filename(js, stable);
   js_setup_import_meta(js, stable);
+  js->modules.main_path = interned;
   
   ant_value_t ns = js_esm_import_sync(js, specifier);
   free(resolved);

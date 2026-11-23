@@ -257,19 +257,14 @@ static void js_set_import_module_ctx(ant_t *js, ant_value_t module_ctx) {
   js_set_slot_wb(js, js_func_obj(import_fn), SLOT_MODULE_CTX, module_ctx);
 }
 
-static ant_value_t js_get_current_import_meta(ant_t *js) {
-  ant_value_t import_meta = js_get_module_ctx_import_meta(js_get_execution_module_ctx(js));
-  if (vtype(import_meta) == kTypeObject) return import_meta;
-  return js->modules.import_meta;
-}
-
 bool js_try_import_meta(ant_t *js, ant_value_t func_obj, ant_value_t *out) {
   ant_value_t cfunc = js_get_slot(func_obj, SLOT_CFUNC);
   if (vtype(cfunc) != kTypeBuiltin) return false;
   if (!js_cfunc_same_entrypoint(cfunc, js_builtin_import)) return false;
 
-  ant_value_t meta = js_get_module_ctx_import_meta(js_get_slot(func_obj, SLOT_MODULE_CTX));
-  if (vtype(meta) == kTypeUndefined) meta = js_get_current_import_meta(js);
+  ant_value_t meta = js_get_module_ctx_import_meta(js_get_execution_module_ctx(js));
+  if (vtype(meta) == kTypeUndefined) meta = js_get_module_ctx_import_meta(js_get_slot(func_obj, SLOT_MODULE_CTX));
+  if (vtype(meta) == kTypeUndefined) meta = js->modules.import_meta;
   if (vtype(meta) == kTypeUndefined) return false;
 
   *out = meta;

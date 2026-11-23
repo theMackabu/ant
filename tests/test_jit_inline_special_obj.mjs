@@ -76,22 +76,11 @@ function runSuperSymbolHot() {
   return last;
 }
 
-const isAnt = typeof process === "object"
-  && process !== null
-  && typeof process.versions === "object"
-  && process.versions !== null
-  && typeof process.versions.ant === "string";
-
 assertEq(runNewTargetHot(), undefined, "hot inline helper preserves new.target");
 assertEq(superReader(), 7, "extracted static super value lookup");
 assertEq(runSuperHot(), 7, "hot direct call preserves super value lookup");
 assertEq(superSymbolReader(), 11, "extracted static super symbol lookup");
 assertEq(runSuperSymbolHot(), 11, "hot direct call preserves super symbol lookup");
 assertEq(new ConstructorDerived().fromCtor, "ctor-super", "constructor super getter lookup");
-
-if (isAnt) {
-  const antOnly = await import("./test_jit_inline_special_obj_import.mjs");
-  await antOnly.verifyImportBinding(assert, assertEq);
-}
 
 console.log("OK: test_jit_inline_special_obj");

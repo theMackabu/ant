@@ -740,6 +740,11 @@ static ant_value_t esm_complete_namespace_module(ant_t *js, esm_module_t *mod, a
   return ns;
 }
 
+static bool esm_is_main_path(ant_t *js, const char *resolved_path) {
+  const char *main_path = js->modules.main_path;
+  return main_path && strcmp(resolved_path, main_path) == 0;
+}
+
 static ant_value_t esm_prepare_eval_ctx(
   ant_t *js, const char *resolved_path, ant_value_t ns, ant_module_format_t format,
   bool is_main, const char *fallback_parent_path, ant_module_t *out_ctx
@@ -2572,10 +2577,9 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod, ant_value_t req
   ant_module_t eval_ctx;
   
   ant_value_t prep_res = esm_prepare_eval_ctx(
-    js, mod->resolved_path,
-    ns, mod->format,
-    false, prev_filename,
-    &eval_ctx
+    js, mod->resolved_path, ns, mod->format,
+    esm_is_main_path(js, mod->resolved_path), 
+    prev_filename, &eval_ctx
   );
   
   if (is_err(prep_res)) {

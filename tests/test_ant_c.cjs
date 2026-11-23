@@ -1,6 +1,6 @@
 const assert = require('assert');
 
-if (typeof Ant.unsafe.c !== 'function') {
+if (typeof Ant.unsafe?.c !== 'function') {
   console.log('Ant.unsafe.c skipped: built without it');
 } else {
   if (process.platform !== 'win32') {
