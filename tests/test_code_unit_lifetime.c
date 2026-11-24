@@ -28,6 +28,30 @@ static void collect(ant_t *js) {
   for (int i = 0; i < 4; i++) gc_run(js);
 }
 
+__attribute__((noinline)) static void check_unit_owned_ics(ant_t *js) {
+  sv_func_t *ic_fn = js_func_closure(js_get(js, js->global, "icFn"))->func;
+  assert(ic_fn->unit && ic_fn->ic_count > 0);
+  
+  int cached = 0;
+  for (uint16_t i = 0; i < ic_fn->ic_count; i++) {
+    assert(ic_fn->ic_slots[i].shape_ref_mask & SV_IC_UNIT_OWNED);
+    if (ic_fn->ic_slots[i].shape_ref_mask & SV_IC_SHAPE_REF_CACHED) cached++;
+  }
+  assert(cached > 0);
+  
+  const char *ic_lo = (const char *)ic_fn->ic_slots;
+  const char *ic_hi = (const char *)(ic_fn->ic_slots + ic_fn->ic_count);
+  for (size_t i = 0; i < js->ic.shape_ref_len; i++) {
+    const char *slot = (const char *)js->ic.shape_ref_slots[i];
+    assert(slot < ic_lo || slot >= ic_hi);
+  }
+}
+
+__attribute__((noinline)) static void scrub_below(void) {
+  volatile char region[64 * 1024];
+  memset((char *)region, 0, sizeof(region));
+}
+
 int main(void) {
   char stack_base;
   // compiled code would make the units immortal (sv_code_unit_make_immortal)
@@ -76,23 +100,9 @@ int main(void) {
     "  return s;"
     "`);"
     "globalThis.icSum = icFn();");
-  sv_func_t *ic_fn = js_func_closure(js_get(js, js->global, "icFn"))->func;
-  assert(ic_fn->unit && ic_fn->ic_count > 0);
-  
-  int cached = 0;
-  for (uint16_t i = 0; i < ic_fn->ic_count; i++) {
-    assert(ic_fn->ic_slots[i].shape_ref_mask & SV_IC_UNIT_OWNED);
-    if (ic_fn->ic_slots[i].shape_ref_mask & SV_IC_SHAPE_REF_CACHED) cached++;
-  }
-  assert(cached > 0);
-  
-  const char *ic_lo = (const char *)ic_fn->ic_slots;
-  const char *ic_hi = (const char *)(ic_fn->ic_slots + ic_fn->ic_count);
-  for (size_t i = 0; i < js->ic.shape_ref_len; i++) {
-    const char *slot = (const char *)js->ic.shape_ref_slots[i];
-    assert(slot < ic_lo || slot >= ic_hi);
-  }
-  
+  check_unit_owned_ics(js);
+  scrub_below();
+
   run(js, "globalThis.icFn = undefined;");
   collect(js);
 
