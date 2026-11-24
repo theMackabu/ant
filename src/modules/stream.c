@@ -6,11 +6,13 @@
 #include <string.h>
 #include <strings.h>
 
+#include "ptr.h"
 #include "ant.h"
 #include "gc.h"
 #include "cfunc.h"
-#include "ptr.h"
+#include "tokens.h"
 #include "errors.h"
+#include "protectors.h"
 #include "descriptors.h"
 #include "internal.h"
 #include "silver/call.h"
@@ -18,16 +20,17 @@
 #include "gc/modules.h"
 #include "gc/roots.h"
 
+#include "modules/blob.h"
 #include "modules/abort.h"
 #include "modules/assert.h"
 #include "modules/buffer.h"
 #include "modules/events.h"
 #include "modules/stream.h"
 #include "modules/iterator.h"
-#include "protectors.h"
+#include "modules/domexception.h"
 #include "modules/string_decoder.h"
 #include "streams/readable.h"
-#include "tokens.h"
+#include "streams/writable.h"
 
 static constexpr uint32_t STREAM_OP_TAG = Ant_NativeTag("STRO");
 static constexpr uint32_t STREAM_NATIVE_TAG = Ant_NativeTag("STRM");
@@ -51,6 +54,12 @@ typedef union {
 
 static constexpr int STREAM_OP_VALUES = sizeof(stream_op_fields_t) / sizeof(ant_value_t);
 
+typedef enum : uint8_t {
+#define STREAM_OP(name, ...) STREAM_OP_KIND_##name,
+#include "stream/ops.h"
+  STREAM_OP_KIND_COUNT,
+} stream_op_kind_t;
+
 typedef enum {
   STREAM_FROM_VALUE,
   STREAM_FROM_ASYNC,
@@ -60,29 +69,63 @@ typedef enum {
 } stream_from_mode_t;
 
 typedef struct {
+  ant_get_cache_t write_cache;
+  ant_get_cache_t pause_cache;
+  ant_get_cache_t resume_cache;
+} stream_pipe_extra_t;
+
+typedef struct {
+  js_iter_advance_fn advance;
+  stream_from_mode_t mode;
+  uint32_t index;
+} stream_from_extra_t;
+
+typedef struct {
+  ant_offset_t head;
+} stream_iter_extra_t;
+
+static const uint8_t stream_op_value_counts[STREAM_OP_KIND_COUNT] = {
+#define STREAM_OP(name, ...) sizeof(stream_##name##_op_t) / sizeof(ant_value_t),
+#include "stream/ops.h"
+};
+
+static const uint8_t stream_op_extra_sizes[STREAM_OP_KIND_COUNT] = {
+  [STREAM_OP_KIND_pipe] = sizeof(stream_pipe_extra_t),
+  [STREAM_OP_KIND_from] = sizeof(stream_from_extra_t),
+  [STREAM_OP_KIND_iter] = sizeof(stream_iter_extra_t),
+};
+
+typedef struct {
   ant_object_t *holder;
+  stream_op_kind_t kind;
+
+  bool called: 1;
+  bool pipe_end_dest: 1;
+  bool pipe_cleaned: 1;
+  bool web_closed: 1;
+  bool from_reading: 1;
+  bool iter_has_error: 1;
+  bool iter_paused: 1;
+  bool iter_detached: 1;
+  bool iter_ended: 1;
+  bool writer_closed: 1;
+  bool settle_fixed: 1;
+  bool duplex_reading: 1;
+  bool duplex_closed: 1;
+  bool gen_buffered: 1;
+  bool gen_final: 1;
+  bool gen_ended: 1;
+  bool gen_aborted: 1;
+
   union {
     ant_value_t values[STREAM_OP_VALUES];
 #define STREAM_OP(name, ...) stream_##name##_op_t name;
 #include "stream/ops.h"
   };
-  ant_offset_t iter_head;
-  ant_get_cache_t write_cache;
-  ant_get_cache_t pause_cache;
-  ant_get_cache_t resume_cache;
-  js_iter_advance_fn from_advance;
-  stream_from_mode_t from_mode;
-  uint32_t from_index;
-  bool called;
-  bool pipe_end_dest;
-  bool pipe_cleaned;
-  bool web_closed;
-  bool from_reading;
-  bool iter_has_error;
-  bool iter_paused;
-  bool iter_detached;
-  bool iter_ended;
 } stream_op_t;
+
+#define stream_op_new(js, name, holder_out) stream_op_alloc(js, STREAM_OP_KIND_##name, holder_out)
+#define stream_op_extra(op, name) ((stream_##name##_extra_t *)(&(op)->name + 1))
 
 typedef enum {
   STREAM_WRITE_THROWN = -1,
@@ -324,8 +367,9 @@ bool stream_is_destroyed(ant_t *js, ant_value_t stream_obj) {
   return priv ? priv->destroyed : js_truthy(js, js_get(js, stream_obj, "destroyed"));
 }
 
-static stream_op_t *stream_op_new(ant_t *js, ant_value_t *holder_out) {
-  stream_op_t *op = calloc(1, sizeof(*op));
+static stream_op_t *stream_op_alloc(ant_t *js, stream_op_kind_t kind, ant_value_t *holder_out) {
+  uint8_t count = stream_op_value_counts[kind];
+  stream_op_t *op = calloc(1, offsetof(stream_op_t, values) + count * sizeof(ant_value_t) + stream_op_extra_sizes[kind]);
   if (!op) return NULL;
 
   ant_value_t holder = Ant_Object_CreateBare(js);
@@ -334,11 +378,13 @@ static stream_op_t *stream_op_new(ant_t *js, ant_value_t *holder_out) {
     return NULL;
   }
 
-  for (int i = 0; i < STREAM_OP_VALUES; i++) op->values[i] = Ant_Value_Undefined;
+  for (int i = 0; i < count; i++) op->values[i] = Ant_Value_Undefined;
   op->holder = js_obj_ptr(holder);
+  op->kind = kind;
+  
   js_set_native(holder, op, STREAM_OP_TAG);
-
   *holder_out = holder;
+  
   return op;
 }
 
@@ -356,7 +402,7 @@ static inline ant_value_t stream_op_value(stream_op_t *op) {
 }
 
 static void stream_op_barrier(ant_t *js, stream_op_t *op) {
-  for (int i = 0; i < STREAM_OP_VALUES; i++) gc_write_barrier(js, op->holder, op->values[i]);
+  for (int i = 0; i < stream_op_value_counts[op->kind]; i++) gc_write_barrier(js, op->holder, op->values[i]);
 }
 
 static inline void stream_op_store(ant_t *js, stream_op_t *op, ant_value_t *field, ant_value_t value) {
@@ -434,7 +480,7 @@ static stream_private_state_t *stream_attach(ant_t *js, ant_value_t obj) {
 void gc_mark_stream_object(ant_t *js, ant_value_t value, gc_mark_fn mark) {
   stream_op_t *op = stream_op(value);
   if (op) {
-    for (int i = 0; i < STREAM_OP_VALUES; i++) mark(js, op->values[i]);
+    for (int i = 0; i < stream_op_value_counts[op->kind]; i++) mark(js, op->values[i]);
     return;
   }
 
@@ -475,9 +521,12 @@ void gc_finalize_stream_object(ant_t *js, ant_value_t value) {
   stream_op_t *op = stream_op(value);
   if (op) {
     js_clear_native(value, STREAM_OP_TAG);
-    js_get_cache_release(&op->write_cache);
-    js_get_cache_release(&op->pause_cache);
-    js_get_cache_release(&op->resume_cache);
+    if (op->kind == STREAM_OP_KIND_pipe) {
+      stream_pipe_extra_t *extra = stream_op_extra(op, pipe);
+      js_get_cache_release(&extra->write_cache);
+      js_get_cache_release(&extra->pause_cache);
+      js_get_cache_release(&extra->resume_cache);
+    }
     free(op);
     return;
   }
@@ -1383,6 +1432,7 @@ static ant_value_t stream_writable_write_impl(
   ant_value_t chunk, ant_value_t encoding,
   ant_value_t callback, bool allow_after_end
 );
+
 static ant_value_t js_writable_write(ant_params_t);
 static ant_value_t js_readable_pause(ant_params_t);
 static ant_value_t js_readable_resume(ant_params_t);
@@ -1391,8 +1441,8 @@ static void stream_pipe_flow(ant_t *js, stream_op_t *op, bool pause) {
   ant_value_t source = op->pipe.source;
   
   ant_value_t fn = pause
-    ? js_get_cached(js, source, "pause", 5, &op->pause_cache)
-    : js_get_cached(js, source, "resume", 6, &op->resume_cache);
+    ? js_get_cached(js, source, "pause", 5, &stream_op_extra(op, pipe)->pause_cache)
+    : js_get_cached(js, source, "resume", 6, &stream_op_extra(op, pipe)->resume_cache);
 
   if (vtype(fn) == kTypeBuiltin && js_cfunc_same_entrypoint(fn, pause ? js_readable_pause : js_readable_resume) && stream_readable_of(source)) {
     if (pause) stream_readable_pause(js, source);
@@ -1407,7 +1457,7 @@ static ant_value_t stream_pipe_deliver(ant_t *js, stream_op_t *op, ant_args_t) {
   ant_value_t dest = op->pipe.dest;
   
   if (!is_object_type(dest)) return Ant_Value_Undefined;
-  ant_value_t write_fn = js_get_cached(js, dest, "write", 5, &op->write_cache);
+  ant_value_t write_fn = js_get_cached(js, dest, "write", 5, &stream_op_extra(op, pipe)->write_cache);
   
   stream_private_state_t *dest_priv = vtype(write_fn) == kTypeBuiltin && 
     js_cfunc_same_entrypoint(write_fn, js_writable_write)
@@ -1498,7 +1548,7 @@ static ant_value_t js_stream_pipe(ant_params_t) {
 
   ant_value_t dest = args[0];
   ant_value_t state;
-  stream_op_t *op = stream_op_new(js, &state);
+  stream_op_t *op = stream_op_new(js, pipe, &state);
   if (!op) return Ant_Error_CreateOutOfMemory(js);
 
   ant_value_t on_data = js_heavy_mkfun(js, stream_pipe_on_data, state);
@@ -1602,7 +1652,7 @@ static ant_value_t stream_make_once(ant_t *js, ant_value_t fn, ant_value_t this_
   if (is_err(fn)) return fn;
 
   ant_value_t state;
-  stream_op_t *op = stream_op_new(js, &state);
+  stream_op_t *op = stream_op_new(js, once, &state);
   if (!op) return Ant_Error_CreateOutOfMemory(js);
 
   op->once.fn = fn;
@@ -1613,7 +1663,7 @@ static ant_value_t stream_make_once(ant_t *js, ant_value_t fn, ant_value_t this_
 
 static ant_value_t stream_make_call(ant_t *js, ant_value_t (*fn)(ant_params_t), ant_value_t stream_obj, ant_value_t callback) {
   ant_value_t state;
-  stream_op_t *op = stream_op_new(js, &state);
+  stream_op_t *op = stream_op_new(js, call, &state);
   if (!op) return Ant_Error_CreateOutOfMemory(js);
 
   op->call.stream = stream_obj;
@@ -1641,7 +1691,7 @@ static ant_value_t stream_run_destroy(ant_t *js, stream_private_state_t *priv, a
   }
 
   ant_value_t done_state;
-  stream_op_t *op = stream_op_new(js, &done_state);
+  stream_op_t *op = stream_op_new(js, destroy, &done_state);
   if (!op) return Ant_Error_CreateOutOfMemory(js);
 
   op->destroy.stream = stream_obj;
@@ -3133,7 +3183,7 @@ static ant_value_t stream_finished_register(ant_t *js, ant_value_t stream_obj, a
   if (!is_callable(callback)) callback = Ant_Function_Create(js_cfunc_noop);
 
   ant_value_t state;
-  stream_op_t *op = stream_op_new(js, &state);
+  stream_op_t *op = stream_op_new(js, finished, &state);
   if (!op) return Ant_Error_CreateOutOfMemory(js);
 
   ant_value_t on_finish = js_heavy_mkfun(js, stream_finished_on_finish, state);
@@ -3198,7 +3248,7 @@ static ant_value_t js_stream_pipeline(ant_params_t) {
   if (stream_count <= 0) return Ant_Value_Undefined;
 
   ant_value_t state;
-  stream_op_t *op = stream_op_new(js, &state);
+  stream_op_t *op = stream_op_new(js, pipeline, &state);
   if (!op) return Ant_Error_CreateOutOfMemory(js);
 
   op->pipeline.callback = callback;
@@ -3284,7 +3334,7 @@ static ant_value_t js_stream_async_dispose(ant_params_t) {
   ant_value_t error = ended ? Ant_Value_Null : abort_signal_make_error(js, Ant_Value_Undefined);
   ant_value_t state;
   
-  stream_op_t *op = stream_op_new(js, &state);
+  stream_op_t *op = stream_op_new(js, dispose, &state);
   if (!op) {
     js_reject_promise(js, promise, Ant_Error_ConsumeMarker(js, Ant_Error_CreateOutOfMemory(js)));
     return promise;
@@ -3477,16 +3527,16 @@ static void stream_readable_from_step(ant_t *js, ant_value_t state) {
       return;
     }
 
-    if (op->from_mode == STREAM_FROM_VALUE) {
+    if (stream_op_extra(op, from)->mode == STREAM_FROM_VALUE) {
       op->from_reading = false;
       stream_rs_add(js, priv, op->from.source, Ant_Value_Undefined, false);
       stream_rs_add(js, priv, Ant_Value_Null, Ant_Value_Undefined, false);
       return;
     }
 
-    if (op->from_mode == STREAM_FROM_ARRAY) {
+    if (stream_op_extra(op, from)->mode == STREAM_FROM_ARRAY) {
       if (!ant_protector_intact(js, ANT_PROTECTOR_ARRAY_ITERATION)) {
-        ant_value_t iterator = js_array_iterator_at(js, op->from.source, op->from_index);
+        ant_value_t iterator = js_array_iterator_at(js, op->from.source, stream_op_extra(op, from)->index);
         if (is_err(iterator)) {
           stream_readable_from_fail(js, op, iterator);
           return;
@@ -3498,18 +3548,18 @@ static void stream_readable_from_step(ant_t *js, ant_value_t state) {
           return;
         }
         stream_op_store(js, op, &op->from.next, next_fn);
-        op->from_advance = js_iter_find_advance(js, iterator, next_fn);
-        op->from_mode = STREAM_FROM_SYNC;
+        stream_op_extra(op, from)->advance = js_iter_find_advance(js, iterator, next_fn);
+        stream_op_extra(op, from)->mode = STREAM_FROM_SYNC;
         continue;
       }
 
       ant_value_t source = op->from.source;
-      if (op->from_index >= (uint32_t)js_arr_len(js, source)) {
+      if (stream_op_extra(op, from)->index >= (uint32_t)js_arr_len(js, source)) {
         stream_readable_from_push(js, op, true, Ant_Value_Undefined);
         return;
       }
 
-      ant_value_t value = js_arr_get(js, source, op->from_index++);
+      ant_value_t value = js_arr_get(js, source, stream_op_extra(op, from)->index++);
       if (Ant_Exception_Pending(js)) {
         stream_readable_from_fail(js, op, Ant_Exception_Current(js));
         return;
@@ -3521,8 +3571,8 @@ static void stream_readable_from_step(ant_t *js, ant_value_t state) {
       continue;
     }
 
-    if (op->from_mode == STREAM_FROM_SYNC && op->from_advance) {
-      iterator_t it = { op->from.iterator, op->from.next, op->from_advance };
+    if (stream_op_extra(op, from)->mode == STREAM_FROM_SYNC && stream_op_extra(op, from)->advance) {
+      iterator_t it = { op->from.iterator, op->from.next, stream_op_extra(op, from)->advance };
       ant_value_t value = Ant_Value_Undefined;
 
       if (!js_iter_next(js, &it, &value)) {
@@ -3537,14 +3587,14 @@ static void stream_readable_from_step(ant_t *js, ant_value_t state) {
       continue;
     }
 
-    const char *method = op->from_mode == STREAM_FROM_READER ? "read" : "next";
+    const char *method = stream_op_extra(op, from)->mode == STREAM_FROM_READER ? "read" : "next";
     ant_value_t next_result = stream_call_prop(js, op->from.iterator, method, NULL, 0);
     if (is_err(next_result)) {
       stream_readable_from_fail(js, op, next_result);
       return;
     }
 
-    if (op->from_mode != STREAM_FROM_SYNC) {
+    if (stream_op_extra(op, from)->mode != STREAM_FROM_SYNC) {
       int awaited = stream_readable_from_await(js, state, next_result, stream_readable_from_on_result);
       if (awaited != 0) return;
       if (!stream_readable_from_accept(js, op, next_result)) return;
@@ -3598,7 +3648,7 @@ static ant_value_t stream_readable_from_destroy(ant_params_t) {
   ant_value_t iterator = op->from.iterator;
 
   stream_release_reader(js, op);
-  if (is_object_type(iterator) && op->from_mode != STREAM_FROM_READER) {
+  if (is_object_type(iterator) && stream_op_extra(op, from)->mode != STREAM_FROM_READER) {
     ant_value_t returned = stream_call_prop(js, iterator, "return", NULL, 0);
     if (is_err(returned)) Ant_Error_ConsumeMarker(js, returned);
     else if (vtype(returned) == kTypePromise) promise_mark_handled(returned);
@@ -3606,6 +3656,18 @@ static ant_value_t stream_readable_from_destroy(ant_params_t) {
 
   stream_call_callback(js, callback, &error, 1);
   return Ant_Value_Undefined;
+}
+
+static void stream_readable_from_attach(ant_t *js, ant_value_t readable, ant_value_t state) {
+  ant_value_t read_fn = js_heavy_mkfun(js, stream_readable_from_read, state);
+  stream_private_state_t *priv = stream_private_state(readable);
+
+  if (priv) {
+    stream_store(js, priv, &priv->from_read, read_fn);
+    stream_store(js, priv, &priv->from_state, state);
+  }
+
+  js_set(js, readable, "_read", read_fn);
 }
 
 static ant_value_t stream_readable_from_options(ant_t *js, ant_value_t opts) {
@@ -3677,10 +3739,10 @@ static ant_value_t stream_readable_from_source(ant_t *js, ant_value_t source, an
   readable = stream_construct(js, js->builtins.readable_proto, options, stream_init_readable, Ant_Value_Undefined);
   if (is_err(readable)) { result = readable; goto done; }
 
-  op = stream_op_new(js, &state);
+  op = stream_op_new(js, from, &state);
   if (!op) { result = Ant_Error_CreateOutOfMemory(js); goto done; }
 
-  op->from_mode = mode == STREAM_FROM_SYNC && vtype(source) == kTypeArray &&
+  stream_op_extra(op, from)->mode = mode == STREAM_FROM_SYNC && vtype(source) == kTypeArray &&
     js_iter_is_array_values(iterator, next_fn, source) &&
     ant_protector_intact(js, ANT_PROTECTOR_ARRAY_ITERATION)
     ? STREAM_FROM_ARRAY : mode;
@@ -3690,18 +3752,10 @@ static ant_value_t stream_readable_from_source(ant_t *js, ant_value_t source, an
   op->from.iterator = iterator;
   op->from.reader = reader;
   op->from.next = next_fn;
-  op->from_advance = advance;
+  stream_op_extra(op, from)->advance = advance;
   stream_op_barrier(js, op);
 
-  ant_value_t read_fn = js_heavy_mkfun(js, stream_readable_from_read, state);
-  stream_private_state_t *readable_priv = stream_private_state(readable);
-  
-  if (readable_priv) {
-    stream_store(js, readable_priv, &readable_priv->from_read, read_fn);
-    stream_store(js, readable_priv, &readable_priv->from_state, state);
-  }
-  
-  js_set(js, readable, "_read", read_fn);
+  stream_readable_from_attach(js, readable, state);
   js_set(js, readable, "_destroy", js_heavy_mkfun(js, stream_readable_from_destroy, state));
   result = readable;
 
@@ -3782,13 +3836,12 @@ static ant_value_t stream_to_web_cancel(ant_params_t) {
   return is_err(cancel_result) ? cancel_result : Ant_Value_Undefined;
 }
 
-static ant_value_t js_readable_to_web(ant_params_t) {
-  ant_value_t source = nargs > 0 ? args[0] : Ant_Value_Undefined;
+static ant_value_t stream_readable_to_web(ant_t *js, ant_value_t source) {
   if (!is_object_type(source))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Readable.toWeb requires a stream");
 
   ant_value_t state;
-  stream_op_t *op = stream_op_new(js, &state);
+  stream_op_t *op = stream_op_new(js, web, &state);
   if (!op) return Ant_Error_CreateOutOfMemory(js);
 
   stream_op_store(js, op, &op->web.source, source);
@@ -3815,6 +3868,10 @@ static ant_value_t js_readable_to_web(ant_params_t) {
   return web_stream;
 }
 
+static ant_value_t js_readable_to_web(ant_params_t) {
+  return stream_readable_to_web(js, nargs > 0 ? args[0] : Ant_Value_Undefined);
+}
+
 static constexpr double STREAM_ITER_PAUSE_AT = 16;
 static constexpr double STREAM_ITER_RESUME_AT = 4;
 
@@ -3831,12 +3888,12 @@ static ant_value_t stream_iter_rejected(ant_t *js, ant_value_t error) {
 }
 
 static double stream_iter_queued(ant_t *js, stream_op_t *op) {
-  return (double)js_arr_len(js, op->iter.queue) - (double)op->iter_head;
+  return (double)js_arr_len(js, op->iter.queue) - (double)stream_op_extra(op, iter)->head;
 }
   
 static void stream_iter_clear_queue(ant_t *js, stream_op_t *op) {
   js_arr_set_dense_length(js, op->iter.queue, 0);
-  op->iter_head = 0;
+  stream_op_extra(op, iter)->head = 0;
 }
 
 static void stream_iter_detach(ant_t *js, stream_op_t *op) {
@@ -3908,10 +3965,10 @@ static ant_value_t stream_iter_next(ant_params_t) {
 
   if (stream_iter_queued(js, op) > 0) {
     ant_value_t queue = op->iter.queue;
-    ant_value_t chunk = js_arr_get(js, queue, op->iter_head);
+    ant_value_t chunk = js_arr_get(js, queue, stream_op_extra(op, iter)->head);
 
-    if (op->iter_head + 1 >= js_arr_len(js, queue)) stream_iter_clear_queue(js, op);
-    else op->iter_head++;
+    if (stream_op_extra(op, iter)->head + 1 >= js_arr_len(js, queue)) stream_iter_clear_queue(js, op);
+    else stream_op_extra(op, iter)->head++;
 
     if (op->iter_paused && stream_iter_queued(js, op) <= STREAM_ITER_RESUME_AT && !op->iter_detached) {
       op->iter_paused = false;
@@ -3963,7 +4020,7 @@ static ant_value_t js_readable_async_iterator(ant_params_t) {
   bool ended = js_truthy(js, js_get(js, call_this, "readableEnded")) || stream_is_destroyed(js, call_this);
 
   ant_value_t state;
-  stream_op_t *op = stream_op_new(js, &state);
+  stream_op_t *op = stream_op_new(js, iter, &state);
   if (!op) return Ant_Error_CreateOutOfMemory(js);
   
   GC_ROOT_SAVE(root_mark, js);
@@ -4104,6 +4161,809 @@ static void stream_define_writable_methods(ant_t *js, ant_value_t proto) {
   stream_define_writable_accessors(js, proto);
 }
 
+static void stream_sink_settle(ant_t *js, ant_value_t *field, ant_value_t error, bool reject) {
+  ant_value_t promise = *field;
+  if (vtype(promise) != kTypePromise) return;
+
+  *field = Ant_Value_Undefined;
+  if (reject) js_reject_promise(js, promise, error);
+  else js_resolve_promise(js, promise, Ant_Value_Undefined);
+}
+
+static void stream_sink_finish(ant_t *js, stream_op_t *op, ant_value_t error, bool failed) {
+  if (op->web_closed) return;
+  op->web_closed = true;
+
+  stream_sink_op_t *sink = &op->sink;
+  stream_remove_listener(js, sink->source, "drain", sink->on_drain);
+  stream_remove_listener(js, sink->source, "finish", sink->on_finish);
+  stream_remove_listener(js, sink->source, "close", sink->on_close);
+
+  bool closing = vtype(sink->closed) == kTypePromise;
+  if (!failed && !closing) {
+    error = abort_signal_make_error(js, Ant_Value_Undefined);
+    failed = true;
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, error);
+  stream_sink_settle(js, &sink->pending, error, failed);
+  if (closing) stream_sink_settle(js, &sink->closed, error, failed);
+  else ws_default_controller_error(js, ws_stream_controller(sink->stream), error);
+  GC_ROOT_RESTORE(js, root_mark);
+}
+
+static ant_value_t stream_sink_on_drain(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  stream_sink_settle(js, &op->sink.pending, Ant_Value_Undefined, false);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_sink_on_finish(ant_params_t) {
+  stream_sink_finish(js, stream_op_current(js, call_func), Ant_Value_Undefined, false);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_sink_on_error(ant_params_t) {
+  stream_sink_finish(js, stream_op_current(js, call_func), nargs > 0 ? args[0] : Ant_Value_Undefined, true);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_sink_on_close(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  if (op->web_closed) return Ant_Value_Undefined;
+  stream_sink_finish(js, op, stream_coded_error(js, "ERR_STREAM_PREMATURE_CLOSE", "Premature close"), true);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_sink_write(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t chunk = nargs > 0 ? args[0] : Ant_Value_Undefined;
+
+  ant_value_t accepted = stream_call_prop(js, op->sink.source, "write", &chunk, 1);
+  if (is_err(accepted)) return accepted;
+  if (js_truthy(js, accepted) || op->web_closed) return Ant_Value_Undefined;
+
+  ant_value_t pending = js_mkpromise(js);
+  stream_op_store(js, op, &op->sink.pending, pending);
+  return pending;
+}
+
+static ant_value_t stream_sink_close(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t source = op->sink.source;
+
+  if (op->web_closed || js_truthy(js, js_get(js, source, "writableEnded"))) return Ant_Value_Undefined;
+
+  ant_value_t closed = js_mkpromise(js);
+  stream_op_store(js, op, &op->sink.closed, closed);
+
+  ant_value_t ended = stream_call_prop(js, source, "end", NULL, 0);
+  return is_err(ended) ? ended : closed;
+}
+
+static ant_value_t stream_sink_abort(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t destroyed = stream_destroy(js, op->sink.source, nargs > 0 ? args[0] : Ant_Value_Undefined);
+  return is_err(destroyed) ? destroyed : Ant_Value_Undefined;
+}
+
+static ant_value_t stream_writable_to_web(ant_t *js, ant_value_t source) {
+  ant_value_t write_fn = is_object_type(source) ? js_getprop_fallback(js, source, "write") : Ant_Value_Undefined;
+  if (is_err(write_fn)) return write_fn;
+  if (!is_callable(write_fn))
+    return Ant_Error_CreateInvalidArgType(js, "streamWritable", "an instance of stream.Writable", source);
+
+  if (stream_is_destroyed(js, source) || js_truthy(js, js_get(js, source, "writableEnded"))) {
+    ant_value_t closed_stream = ws_create_stream(js, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined, 1.0);
+    if (is_err(closed_stream)) return closed_stream;
+    ant_value_t closed = writable_stream_close(js, closed_stream);
+    return is_err(closed) ? closed : closed_stream;
+  }
+
+  ant_value_t state;
+  stream_op_t *op = stream_op_new(js, sink, &state);
+  if (!op) return Ant_Error_CreateOutOfMemory(js);
+  stream_op_store(js, op, &op->sink.source, source);
+
+  ant_value_t hwm = js_get(js, source, "writableHighWaterMark");
+  ant_value_t web_stream = ws_create_stream(
+    js,
+    js_heavy_mkfun(js, stream_sink_write, state),
+    js_heavy_mkfun(js, stream_sink_close, state),
+    js_heavy_mkfun(js, stream_sink_abort, state),
+    vtype(hwm) == kTypeNumber ? Ant_Value_AsNumberUnchecked(hwm) : 1.0
+  );
+  if (is_err(web_stream)) return web_stream;
+  stream_op_store(js, op, &op->sink.stream, web_stream);
+
+  ant_value_t on_drain = js_heavy_mkfun(js, stream_sink_on_drain, state);
+  ant_value_t on_finish = js_heavy_mkfun(js, stream_sink_on_finish, state);
+  ant_value_t on_error = js_heavy_mkfun(js, stream_sink_on_error, state);
+  ant_value_t on_close = js_heavy_mkfun(js, stream_sink_on_close, state);
+
+  op->sink.on_drain = on_drain;
+  op->sink.on_finish = on_finish;
+  op->sink.on_close = on_close;
+  stream_op_barrier(js, op);
+
+  stream_add_listener(js, source, "drain", on_drain, false);
+  stream_add_listener(js, source, "finish", on_finish, false);
+  stream_add_listener(js, source, "error", on_error, false);
+  stream_add_listener(js, source, "close", on_close, false);
+
+  return web_stream;
+}
+
+static ant_value_t js_writable_to_web(ant_params_t) {
+  return stream_writable_to_web(js, nargs > 0 ? args[0] : Ant_Value_Undefined);
+}
+
+static ant_value_t stream_settle_fulfilled(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  stream_call_callback(js, op->settle.callback, &op->settle.error, op->settle_fixed ? 1 : 0);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_settle_rejected(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t error = op->settle_fixed ? op->settle.error : nargs > 0 ? args[0] : Ant_Value_Undefined;
+  stream_call_callback(js, op->settle.callback, &error, 1);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_settle_callback(
+  ant_t *js, ant_value_t result,
+  ant_value_t callback, ant_value_t error, bool fixed
+) {
+  if (is_err(result)) {
+    ant_value_t thrown = Ant_Error_ConsumeMarker(js, result);
+    stream_call_callback(js, callback, fixed ? &error : &thrown, 1);
+    return Ant_Value_Undefined;
+  }
+
+  if (vtype(result) != kTypePromise) {
+    stream_call_callback(js, callback, &error, fixed ? 1 : 0);
+    return Ant_Value_Undefined;
+  }
+
+  ant_value_t state;
+  stream_op_t *op = stream_op_new(js, settle, &state);
+  if (!op) return Ant_Error_CreateOutOfMemory(js);
+
+  op->settle.callback = callback;
+  op->settle.error = error;
+  op->settle_fixed = fixed;
+  stream_op_barrier(js, op);
+
+  Ant_Promise_Observe(
+    js, result,
+    js_heavy_mkfun(js, stream_settle_fulfilled, state),
+    js_heavy_mkfun(js, stream_settle_rejected, state)
+  );
+  
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_writer_write(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t written = ws_writer_write(js, op->writer.writer, nargs > 0 ? args[0] : Ant_Value_Undefined);
+  return stream_settle_callback(js, written, nargs > 2 ? args[2] : Ant_Value_Undefined, Ant_Value_Undefined, false);
+}
+
+static ant_value_t stream_writer_final(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t closed = stream_call_prop(js, op->writer.writer, "close", NULL, 0);
+  return stream_settle_callback(js, closed, nargs > 0 ? args[0] : Ant_Value_Undefined, Ant_Value_Undefined, false);
+}
+
+static ant_value_t stream_writer_destroy(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t error = nargs > 0 ? args[0] : Ant_Value_Null;
+  ant_value_t callback = nargs > 1 ? args[1] : Ant_Value_Undefined;
+  bool has_error = !is_null(error) && !is_undefined(error);
+
+  if (is_object_type(op->writer.reader)) {
+    ant_value_t cancelled = stream_call_prop(js, op->writer.reader, "cancel", &error, has_error ? 1 : 0);
+    if (is_err(cancelled)) Ant_Error_ConsumeMarker(js, cancelled);
+    else if (vtype(cancelled) == kTypePromise) promise_mark_handled(cancelled);
+  }
+
+  if (op->writer_closed) {
+    stream_call_callback(js, callback, &error, 1);
+    return Ant_Value_Undefined;
+  }
+
+  ant_value_t released = has_error
+    ? stream_call_prop(js, op->writer.writer, "abort", &error, 1)
+    : stream_call_prop(js, op->writer.writer, "close", NULL, 0);
+    
+  return stream_settle_callback(js, released, callback, error, true);
+}
+
+static ant_value_t stream_writer_on_closed(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  op->writer_closed = true;
+
+  stream_private_state_t *priv = stream_writable_of(op->writer.writable);
+  if (!priv || priv->writable.ended) return Ant_Value_Undefined;
+
+  stream_destroy(js, op->writer.writable, stream_coded_error(js, "ERR_STREAM_PREMATURE_CLOSE", "Premature close"));
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_writer_on_errored(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  op->writer_closed = true;
+  stream_destroy(js, op->writer.writable, nargs > 0 ? args[0] : Ant_Value_Undefined);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_writer_attach(ant_t *js, ant_value_t writable, ant_value_t writer, ant_value_t reader) {
+  ant_value_t state;
+  stream_op_t *op = stream_op_new(js, writer, &state);
+  if (!op) return Ant_Error_CreateOutOfMemory(js);
+
+  op->writer.writable = writable;
+  op->writer.writer = writer;
+  op->writer.reader = reader;
+  stream_op_barrier(js, op);
+
+  js_set(js, writable, "_write", js_heavy_mkfun(js, stream_writer_write, state));
+  js_set(js, writable, "_final", js_heavy_mkfun(js, stream_writer_final, state));
+  js_set(js, writable, "_destroy", js_heavy_mkfun(js, stream_writer_destroy, state));
+
+  ant_value_t closed = js_get(js, writer, "closed");
+  if (is_err(closed)) return closed;
+  
+  if (vtype(closed) == kTypePromise) Ant_Promise_Observe(
+    js, closed,
+    js_heavy_mkfun(js, stream_writer_on_closed, state),
+    js_heavy_mkfun(js, stream_writer_on_errored, state)
+  );
+
+  return writable;
+}
+
+static ant_value_t stream_writable_from_web(ant_t *js, ant_value_t source, ant_value_t options) {
+  if (!ws_is_stream(source))
+    return Ant_Error_CreateInvalidArgType(js, "writableStream", "an instance of WritableStream", source);
+
+  ant_value_t writer = ws_writer_create(js, source, Ant_Value_Undefined);
+  if (is_err(writer)) return writer;
+
+  ant_value_t writable = stream_construct(js, js->builtins.writable_proto, options, stream_init_writable, Ant_Value_Undefined);
+  if (is_err(writable)) return writable;
+
+  return stream_writer_attach(js, writable, writer, Ant_Value_Undefined);
+}
+
+static ant_value_t js_writable_from_web(ant_params_t) {
+  return stream_writable_from_web(js, nargs > 0 ? args[0] : Ant_Value_Undefined, nargs > 1 ? args[1] : Ant_Value_Undefined);
+}
+
+static ant_value_t js_duplex_to_web(ant_params_t) {
+  ant_value_t source = nargs > 0 ? args[0] : Ant_Value_Undefined;
+
+  ant_value_t writable = stream_writable_to_web(js, source);
+  if (is_err(writable)) return writable;
+
+  ant_value_t readable = stream_readable_to_web(js, source);
+  if (is_err(readable)) return readable;
+
+  ant_value_t pair = Ant_Object_Create(js);
+  js_set(js, pair, "readable", readable);
+  js_set(js, pair, "writable", writable);
+  
+  return pair;
+}
+
+static ant_value_t stream_duplex_from_web(ant_t *js, ant_value_t pair, ant_value_t options) {
+  if (!is_object_type(pair)) return Ant_Error_CreateInvalidArgType(js, "pair", "of type object", pair);
+
+  ant_value_t readable = js_get(js, pair, "readable");
+  if (is_err(readable)) return readable;
+  if (!rs_is_stream(readable))
+    return Ant_Error_CreateInvalidArgType(js, "pair.readable", "an instance of ReadableStream", readable);
+
+  ant_value_t writable = js_get(js, pair, "writable");
+  if (is_err(writable)) return writable;
+  if (!ws_is_stream(writable))
+    return Ant_Error_CreateInvalidArgType(js, "pair.writable", "an instance of WritableStream", writable);
+
+  ant_value_t writer = ws_writer_create(js, writable, Ant_Value_Undefined);
+  if (is_err(writer)) return writer;
+
+  ant_value_t reader = rs_reader_create(js, readable, Ant_Value_Undefined);
+  if (is_err(reader)) return reader;
+
+  ant_value_t duplex = stream_construct_duplex_like(js, js->builtins.duplex_proto, options, Ant_Value_Undefined);
+  if (is_err(duplex)) return duplex;
+  js_set(js, duplex, "allowHalfOpen", Ant_Value_FromBool(js_truthy(js, stream_get_option(js, options, "allowHalfOpen"))));
+
+  ant_value_t state;
+  stream_op_t *op = stream_op_new(js, from, &state);
+  if (!op) return Ant_Error_CreateOutOfMemory(js);
+
+  stream_op_extra(op, from)->mode = STREAM_FROM_READER;
+  op->from.readable = duplex;
+  op->from.iterator = reader;
+  op->from.reader = reader;
+  stream_op_barrier(js, op);
+  stream_readable_from_attach(js, duplex, state);
+
+  return stream_writer_attach(js, duplex, writer, reader);
+}
+
+static ant_value_t js_duplex_from_web(ant_params_t) {
+  return stream_duplex_from_web(js, nargs > 0 ? args[0] : Ant_Value_Undefined, nargs > 1 ? args[1] : Ant_Value_Undefined);
+}
+
+static inline bool stream_is_nullish(ant_value_t value) {
+  return is_null(value) || is_undefined(value);
+}
+
+static inline ant_value_t stream_take(ant_value_t *field) {
+  ant_value_t value = *field;
+  *field = Ant_Value_Undefined;
+  return value;
+}
+
+static bool stream_has_side(ant_t *js, ant_value_t value, bool writable) {
+  if (!is_object_type(value)) return false;
+
+  stream_private_state_t *priv = stream_private_state(value);
+  if (priv) return writable ? priv->has_writable : priv->has_readable;
+
+  if (!is_callable(js_getprop_fallback(js, value, "on"))) return false;
+  return is_callable(js_getprop_fallback(js, value, writable ? "write" : "pipe"));
+}
+
+static void stream_duplex_fail(ant_t *js, stream_op_t *op, ant_value_t error) {
+  GC_ROOT_SAVE(root_mark, js);
+  error = Ant_Error_ConsumeMarker(js, error);
+  GC_ROOT_PIN(js, error);
+  stream_destroy(js, op->duplex.duplex, error);
+  GC_ROOT_RESTORE(js, root_mark);
+}
+
+static ant_value_t stream_duplex_write(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t callback = nargs > 2 ? args[2] : Ant_Value_Undefined;
+  bool encoded = nargs > 1 && vtype(args[0]) == kTypeString;
+
+  ant_value_t accepted = stream_call_prop(js, op->duplex.writable, "write", args, encoded ? 2 : nargs > 0 ? 1 : 0);
+  if (is_err(accepted)) return accepted;
+
+  if (js_truthy(js, accepted)) stream_call_callback(js, callback, NULL, 0);
+  else stream_op_store(js, op, &op->duplex.on_drain, callback);
+  
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_duplex_final(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  stream_op_store(js, op, &op->duplex.on_finish, nargs > 0 ? args[0] : Ant_Value_Undefined);
+
+  ant_value_t ended = stream_call_prop(js, op->duplex.writable, "end", NULL, 0);
+  return is_err(ended) ? ended : Ant_Value_Undefined;
+}
+
+static ant_value_t stream_duplex_on_drain(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  stream_call_callback(js, stream_take(&op->duplex.on_drain), NULL, 0);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_duplex_on_finish(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  stream_call_callback(js, stream_take(&op->duplex.on_finish), NULL, 0);
+  return Ant_Value_Undefined;
+}
+
+static void stream_duplex_pull(ant_t *js, stream_op_t *op) {
+  for (;;) {
+    ant_value_t chunk = stream_call_prop(js, op->duplex.readable, "read", NULL, 0);
+    if (is_err(chunk)) {
+      stream_duplex_fail(js, op, chunk);
+      return;
+    }
+
+    if (stream_is_nullish(chunk)) {
+      op->duplex_reading = true;
+      return;
+    }
+
+    ant_value_t pushed = stream_call_prop(js, op->duplex.duplex, "push", &chunk, 1);
+    if (is_err(pushed)) {
+      stream_duplex_fail(js, op, pushed);
+      return;
+    }
+    
+    if (!js_truthy(js, pushed)) return;
+  }
+}
+
+static ant_value_t stream_duplex_read(ant_params_t) {
+  stream_duplex_pull(js, stream_op_current(js, call_func));
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_duplex_on_readable(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  if (!op->duplex_reading) return Ant_Value_Undefined;
+
+  op->duplex_reading = false;
+  stream_duplex_pull(js, op);
+  
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_duplex_on_end(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t end = Ant_Value_Null;
+  
+  ant_value_t pushed = stream_call_prop(js, op->duplex.duplex, "push", &end, 1);
+  if (is_err(pushed)) stream_duplex_fail(js, op, pushed);
+  
+  return Ant_Value_Undefined;
+}
+
+static void stream_duplex_destroy_sides(ant_t *js, stream_op_t *op, ant_value_t error) {
+  if (is_object_type(op->duplex.writable)) stream_destroy(js, op->duplex.writable, error);
+  if (is_object_type(op->duplex.readable)) stream_destroy(js, op->duplex.readable, error);
+}
+
+static ant_value_t stream_duplex_on_finished(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t error = nargs > 0 ? args[0] : Ant_Value_Undefined;
+  bool failed = !stream_is_nullish(error);
+
+  ant_value_t callback = stream_take(&op->duplex.on_close);
+  op->duplex_closed = true;
+
+  if (failed) stream_duplex_destroy_sides(js, op, error);
+  if (is_callable(callback)) stream_call_callback(js, callback, &error, failed ? 1 : 0);
+  else if (failed) stream_destroy(js, op->duplex.duplex, error);
+
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_duplex_destroy(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t error = nargs > 0 ? args[0] : Ant_Value_Null;
+  ant_value_t callback = nargs > 1 ? args[1] : Ant_Value_Undefined;
+
+  op->duplex_reading = false;
+  op->duplex.on_drain = Ant_Value_Undefined;
+  op->duplex.on_finish = Ant_Value_Undefined;
+
+  if (op->duplex_closed) {
+    stream_call_callback(js, callback, &error, 1);
+    return Ant_Value_Undefined;
+  }
+
+  if (stream_is_nullish(error)) error = abort_signal_make_error(js, Ant_Value_Undefined);
+  stream_op_store(js, op, &op->duplex.on_close, callback);
+  stream_duplex_destroy_sides(js, op, error);
+
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_duplexify(ant_t *js, ant_value_t readable, ant_value_t writable) {
+  bool has_readable = is_object_type(readable);
+  bool has_writable = is_object_type(writable);
+
+  ant_value_t options = Ant_Object_Create(js);
+  js_set(js, options, "readableObjectMode", Ant_Value_FromBool(has_readable && js_truthy(js, js_get(js, readable, "readableObjectMode"))));
+  js_set(js, options, "writableObjectMode", Ant_Value_FromBool(has_writable && js_truthy(js, js_get(js, writable, "writableObjectMode"))));
+
+  ant_value_t duplex = stream_construct_duplex_like(js, js->builtins.duplex_proto, options, Ant_Value_Undefined);
+  if (is_err(duplex)) return duplex;
+
+  ant_value_t state;
+  stream_op_t *op = stream_op_new(js, duplex, &state);
+  if (!op) return Ant_Error_CreateOutOfMemory(js);
+
+  op->duplex.duplex = duplex;
+  op->duplex.readable = readable;
+  op->duplex.writable = writable;
+  stream_op_barrier(js, op);
+
+  stream_private_state_t *priv = stream_private_state(duplex);
+  ant_value_t on_finished = js_heavy_mkfun(js, stream_duplex_on_finished, state);
+
+  if (has_writable) {
+    ant_value_t registered = stream_finished_register(js, writable, on_finished);
+    if (is_err(registered)) return registered;
+
+    js_set(js, duplex, "_write", js_heavy_mkfun(js, stream_duplex_write, state));
+    js_set(js, duplex, "_final", js_heavy_mkfun(js, stream_duplex_final, state));
+    stream_add_listener(js, writable, "drain", js_heavy_mkfun(js, stream_duplex_on_drain, state), false);
+    stream_add_listener(js, writable, "finish", js_heavy_mkfun(js, stream_duplex_on_finish, state), false);
+  } else if (priv) {
+    priv->writable.ended = true;
+    priv->writable.finished = true;
+  }
+
+  if (has_readable) {
+    ant_value_t registered = stream_finished_register(js, readable, on_finished);
+    if (is_err(registered)) return registered;
+
+    js_set(js, duplex, "_read", js_heavy_mkfun(js, stream_duplex_read, state));
+    stream_add_listener(js, readable, "readable", js_heavy_mkfun(js, stream_duplex_on_readable, state), false);
+    stream_add_listener(js, readable, "end", js_heavy_mkfun(js, stream_duplex_on_end, state), false);
+  } else if (priv) {
+    priv->is_readable = false;
+    priv->readable.ended = true;
+    priv->readable.end_emitted = true;
+  }
+
+  js_set(js, duplex, "_destroy", js_heavy_mkfun(js, stream_duplex_destroy, state));
+  return duplex;
+}
+
+static void stream_gen_offer(ant_t *js, stream_op_t *op, ant_value_t chunk, ant_value_t callback, bool final) {
+  ant_value_t pending = stream_take(&op->gen.pending);
+
+  if (vtype(pending) != kTypePromise) {
+    op->gen_buffered = true;
+    op->gen_final = final;
+    stream_op_store(js, op, &op->gen.chunk, chunk);
+    stream_op_store(js, op, &op->gen.callback, callback);
+    return;
+  }
+
+  op->gen_ended = final;
+  js_resolve_promise(js, pending, js_iter_result(js, !final, chunk));
+  stream_call_callback(js, callback, NULL, 0);
+}
+
+static ant_value_t stream_gen_next(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+
+  if (op->gen_ended) return stream_iter_resolved(js, js_iter_result(js, false, Ant_Value_Undefined));
+  if (op->gen_aborted) return stream_iter_rejected(js, abort_signal_make_error(js, op->gen.signal));
+
+  if (!op->gen_buffered) {
+    ant_value_t pending = js_mkpromise(js);
+    stream_op_store(js, op, &op->gen.pending, pending);
+    return pending;
+  }
+
+  ant_value_t chunk = stream_take(&op->gen.chunk);
+  ant_value_t callback = stream_take(&op->gen.callback);
+  op->gen_buffered = false;
+  op->gen_ended = op->gen_final;
+
+  ant_value_t result = stream_iter_resolved(js, js_iter_result(js, !op->gen_final, chunk));
+  stream_call_callback(js, callback, NULL, 0);
+  
+  return result;
+}
+
+static ant_value_t stream_gen_return(ant_params_t) {
+  stream_op_current(js, call_func)->gen_ended = true;
+  return stream_iter_resolved(js, js_iter_result(js, false, Ant_Value_Undefined));
+}
+
+static ant_value_t stream_gen_write(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  stream_gen_offer(js, op, nargs > 0 ? args[0] : Ant_Value_Undefined, nargs > 2 ? args[2] : Ant_Value_Undefined, false);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_gen_final(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t callback = nargs > 0 ? args[0] : Ant_Value_Undefined;
+
+  if (vtype(op->gen.result) != kTypePromise) {
+    stream_gen_offer(js, op, Ant_Value_Undefined, callback, true);
+    return Ant_Value_Undefined;
+  }
+
+  stream_gen_offer(js, op, Ant_Value_Undefined, Ant_Value_Undefined, true);
+  return stream_settle_callback(js, op->gen.result, callback, Ant_Value_Undefined, false);
+}
+
+static ant_value_t stream_gen_destroy(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  ant_value_t error = nargs > 0 ? args[0] : Ant_Value_Null;
+
+  op->gen_aborted = true;
+  signal_do_abort(js, op->gen.signal, make_dom_exception(js, "This operation was aborted", "AbortError"));
+
+  ant_value_t pending = stream_take(&op->gen.pending);
+  if (vtype(pending) == kTypePromise) js_reject_promise(js, pending, abort_signal_make_error(js, op->gen.signal));
+
+  stream_call_callback(js, nargs > 1 ? args[1] : Ant_Value_Undefined, &error, 1);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_object_mode_options(ant_t *js) {
+  ant_value_t options = Ant_Object_Create(js);
+  js_set(js, options, "objectMode", Ant_Value_True);
+  return options;
+}
+
+static ant_value_t stream_duplex_from_function(ant_t *js, ant_value_t fn) {
+  ant_value_t state;
+  stream_op_t *op = stream_op_new(js, gen, &state);
+  if (!op) return Ant_Error_CreateOutOfMemory(js);
+
+  ant_value_t signal = abort_signal_create_dependent(js, Ant_Value_Undefined);
+  if (is_err(signal)) return signal;
+  stream_op_store(js, op, &op->gen.signal, signal);
+
+  ant_value_t source = Ant_Object_CreateBare(js);
+  js_set_proto_init(source, js->sym.async_iterator_proto);
+  js_set(js, source, "next", js_heavy_mkfun(js, stream_gen_next, state));
+  js_set(js, source, "return", js_heavy_mkfun(js, stream_gen_return, state));
+
+  ant_value_t context = Ant_Object_Create(js);
+  js_set(js, context, "signal", signal);
+
+  ant_value_t call_args[2] = { source, context };
+  ant_value_t value = stream_call(js, fn, Ant_Value_Undefined, call_args, 2);
+  if (is_err(value)) return value;
+
+  ant_value_t writable = stream_construct(
+    js, js->builtins.writable_proto, stream_object_mode_options(js),
+    stream_init_writable, Ant_Value_Undefined
+  );
+  if (is_err(writable)) return writable;
+
+  js_set(js, writable, "_write", js_heavy_mkfun(js, stream_gen_write, state));
+  js_set(js, writable, "_final", js_heavy_mkfun(js, stream_gen_final, state));
+  js_set(js, writable, "_destroy", js_heavy_mkfun(js, stream_gen_destroy, state));
+
+  ant_value_t async_fn = is_object_type(value) ? js_get_sym(js, value, js->sym.asyncIterator_sym) : Ant_Value_Undefined;
+  if (is_err(async_fn)) return async_fn;
+
+  if (is_callable(async_fn)) {
+    ant_value_t readable = stream_readable_from_source(js, value, stream_readable_from_options(js, Ant_Value_Undefined));
+    return is_err(readable) ? readable : stream_duplexify(js, readable, writable);
+  }
+
+  ant_value_t then_fn = is_object_type(value) ? js_getprop_fallback(js, value, "then") : Ant_Value_Undefined;
+  if (is_err(then_fn)) return then_fn;
+
+  if (vtype(value) != kTypePromise && !is_callable(then_fn)) return js_mkerr_code(
+    js, JS_ERR_TYPE, "ERR_INVALID_RETURN_VALUE",
+    "Expected AsyncIterable or AsyncFunction to be returned from the \"body\" function"
+  );
+
+  ant_value_t result = value;
+  if (vtype(result) != kTypePromise) {
+    result = js_mkpromise(js);
+    js_resolve_promise(js, result, value);
+  }
+
+  promise_mark_handled(result);
+  stream_op_store(js, op, &op->gen.result, result);
+  return stream_duplexify(js, Ant_Value_Undefined, writable);
+}
+
+static ant_value_t stream_thenable_fulfilled(ant_params_t) {
+  ant_value_t readable = js_func_data(call_func);
+  ant_value_t value = nargs > 0 ? args[0] : Ant_Value_Undefined;
+  ant_value_t end = Ant_Value_Null;
+
+  if (!stream_is_nullish(value)) stream_call_prop(js, readable, "push", &value, 1);
+  stream_call_prop(js, readable, "push", &end, 1);
+  
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_thenable_rejected(ant_params_t) {
+  stream_destroy(js, js_func_data(call_func), nargs > 0 ? args[0] : Ant_Value_Undefined);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t stream_duplex_from_thenable(ant_t *js, ant_value_t thenable, ant_value_t then_fn) {
+  ant_value_t options = stream_object_mode_options(js);
+  js_set(js, options, "read", Ant_Function_Create(js_cfunc_noop));
+
+  ant_value_t readable = stream_construct(js, js->builtins.readable_proto, options, stream_init_readable, Ant_Value_Undefined);
+  if (is_err(readable)) return readable;
+
+  ant_value_t callbacks[2] = {
+    js_heavy_mkfun(js, stream_thenable_fulfilled, readable),
+    js_heavy_mkfun(js, stream_thenable_rejected, readable),
+  };
+
+  if (vtype(thenable) == kTypePromise) Ant_Promise_Observe(js, thenable, callbacks[0], callbacks[1]);
+  else {
+    ant_value_t chained = stream_call(js, then_fn, thenable, callbacks, 2);
+    if (is_err(chained)) return chained;
+  }
+
+  return stream_duplexify(js, readable, Ant_Value_Undefined);
+}
+
+static ant_value_t stream_duplex_from(ant_t *js, ant_value_t body);
+
+static ant_value_t stream_duplex_from_side(ant_t *js, ant_value_t side, bool writable) {
+  if (!js_truthy(js, side)) return Ant_Value_Undefined;
+  return stream_has_side(js, side, writable) ? side : stream_duplex_from(js, side);
+}
+
+static bool stream_is_iterable(ant_t *js, ant_value_t value) {
+  if (vtype(value) == kTypeString) return true;
+  if (!is_object_type(value)) return false;
+  
+  return
+    is_callable(js_get_sym(js, value, js->sym.asyncIterator_sym)) ||
+    is_callable(js_get_sym(js, value, js->sym.iterator_sym));
+}
+
+static ant_value_t stream_duplex_from(ant_t *js, ant_value_t body) {
+  bool readable_side = stream_has_side(js, body, false);
+  bool writable_side = stream_has_side(js, body, true);
+
+  if (readable_side && writable_side) return body;
+  if (readable_side) return stream_duplexify(js, body, Ant_Value_Undefined);
+  if (writable_side) return stream_duplexify(js, Ant_Value_Undefined, body);
+
+  if (rs_is_stream(body)) {
+    ant_value_t readable = stream_readable_from_source(js, body, Ant_Value_Undefined);
+    return is_err(readable) ? readable : stream_duplexify(js, readable, Ant_Value_Undefined);
+  }
+
+  if (ws_is_stream(body)) {
+    ant_value_t writable = stream_writable_from_web(js, body, Ant_Value_Undefined);
+    return is_err(writable) ? writable : stream_duplexify(js, Ant_Value_Undefined, writable);
+  }
+
+  if (is_callable(body)) return stream_duplex_from_function(js, body);
+
+  if (blob_is_blob(js, body)) {
+    ant_value_t buffer = stream_call_prop(js, body, "arrayBuffer", NULL, 0);
+    return is_err(buffer) ? buffer : stream_duplex_from(js, buffer);
+  }
+
+  if (vtype(body) == kTypePromise) return stream_duplex_from_thenable(js, body, Ant_Value_Undefined);
+
+  if (stream_is_iterable(js, body)) {
+    ant_value_t readable = stream_readable_from_source(js, body, stream_readable_from_options(js, Ant_Value_Undefined));
+    return is_err(readable) ? readable : stream_duplexify(js, readable, Ant_Value_Undefined);
+  }
+
+  if (is_object_type(body)) {
+    ant_value_t readable = js_get(js, body, "readable");
+    if (is_err(readable)) return readable;
+
+    ant_value_t writable = js_get(js, body, "writable");
+    if (is_err(writable)) return writable;
+
+    if (rs_is_stream(readable) && ws_is_stream(writable)) return stream_duplex_from_web(js, body, Ant_Value_Undefined);
+
+    if (is_object_type(readable) || is_object_type(writable)) {
+      readable = stream_duplex_from_side(js, readable, false);
+      if (is_err(readable)) return readable;
+
+      writable = stream_duplex_from_side(js, writable, true);
+      if (is_err(writable)) return writable;
+
+      return stream_duplexify(js, readable, writable);
+    }
+
+    ant_value_t then_fn = js_getprop_fallback(js, body, "then");
+    if (is_err(then_fn)) return then_fn;
+    if (is_callable(then_fn)) return stream_duplex_from_thenable(js, body, then_fn);
+  }
+
+  return Ant_Error_CreateInvalidArgType(
+    js, "body",
+    "a Stream, Iterable, AsyncIterable, Function, Promise, ReadableStream, WritableStream or { readable, writable } pair",
+    body
+  );
+}
+
+static ant_value_t js_duplex_from(ant_params_t) {
+  return stream_duplex_from(js, nargs > 0 ? args[0] : Ant_Value_Undefined);
+}
+
 void stream_init_constructors(ant_t *js) {
   if (js->builtins.stream_ctor) return;
 
@@ -4151,6 +5011,7 @@ void stream_init_constructors(ant_t *js) {
   js_set_sym(js, js->builtins.readable_proto, js->sym.asyncDispose_sym, Ant_Function_Create(js_stream_async_dispose));
   js_set_tostringtag(js, js->builtins.readable_proto, js_mkstr(js, "Readable", 8));
   js->builtins.readable_ctor = Ant_Function_CreateConstructor(js, js_readable_ctor, js->builtins.readable_proto, "Readable", 1);
+  js_set_proto_init(js->builtins.readable_ctor, js->builtins.stream_ctor);
   js_set(js, js->builtins.readable_ctor, "from", Ant_Function_Create(js_readable_from));
   js_set(js, js->builtins.readable_ctor, "fromWeb", Ant_Function_Create(js_readable_from_web));
   js_set(js, js->builtins.readable_ctor, "toWeb", Ant_Function_Create(js_readable_to_web));
@@ -4162,13 +5023,20 @@ void stream_init_constructors(ant_t *js) {
   js_set_sym(js, js->builtins.writable_proto, js->sym.asyncDispose_sym, Ant_Function_Create(js_stream_async_dispose));
   js_set_tostringtag(js, js->builtins.writable_proto, js_mkstr(js, "Writable", 8));
   js->builtins.writable_ctor = Ant_Function_CreateConstructor(js, js_writable_ctor, js->builtins.writable_proto, "Writable", 1);
+  js_set_proto_init(js->builtins.writable_ctor, js->builtins.stream_ctor);
   js_set_sym(js, js->builtins.writable_ctor, js->sym.hasInstance_sym, Ant_Function_CreateWithArity(js_writable_has_instance, 1));
+  js_set(js, js->builtins.writable_ctor, "fromWeb", Ant_Function_Create(js_writable_from_web));
+  js_set(js, js->builtins.writable_ctor, "toWeb", Ant_Function_Create(js_writable_to_web));
 
   js->builtins.duplex_proto = Ant_Object_CreateBare(js);
   js_set_proto_init(js->builtins.duplex_proto, js->builtins.readable_proto);
   stream_define_writable_methods(js, js->builtins.duplex_proto);
   js_set_tostringtag(js, js->builtins.duplex_proto, js_mkstr(js, "Duplex", 6));
   js->builtins.duplex_ctor = Ant_Function_CreateConstructor(js, js_duplex_ctor, js->builtins.duplex_proto, "Duplex", 1);
+  js_set_proto_init(js->builtins.duplex_ctor, js->builtins.readable_ctor);
+  js_set(js, js->builtins.duplex_ctor, "from", Ant_Function_Create(js_duplex_from));
+  js_set(js, js->builtins.duplex_ctor, "fromWeb", Ant_Function_Create(js_duplex_from_web));
+  js_set(js, js->builtins.duplex_ctor, "toWeb", Ant_Function_Create(js_duplex_to_web));
 
   js->builtins.stream_transform_proto = Ant_Object_CreateBare(js);
   js_set_proto_init(js->builtins.stream_transform_proto, js->builtins.duplex_proto);
@@ -4177,12 +5045,14 @@ void stream_init_constructors(ant_t *js) {
   js_set(js, js->builtins.stream_transform_proto, "_final", Ant_Function_CreateWithArity(js_transform__final, 1));
   js_set_tostringtag(js, js->builtins.stream_transform_proto, js_mkstr(js, "Transform", 9));
   js->builtins.stream_transform_ctor = Ant_Function_CreateConstructor(js, js_transform_ctor, js->builtins.stream_transform_proto, "Transform", 1);
+  js_set_proto_init(js->builtins.stream_transform_ctor, js->builtins.duplex_ctor);
 
   js->builtins.passthrough_proto = Ant_Object_CreateBare(js);
   js_set_proto_init(js->builtins.passthrough_proto, js->builtins.stream_transform_proto);
   js_set(js, js->builtins.passthrough_proto, "_transform", Ant_Function_CreateWithArity(js_passthrough__transform, 3));
   js_set_tostringtag(js, js->builtins.passthrough_proto, js_mkstr(js, "PassThrough", 11));
   js->builtins.passthrough_ctor = Ant_Function_CreateConstructor(js, js_passthrough_ctor, js->builtins.passthrough_proto, "PassThrough", 1);
+  js_set_proto_init(js->builtins.passthrough_ctor, js->builtins.stream_transform_ctor);
   js->builtins.stream_utf8 = js_mkstr(js, "utf8", 4);
   js->builtins.stream_buffer = js_mkstr(js, "buffer", 6);
 }

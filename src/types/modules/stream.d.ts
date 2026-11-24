@@ -38,6 +38,8 @@ declare module 'stream' {
     on(event: 'drain' | 'finish' | 'close', listener: () => void): this;
     on(event: 'error', listener: (error: Error) => void): this;
     on(event: string, listener: (...args: unknown[]) => void): this;
+    static fromWeb(source: WritableStream, options?: Record<string, unknown>): Writable;
+    static toWeb(source: Writable): WritableStream;
   }
 
   class Duplex extends Readable {
@@ -46,6 +48,9 @@ declare module 'stream' {
     end(chunk?: Uint8Array | string, encoding?: string, callback?: (error?: Error | null) => void): this;
     cork(): void;
     uncork(): void;
+    static from(source: unknown): Duplex;
+    static fromWeb(pair: { readable: ReadableStream; writable: WritableStream }, options?: Record<string, unknown>): Duplex;
+    static toWeb(source: Duplex): { readable: ReadableStream; writable: WritableStream };
   }
 
   class Transform extends Duplex {

@@ -9,7 +9,7 @@
 #include "descriptors.h"
 
 #include "gc/roots.h"
-#include "silver/call.h"
+#include "silver/vm.h"
 #include "modules/assert.h"
 #include "modules/abort.h"
 #include "streams/queue.h"
@@ -980,6 +980,14 @@ static ant_value_t setup_ws_default_controller(
   return ctrl_obj;
 }
 
+static void ws_start_resolved(ant_t *js, ant_value_t ctrl_obj) {
+  ant_value_t resolved = js_mkpromise(js);
+  js_resolve_promise(js, resolved, Ant_Value_Undefined);
+  ant_value_t res_fn = js_heavy_mkfun(js, ws_start_resolve_handler, ctrl_obj);
+  ant_value_t rej_fn = js_heavy_mkfun(js, ws_start_reject_handler, ctrl_obj);
+  ws_chain_promise(js, resolved, res_fn, rej_fn);
+}
+
 static ant_value_t js_ws_ctor(ant_params_t) {
   if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStream constructor requires 'new'");
@@ -1083,21 +1091,35 @@ static ant_value_t js_ws_ctor(ant_params_t) {
       ws_chain_promise(js, start_result, resolve_fn, reject_fn);
     }
 
-    if (vtype(start_result) != kTypePromise) {
-      ant_value_t resolved = js_mkpromise(js);
-      js_resolve_promise(js, resolved, Ant_Value_Undefined);
-      ant_value_t res_fn = js_heavy_mkfun(js, ws_start_resolve_handler, ctrl_obj);
-      ant_value_t rej_fn = js_heavy_mkfun(js, ws_start_reject_handler, ctrl_obj);
-      ws_chain_promise(js, resolved, res_fn, rej_fn);
-    }
-  } else {
-    ant_value_t resolved = js_mkpromise(js);
-    js_resolve_promise(js, resolved, Ant_Value_Undefined);
-    ant_value_t res_fn = js_heavy_mkfun(js, ws_start_resolve_handler, ctrl_obj);
-    ant_value_t rej_fn = js_heavy_mkfun(js, ws_start_reject_handler, ctrl_obj);
-    ws_chain_promise(js, resolved, res_fn, rej_fn);
-  }
+    if (vtype(start_result) != kTypePromise) ws_start_resolved(js, ctrl_obj);
+  } else ws_start_resolved(js, ctrl_obj);
 
+  return obj;
+}
+
+ant_value_t ws_create_stream(
+  ant_t *js, ant_value_t write_fn, ant_value_t close_fn,
+  ant_value_t abort_fn, double hwm
+) {
+  ws_stream_t *st = calloc(1, sizeof(ws_stream_t));
+  if (!st) return Ant_Error_CreateOutOfMemory(js);
+  st->state = WS_STATE_WRITABLE;
+
+  ant_value_t obj = Ant_Object_CreateBare(js);
+  js_set_proto_init(obj, js->builtins.ws_proto);
+  js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_WRITABLE_STREAM));
+  js_set_native(obj, st, WS_STREAM_NATIVE_TAG);
+  js_set_slot_wb(js, obj, SLOT_SETTLED, Ant_Array_Create(js));
+  js_set_finalizer(obj, ws_stream_finalize);
+
+  ant_value_t ctrl_obj = setup_ws_default_controller(
+    js, obj, Ant_Value_Undefined, write_fn, 
+    close_fn, abort_fn, Ant_Value_Undefined, hwm
+  );
+  
+  if (is_err(ctrl_obj)) return ctrl_obj;
+  ws_start_resolved(js, ctrl_obj);
+  
   return obj;
 }
 

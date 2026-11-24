@@ -9,5 +9,10 @@ STREAM_OP(finished, stream, callback, on_finish, on_error)
 STREAM_OP(from,     readable, source, iterator, reader, next)
 STREAM_OP(web,      source, stream, controller, on_data, on_end, on_error)
 STREAM_OP(iter,     stream, queue, pending, error, on_data, on_end, on_error)
+STREAM_OP(sink,     source, stream, pending, closed, on_drain, on_finish, on_close)
+STREAM_OP(writer,   writable, writer, reader)
+STREAM_OP(settle,   callback, error)
+STREAM_OP(duplex,   duplex, readable, writable, on_drain, on_finish, on_close)
+STREAM_OP(gen,      pending, chunk, callback, signal, result)
 #undef STREAM_OP
 #endif
