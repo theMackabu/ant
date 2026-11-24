@@ -15,7 +15,7 @@ const sources = [
 ];
 
 const skipped = ['examples/bench-v8', 'examples/spec', 'examples/test262', 'tests/harness', 'tests/fixtures'];
-const rounds = +(process.env.ROUNDS || 32);
+const rounds = +(process.env.ROUNDS || 8);
 
 function walk(dir, top, out) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
