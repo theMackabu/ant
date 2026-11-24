@@ -455,45 +455,50 @@ static ant_value_t esm_populate_cjs_namespace(ant_t *js, ant_value_t ns, ant_val
   return Ant_Value_Undefined;
 }
 
-static ant_value_t esm_eval_commonjs_function(
-  ant_t *js,
-  const char *code,
-  size_t code_len,
-  ant_value_t require_fn,
-  ant_value_t module_obj,
-  ant_value_t exports_obj,
-  ant_value_t filename_val,
-  ant_value_t dirname_val
-) {
-  static const sv_param_t cjs_params[] = {
-    SV_PARAM("require"),
-    SV_PARAM("module"),
-    SV_PARAM("exports"),
-    SV_PARAM("__filename"),
-    SV_PARAM("__dirname"),
-  };
-  
-  int param_count = (int)(sizeof(cjs_params) / sizeof(cjs_params[0]));
-  sv_func_t *compiled = sv_compile_function_with_params(
-    js, cjs_params, param_count, code, code_len, false
-  );
+static const sv_param_t cjs_params[] = {
+  SV_PARAM("require"),
+  SV_PARAM("module"),
+  SV_PARAM("exports"),
+  SV_PARAM("__filename"),
+  SV_PARAM("__dirname"),
+};
+
+typedef struct {
+  ant_value_t require;
+  ant_value_t module;
+  ant_value_t exports;
+  ant_value_t filename;
+  ant_value_t dirname;
+} cjs_scope_t;
+
+static constexpr int cjs_param_count = (int)(sizeof(cjs_params) / sizeof(cjs_params[0]));
+static_assert(sizeof(cjs_scope_t) == cjs_param_count * sizeof(ant_value_t), "one value per CommonJS wrapper parameter");
+
+bool esm_compile_commonjs_only(ant_t *js, const char *code, size_t code_len) {
+  sv_func_t *compiled = sv_compile_function_with_params(js, cjs_params, cjs_param_count, code, code_len, false);
+  if (!compiled) return false;
+  sv_code_unit_unpin(compiled->unit);
+  return true;
+}
+
+static ant_value_t esm_eval_commonjs_function(ant_t *js, const char *code, size_t code_len, cjs_scope_t *scope) {
+  sv_func_t *compiled = sv_compile_function_with_params(js, cjs_params, cjs_param_count, code, code_len, false);
 
   if (!compiled) {
     if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
   }
 
-  ant_value_t args[] = {require_fn, module_obj, exports_obj, filename_val, dirname_val};
-  return sv_execute_entry(js->vm, compiled, exports_obj, args, param_count);
+  return sv_execute_entry(js->vm, compiled, scope->exports, (ant_value_t *)scope, cjs_param_count);
 }
 
 ant_value_t esm_load_commonjs_module(
-  ant_t *js,
-  const char *module_path, const char *code,
+  ant_t *js, const char *module_path, const char *code,
   size_t code_len, ant_value_t ns, ant_value_t module_obj
 ) {
   bool builtin = strncmp(module_path, "node:", 5) == 0 || strncmp(module_path, "ant:", 4) == 0;
   bool pending = is_object_type(module_obj);
+  
   ant_value_t cached = builtin || pending ? Ant_Value_Undefined : esm_require_cache_lookup(js, module_path);
   if (vtype(cached) != kTypeUndefined && !pending) {
     ant_value_t exports = esm_require_cached_exports(js, cached);
@@ -539,15 +544,18 @@ ant_value_t esm_load_commonjs_module(
   const char *prev_filename = js->filename;
   js_set_filename(js, module_path);
 
-  ant_value_t result = esm_eval_commonjs_function(
-    js, code, code_len,
-    require_fn, module_obj, exports_obj,
-    filename_val, dirname_val
-  );
-  
-  if (vtype(result) == kTypePromise) js_run_event_loop(js);
-  if (!is_err(result) && !Ant_Exception_Pending(js)) js_set(js, module_obj, "loaded", Ant_Value_True);
+  cjs_scope_t scope = {
+    .require = require_fn,
+    .module = module_obj,
+    .exports = exports_obj,
+    .filename = filename_val,
+    .dirname = dirname_val,
+  };
 
+  ant_value_t result = esm_eval_commonjs_function(js, code, code_len, &scope);
+  if (vtype(result) == kTypePromise) js_run_event_loop(js);
+  
+  if (!is_err(result) && !Ant_Exception_Pending(js)) js_set(js, module_obj, "loaded", Ant_Value_True);
   ant_value_t exports_val = js_get(js, module_obj, "exports");
   
   if (!is_err(result) && !Ant_Exception_Pending(js)) {

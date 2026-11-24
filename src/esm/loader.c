@@ -1572,6 +1572,60 @@ ant_module_format_t esm_decide_module_format(ant_t *js, const char *resolved_pat
   return MODULE_EVAL_FORMAT_ESM;
 }
 
+static bool esm_compile_module_only(
+  ant_t *js, const char *code, size_t len, ant_module_format_t *format
+) {
+  GC_ROOT_SAVE(exception_mark, js);
+  ant_value_t saved_exception = Ant_Exception_Peek(js);
+  GC_ROOT_PIN(js, saved_exception);
+
+  code_arena_mark_t parse_mark = parse_arena_mark(js);
+  bool detect = *format == MODULE_EVAL_FORMAT_UNKNOWN;
+  sv_ast_t *program = sv_parse(js, code, (ant_offset_t)len, detect ? SV_PARSE_DETECT : SV_PARSE_MODULE, false);
+  GC_ROOT_RESTORE(js, exception_mark);
+
+  if (detect && (!program || !(program->flags & FN_MODULE_SYNTAX))) {
+    parse_arena_rewind(js, parse_mark);
+    Ant_Exception_Set(js, saved_exception);
+    *format = MODULE_EVAL_FORMAT_CJS;
+    return false;
+  }
+
+  *format = MODULE_EVAL_FORMAT_ESM;
+  sv_func_t *func = program
+    ? js_compile_parsed_bytecode(js, program, code, len, SV_COMPILE_MODULE, 0, Ant_Value_Undefined)
+    : NULL;
+
+  parse_arena_rewind(js, parse_mark);
+  if (func) sv_code_unit_unpin(func->unit);
+  return func != NULL;
+}
+
+ant_value_t js_esm_compile_only(ant_t *js, const char *source, size_t len, const char *filename) {
+  char *code = malloc(len + 1);
+  if (!code) return js_mkerr(js, "OOM compiling source");
+  memcpy(code, source, len);
+  code[len] = '\0';
+
+  size_t js_len = len;
+  const char *strip_detail = NULL;
+  int strip_result = strip_typescript_inplace(&code, len, filename, &js_len, &strip_detail);
+
+  if (strip_result < 0) {
+    free(code);
+    return js_mkerr(js, "TypeScript error: strip failed (%d): %s", strip_result, strip_detail);
+  }
+
+  ant_module_format_t format = esm_decide_module_format(js, filename);
+  bool compiled = format != MODULE_EVAL_FORMAT_CJS && esm_compile_module_only(js, code, js_len, &format);
+  if (format == MODULE_EVAL_FORMAT_CJS) compiled = esm_compile_commonjs_only(js, code, js_len);
+  free(code);
+
+  if (compiled) return Ant_Value_Undefined;
+  if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+  return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
+}
+
 static ant_value_t esm_eval_ambiguous_js_source(
   ant_t *js,
   const char *resolved_path, const char *js_code,

@@ -132,6 +132,16 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
   echo "    - bench files in tests/"
   train_benches
 
+  if [ -f "$PGO_DIR/train_compile.cjs" ]; then
+    start=$(now_ms)
+    rc=0
+    "$BUILD_DIR/ant" "$PGO_DIR/train_compile.cjs" >/dev/null 2>&1 || rc=$?
+    note=""
+    if [ "$rc" -ne 0 ]; then note="  [exit $rc]"; fi
+    echo "    - compile corpus ($(fmt_secs $(( $(now_ms) - start ))))$note"
+    check_new_profraws "compile corpus"
+  fi
+
   if [ -f "$PGO_DIR/train_server.js" ] && command -v curl >/dev/null 2>&1; then
     SERVER_PORT=34117
     start=$(now_ms)

@@ -80,6 +80,7 @@ yyjson_doc *esm_find_nearest_package_json(
 );
 
 ant_module_format_t esm_decide_module_format(ant_t *js, const char *resolved_path);
+bool esm_compile_commonjs_only(ant_t *js, const char *code, size_t code_len);
 esm_module_kind_t esm_classify_kind_for_path(const char *resolved_path);
 esm_module_t *esm_find_module(ant_t *js, const char *module_key);
 esm_builtin_t esm_find_builtin(ant_t *js, const char *specifier, size_t spec_len);

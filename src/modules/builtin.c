@@ -24,8 +24,10 @@
 #include "internal.h"
 #include "highlight.h"
 #include "descriptors.h"
+#include "esm/loader.h"
 
-#include "silver/call.h"
+#include "silver/vm.h"
+#include "silver/engine.h"
 #include "modules/builtin.h"
 #include "modules/bigint.h"
 #include "modules/buffer.h"
@@ -85,6 +87,24 @@ static ant_value_t js_raw_hash(ant_params_t) {
   else if (nargs < 1 || !buffer_source_get_bytes(js, args[0], &bytes, &len))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.raw.hash() requires a string or buffer");
   return bigint_from_uint64(js, hash_key((const char *)bytes, len));
+}
+
+// Ant.raw.compileOnly(source: string, filename?: string)
+static ant_value_t js_raw_compile_only(ant_params_t) {
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.raw.compileOnly() requires a source string");
+
+  size_t len = 0, name_len = 0;
+  const char *name = nargs > 1 && vtype(args[1]) == kTypeString ? js_getstr(js, args[1], &name_len) : "";
+  
+  char *filename = strndup(name, name_len);
+  if (!filename) return js_mkerr(js, "OOM compiling source");
+
+  const char *source = js_getstr(js, args[0], &len);
+  ant_value_t result = js_esm_compile_only(js, source, len, filename);
+  free(filename);
+  
+  return result;
 }
 
 static ant_value_t js_raw_gc_mark_profile(ant_params_t) {
@@ -467,6 +487,7 @@ void init_builtin_module(ant_t *js) {
   js_set_getter_desc(js, js_as_obj(raw_obj), "stack", 5, Ant_Function_Create(js_raw_stack), JS_DESC_C);
   js_set(js, raw_obj, "typeof", Ant_Function_Create(js_raw_typeof));
   js_set(js, raw_obj, "hash", Ant_Function_CreateWithArity(js_raw_hash, 1));
+  js_set(js, raw_obj, "compileOnly", Ant_Function_CreateWithArity(js_raw_compile_only, 2));
   js_set(js, raw_obj, "gcMarkProfile", Ant_Function_Create(js_raw_gc_mark_profile));
   js_set(js, raw_obj, "gcMarkProfileEnable", Ant_Function_Create(js_raw_gc_mark_profile_enable));
   js_set(js, raw_obj, "gcMarkProfileReset", Ant_Function_Create(js_raw_gc_mark_profile_reset));

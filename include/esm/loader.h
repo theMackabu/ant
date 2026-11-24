@@ -25,6 +25,7 @@ void js_esm_invalidate_files(ant_t *js);
 bool esm_export_star_skips(ant_t *js, const char *name, size_t len);
 void esm_export_star_finish(ant_t *js);
 ant_value_t js_esm_make_file_url(ant_t *js, const char *path);
+ant_value_t js_esm_compile_only(ant_t *js, const char *source, size_t len, const char *filename);
 const char *esm_platform_condition(ant_t *js);
 ant_value_t js_esm_import_sync(ant_t *js, ant_value_t specifier);
 ant_value_t js_esm_import_sync_typed(ant_t *js, ant_value_t specifier, const char *type, size_t type_len);

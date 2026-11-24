@@ -24,6 +24,7 @@ export function targets() {
     'test_ant_cron_linux.cjs',
     'test_ant_cron_os.cjs',
     'test_ant_cron_windows.cjs',
+    'test_ant_raw_compile_only.cjs',
     'test_ant_serve.cjs',
     'test_arguments_define_mapped.cjs',
     'test_arguments_length_only.cjs',
