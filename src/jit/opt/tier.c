@@ -1105,14 +1105,19 @@ ant_value_t opt_rt_builder_read(sv_vm_t *vm, ant_value_t value, ant_value_t unus
 
 static ant_value_t opt_str_append_at(sv_vm_t *vm, ant_value_t current, ant_value_t rhs, const ant_value_t *lhs, bool boxed) {
   ant_t *js = vm->js;
+  
   sv_upvalue_t *box = boxed ? (sv_upvalue_t *)(uintptr_t)current : NULL;
   ant_value_t value = current;
   ant_value_t *slot = box ? box->location : &value;
+  
+  if (!lhs && Silver_StringBuilder_TryAppendTail(*slot, rhs)) return *slot;
   ant_value_t result = lhs
     ? sv_string_builder_append_snapshot_at(vm, js, slot, NULL, NULL, 0, *lhs, rhs)
     : sv_string_builder_append_at(vm, js, slot, NULL, NULL, 0, rhs);
+  
   if (is_err(result)) return result;
   if (box) gc_upvalue_write_barrier(js, box, *slot);
+  
   return *slot;
 }
 

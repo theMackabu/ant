@@ -682,3 +682,28 @@ static inline bool js_obj_ensure_prop_capacity(ant_t *js, ant_object_t *obj, uin
   
   return true;
 }
+
+static inline bool Ant_Value_StrictEqualsFast(ant_t *js, ant_value_t l, ant_value_t r) {
+  uint8_t lt = vtype(l), rt = vtype(r);
+  
+  if (lt == kTypeNumber && rt == kTypeNumber) return Ant_Value_AsNumberUnchecked(l) == Ant_Value_AsNumberUnchecked(r);
+  if (l == r) return true;
+  if (lt != rt || (lt != kTypeString && lt != kTypeBigInt)) return false;
+  
+  return strict_eq_values(js, l, r);
+}
+
+static inline bool Ant_ToBooleanFast(ant_t *js, ant_value_t value) {
+  uint8_t type = vtype(value);
+  if (type == kTypeBool) return vdata(value) != 0;
+  
+  if (type == kTypeNumber) {
+    double number = Ant_Value_AsNumberUnchecked(value);
+    return number == number && number != 0.0;
+  }
+  
+  if (type == kTypeUndefined || type == kTypeNull) return false;
+  if (type == kTypeObject || type == kTypeArray || type == kTypeFunction) return true;
+  
+  return js_truthy(js, value);
+}

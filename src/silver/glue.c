@@ -30,7 +30,6 @@
 #include "ops/coercion.h"
 #include "ops/private.h"
 #include "ops/objects.h"
-#include "ops/super.h"
 
 __attribute__((noinline)) 
 ant_value_t Ant_Silver_InvokeNativeScoped(
@@ -152,13 +151,17 @@ ant_value_t jit_helper_str_read_value(ant_t *js, ant_value_t value) {
 }
 
 ant_value_t jit_helper_str_append_local(
-  sv_vm_t *vm, ant_t *js, sv_func_t *func,
-  ant_value_t *args, int argc,
-  ant_value_t *locals, uint16_t slot_idx,
-  ant_value_t rhs
+  sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t *args, int argc,
+  ant_value_t *locals, uint16_t slot_idx, ant_value_t rhs
 ) {
   if (!func)
     return SV_JIT_BAILOUT;
+
+  int local_idx = (int)slot_idx - func->param_count;
+  if (local_idx >= 0 && locals && Silver_StringBuilder_TryAppendTail(locals[local_idx], rhs)) {
+    sv_tfb_record_local(func, local_idx, locals[local_idx]);
+    return Ant_Value_Undefined;
+  }
 
   sv_frame_t frame = {
     .func = func,

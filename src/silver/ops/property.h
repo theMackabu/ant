@@ -1116,10 +1116,35 @@ ant_value_t sv_prop_get_field_ic_entry(
   ant_t *js, ant_value_t obj, sv_atom_t *a, sv_ic_entry_t *ic, sv_func_t *func, uint8_t *ip
 );
 
+static inline __attribute__((always_inline)) bool sv_get_field_own_data_hit(
+  ant_t *js, ant_value_t obj, sv_atom_t *a, sv_ic_entry_t *ic, ant_value_t *out
+) {
+  if (!ic || ic->get_kind != SV_GF_IC_OWN || vtype(obj) != kTypeObject) return false;
+  ant_object_t *ptr = js_obj_ptr(obj);
+  
+  if (
+    !ptr || ptr->flags.is_exotic ||
+    ic->epoch != js->ic.epoch || ic->cached_shape != ptr->shape ||
+    !sv_gf_read_slot(ptr, ic->cached_index, a->str, out, NULL)
+  ) return false;
+  
+  sv_gf_ic_note_success(ic);
+  return true;
+}
+
 static inline ant_value_t sv_prop_get_field_ic(
   ant_t *js, ant_value_t obj, sv_atom_t *a, sv_func_t *func, uint8_t *ip
 ) {
   return sv_prop_get_field_ic_entry(js, obj, a, sv_ic_slot_for_ip(func, ip), func, ip);
+}
+
+static inline ant_value_t sv_prop_get_field_ic_interp(
+  ant_t *js, ant_value_t obj, sv_atom_t *a, sv_func_t *func, uint8_t *ip
+) {
+  sv_ic_entry_t *ic = sv_ic_slot_for_ip(func, ip);
+  ant_value_t out;
+  if (sv_get_field_own_data_hit(js, obj, a, ic, &out)) return out;
+  return sv_prop_get_field_ic_entry(js, obj, a, ic, func, ip);
 }
 
 static inline ant_value_t sv_op_get_field(
@@ -1129,7 +1154,7 @@ static inline ant_value_t sv_op_get_field(
   uint32_t idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[idx];
   ant_value_t obj = vm->stack[--vm->sp];
-  ant_value_t res = sv_prop_get_field_ic(js, obj, a, func, ip);
+  ant_value_t res = sv_prop_get_field_ic_interp(js, obj, a, func, ip);
   if (is_err(res)) return res;
   vm->stack[vm->sp++] = res;
   return Ant_Value_Undefined;
@@ -1187,7 +1212,7 @@ static inline ant_value_t sv_op_get_field2(
   uint32_t idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[idx];
   ant_value_t obj = vm->stack[vm->sp - 1];
-  ant_value_t res = sv_prop_get_field_ic(js, obj, a, func, ip);
+  ant_value_t res = sv_prop_get_field_ic_interp(js, obj, a, func, ip);
   if (is_err(res)) return res;
   vm->stack[vm->sp++] = res;
   return Ant_Value_Undefined;
@@ -1737,6 +1762,22 @@ static inline bool sv_put_elem_string(ant_t *js, ant_value_t obj, ant_value_t ke
   return true;
 }
 
+static inline bool sv_put_elem_dense(ant_t *js, ant_value_t obj, uint32_t index, ant_value_t val) {
+  static constexpr uint16_t required = ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS;
+  static constexpr uint16_t checked = required | ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_ARGUMENTS;
+  if (vtype(obj) != kTypeArray) return false;
+
+  ant_object_t *ptr = js_obj_ptr(obj);
+  if (!ptr || (ptr->flags.raw & checked) != required) return false;
+
+  ant_value_t *data = ptr->u.array.data;
+  if (!data || index >= ptr->u.array.len || vtype(data[index]) == kTypeSentinel) return false;
+
+  data[index] = val;
+  gc_write_barrier_elem(js, ptr, index, val);
+  return true;
+}
+
 static inline ant_value_t sv_op_put_elem(sv_vm_t *vm, ant_t *js) {
   ant_value_t val = vm->stack[vm->sp - 1];
   ant_value_t key = vm->stack[vm->sp - 2];
@@ -1749,6 +1790,10 @@ static inline ant_value_t sv_op_put_elem(sv_vm_t *vm, ant_t *js) {
   
   uint32_t index;
   if (sv_number_key_index(key, &index)) {
+    if (sv_put_elem_dense(js, obj, index, val)) {
+      vm->sp -= 3;
+      return val;
+    }
     ant_value_t res = js_setprop_index(js, obj, index, val);
     vm->sp -= 3;
     return res;

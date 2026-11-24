@@ -170,6 +170,16 @@ static inline void sv_op_rest(
   vm->stack[vm->sp++] = Ant_Array_CreateRest(js, frame->bp, argc, start);
 }
 
+static inline bool sv_op_str_append_local_tail(
+  sv_vm_t *vm, ant_value_t *lp, sv_func_t *func, uint8_t *ip
+) {
+  int idx = (int)sv_get_u16(ip + 1) - func->param_count;
+  if (idx < 0 || !Silver_StringBuilder_TryAppendTail(lp[idx], vm->stack[vm->sp - 1])) return false;
+  vm->sp--;
+  sv_tfb_record_local(func, idx, lp[idx]);
+  return true;
+}
+
 static inline ant_value_t sv_op_str_append_local(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame, sv_func_t *func, uint8_t *ip

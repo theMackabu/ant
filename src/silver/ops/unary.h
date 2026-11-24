@@ -8,7 +8,7 @@
 
 static inline void sv_op_not(sv_vm_t *vm, ant_t *js) {
   ant_value_t a = vm->stack[--vm->sp];
-  vm->stack[vm->sp++] = mkval(kTypeBool, !js_truthy(js, a));
+  vm->stack[vm->sp++] = mkval(kTypeBool, !Ant_ToBooleanFast(js, a));
 }
 
 static inline void sv_op_typeof(sv_vm_t *vm, ant_t *js) {

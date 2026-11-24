@@ -1015,8 +1015,12 @@ ant_value_t sv_string_builder_append_at(
   sv_func_t *func, uint16_t slot_idx, ant_value_t rhs
 ) {
   ant_value_t lhs = *slot;
-  ant_string_builder_t *builder = sv_string_builder_heap_ptr(lhs);
+  if (Silver_StringBuilder_TryAppendTail(lhs, rhs)) {
+    sv_record_slot_feedback(frame, func, slot_idx, lhs);
+    return Ant_Value_Undefined;
+  }
 
+  ant_string_builder_t *builder = sv_string_builder_heap_ptr(lhs);
   if (builder) {
     if (vtype(rhs) == kTypeNumber && sv_builder_append_number(builder, rhs)) {
       sv_record_slot_feedback(frame, func, slot_idx, lhs);
@@ -1171,6 +1175,28 @@ ant_value_t sv_string_builder_append_snapshot_slot(
   return sv_string_builder_append_snapshot_at(vm, js, slot, frame, func, slot_idx, lhs, rhs);
 }
 
+static constexpr int SV_FRAME_INLINE_SLOTS = 16;
+
+static inline __attribute__((always_inline)) void sv_frame_store_inline(ant_value_t *slot, ant_value_t value) {
+  *(volatile ant_value_t *)slot = value;
+}
+
+static inline void sv_frame_fill_undefined(ant_value_t *slots, int count) {
+  if (__builtin_expect(count > SV_FRAME_INLINE_SLOTS, 0)) {
+    for (int i = 0; i < count; i++) slots[i] = Ant_Value_Undefined;
+    return;
+  }
+  for (int i = 0; i < count; i++) sv_frame_store_inline(&slots[i], Ant_Value_Undefined);
+}
+
+static inline void sv_frame_copy_args(ant_value_t *base, const ant_value_t *args, int argc) {
+  if (__builtin_expect(argc > SV_FRAME_INLINE_SLOTS || base > args, 0)) {
+    memmove(base, args, (size_t)argc * sizeof(ant_value_t));
+    return;
+  }
+  for (int i = 0; i < argc; i++) sv_frame_store_inline(&base[i], args[i]);
+}
+
 static inline ant_value_t sv_stage_frame_args(
   sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t *args, int argc,
   ant_value_t **out_bp, ant_value_t **out_lp
@@ -1195,13 +1221,8 @@ static inline ant_value_t sv_stage_frame_args(
   *out_bp = base;
   *out_lp = base + arg_slots;
 
-  if (argc > 0 && args)
-    memmove(base, args, (size_t)argc * sizeof(ant_value_t));
-  for (int i = argc; i < arg_slots; i++)
-    base[i] = Ant_Value_Undefined;
-  if (func->max_locals > 0)
-    for (int i = 0; i < func->max_locals; i++)
-      (*out_lp)[i] = Ant_Value_Undefined;
+  if (argc > 0 && args) sv_frame_copy_args(base, args, argc);
+  sv_frame_fill_undefined(base + argc, need - argc);
   vm->sp += need;
   return Ant_Value_Undefined;
 }
@@ -1251,17 +1272,9 @@ static inline ant_value_t sv_execute_entry_common(
 }
 
 __attribute__((noinline))
-static sv_jit_func_t sv_direct_closure_jit_prepare(
+static sv_jit_func_t sv_direct_closure_jit_compile(
   ant_t *js, sv_func_t *callee, sv_closure_t *closure
 ) {
-  if (callee->is_generator) return NULL;
-  if (callee->jit_compile_failed) return NULL;
-
-  uint32_t cc = ++callee->call_count;
-  if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
-    sv_tfb_ensure(callee);
-  if (cc <= SV_JIT_THRESHOLD) return NULL;
-
   sv_jit_func_t jit_fn = sv_jit_compile(js, callee, closure);
   if (!jit_fn) {
     callee->call_count = 0;
@@ -1271,6 +1284,19 @@ static sv_jit_func_t sv_direct_closure_jit_prepare(
 
   callee->jit_code = jit_fn;
   return jit_fn;
+}
+
+static inline __attribute__((always_inline)) sv_jit_func_t sv_direct_closure_jit_prepare(
+  ant_t *js, sv_func_t *callee, sv_closure_t *closure
+) {
+  if (callee->is_generator || callee->jit_compile_failed) return NULL;
+
+  uint32_t cc = ++callee->call_count;
+  if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
+    sv_tfb_ensure(callee);
+  if (__builtin_expect(cc <= SV_JIT_THRESHOLD, 1)) return NULL;
+
+  return sv_direct_closure_jit_compile(js, callee, closure);
 }
 
 static inline __attribute__((always_inline)) ant_value_t sv_try_direct_closure_jit(
@@ -1845,6 +1871,35 @@ static __attribute__((noinline)) ant_value_t sv_async_inline_call(
 }
 
 #include "silver/ops/macros.h"
+
+__attribute__((cold, noinline))
+void sv_jit_warn_bailout(sv_func_t *fn, const char *reason, int bc_off) {
+  const char *op_name = "entry";
+  if (bc_off >= 0 && bc_off < fn->code_len) {
+    uint8_t op = fn->code[bc_off];
+    if (op < OP__COUNT && sv_op_names[op]) op_name = sv_op_names[op];
+  }
+
+  uint32_t line = 0, col = 0;
+  (void)sv_lookup_srcpos(fn, bc_off, &line, &col);
+
+  fprintf(stderr,
+    "jit: bailout %u/%u tfb=%u func=%s op=%s bc=%d at %s:%u:%u reason=%s\n",
+    (unsigned)fn->jit_bailout_count, (unsigned)SV_JIT_BAILOUT_LIMIT,
+    fn->tfb_version, fn->debug->name ? fn->debug->name : "<anonymous>",
+    op_name, bc_off, fn->debug->filename ? fn->debug->filename : "<unknown>",
+    line, col, reason ? reason : "unknown"
+  );
+}
+
+__attribute__((cold, noinline))
+void sv_jit_warn_bailout_limit(sv_func_t *fn) {
+  fprintf(
+    stderr, "jit: disabling %s after %u bailouts at tfb=%u\n",
+    fn->debug->name ? fn->debug->name : "<anonymous>",
+    (unsigned)fn->jit_bailout_count, fn->tfb_version
+  );
+}
 
 __attribute__((noinline))
 ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant_value_t super_val, ant_value_t *args, int argc) {

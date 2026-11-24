@@ -475,6 +475,7 @@ L_ADD_LOCAL: {
 }
 
 L_STR_APPEND_LOCAL: {
+  if (sv_op_str_append_local_tail(vm, lp, func, ip)) NEXT(OP_STR_APPEND_LOCAL);
   VM_CHECK(sv_op_str_append_local(vm, js, frame, func, ip));
   NEXT(OP_STR_APPEND_LOCAL);
 }
@@ -566,21 +567,30 @@ L_LT: {
 }
 
 L_LE: {
-  sv_tfb_record2(func, ip, vm->stack[vm->sp-2], vm->stack[vm->sp-1]);
-  VM_CHECK(sv_op_le(vm, js));
-  NEXT(OP_LE);
+  ant_value_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
+  sv_tfb_record2(func, ip, l, r);
+  if (__builtin_expect(vtype(l) == kTypeNumber && vtype(r) == kTypeNumber, 1)) {
+    vm->sp--; vm->stack[vm->sp - 1] = mkval(kTypeBool, Ant_Value_AsNumberUnchecked(l) <= Ant_Value_AsNumberUnchecked(r)); NEXT(OP_LE);
+  }
+  VM_CHECK(sv_op_le(vm, js)); NEXT(OP_LE);
 }
 
 L_GT: {
-  sv_tfb_record2(func, ip, vm->stack[vm->sp-2], vm->stack[vm->sp-1]);
-  VM_CHECK(sv_op_gt(vm, js));
-  NEXT(OP_GT);
+  ant_value_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
+  sv_tfb_record2(func, ip, l, r);
+  if (__builtin_expect(vtype(l) == kTypeNumber && vtype(r) == kTypeNumber, 1)) {
+    vm->sp--; vm->stack[vm->sp - 1] = mkval(kTypeBool, Ant_Value_AsNumberUnchecked(l) > Ant_Value_AsNumberUnchecked(r)); NEXT(OP_GT);
+  }
+  VM_CHECK(sv_op_gt(vm, js)); NEXT(OP_GT);
 }
 
 L_GE: {
-  sv_tfb_record2(func, ip, vm->stack[vm->sp-2], vm->stack[vm->sp-1]);
-  VM_CHECK(sv_op_ge(vm, js));
-  NEXT(OP_GE);
+  ant_value_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
+  sv_tfb_record2(func, ip, l, r);
+  if (__builtin_expect(vtype(l) == kTypeNumber && vtype(r) == kTypeNumber, 1)) {
+    vm->sp--; vm->stack[vm->sp - 1] = mkval(kTypeBool, Ant_Value_AsNumberUnchecked(l) >= Ant_Value_AsNumberUnchecked(r)); NEXT(OP_GE);
+  }
+  VM_CHECK(sv_op_ge(vm, js)); NEXT(OP_GE);
 }
 
 L_INSTANCEOF: {
@@ -694,7 +704,7 @@ L_JMP_FALSE: {
       ? ip + sv_op_size[OP_JMP_FALSE]
       : ip + sv_op_size[OP_JMP_FALSE] + sv_get_i32(ip + 1);
   } else {
-    ip = js_truthy(js, v)
+    ip = Ant_ToBooleanFast(js, v)
       ? ip + sv_op_size[OP_JMP_FALSE]
       : ip + sv_op_size[OP_JMP_FALSE] + sv_get_i32(ip + 1);
   }
@@ -710,7 +720,7 @@ L_JMP_TRUE: {
       ? ip + sv_op_size[OP_JMP_TRUE] + sv_get_i32(ip + 1)
       : ip + sv_op_size[OP_JMP_TRUE];
   } else {
-    ip = js_truthy(js, v)
+    ip = Ant_ToBooleanFast(js, v)
       ? ip + sv_op_size[OP_JMP_TRUE] + sv_get_i32(ip + 1)
       : ip + sv_op_size[OP_JMP_TRUE];
   }
@@ -1272,11 +1282,9 @@ tail_call_inline: {
   vm->sp = frame->prev_sp;
 
   ant_value_t *base = &vm->stack[vm->sp];
-  memmove(base, call_args, (size_t)tc_argc * sizeof(ant_value_t));
-  for (int i = (int)tc_argc; i < arg_slots; i++) base[i] = Ant_Value_Undefined;
-
   ant_value_t *new_lp = base + arg_slots;
-  for (int i = 0; i < closure->func->max_locals; i++) new_lp[i] = Ant_Value_Undefined;
+  sv_frame_copy_args(base, call_args, (int)tc_argc);
+  sv_frame_fill_undefined(base + tc_argc, need - (int)tc_argc);
 
   vm->sp = frame->prev_sp + need;
   func = closure->func;

@@ -5,6 +5,7 @@
 #include "modules/bigint.h"
 #include "gc/roots.h"
 #include "internal.h"
+#include "numbers.h"
 
 static inline ant_value_t sv_bitwise_numbers(ant_t *js, sv_op_t op, ant_value_t l, ant_value_t r) {
   bool lb = vtype(l) == kTypeBigInt, rb = vtype(r) == kTypeBigInt;
@@ -68,11 +69,38 @@ static inline ant_value_t sv_bitnot_value(ant_t *js, ant_value_t v) {
   return Ant_Value_FromNumber((double)(~js_to_int32(Ant_Value_AsNumberUnchecked(n))));
 }
 
-static inline ant_value_t sv_op_bitwise(sv_vm_t *vm, ant_t *js, sv_op_t op) {
+static inline ant_value_t sv_op_bitwise_generic(sv_vm_t *vm, ant_t *js, sv_op_t op) {
   ant_value_t res = sv_bitwise_values(js, op, vm->stack[vm->sp - 2], vm->stack[vm->sp - 1]);
   vm->sp -= 2;
   if (is_err(res)) return res;
   vm->stack[vm->sp++] = res;
+  return Ant_Value_FromNumber(0);
+}
+
+static inline __attribute__((always_inline)) ant_value_t sv_op_bitwise(sv_vm_t *vm, ant_t *js, sv_op_t op) {
+  ant_value_t l = vm->stack[vm->sp - 2], r = vm->stack[vm->sp - 1];
+  int32_t a, b;
+  
+  if (
+    vtype(l) != kTypeNumber || vtype(r) != kTypeNumber ||
+    !ant_number_as_int32(Ant_Value_AsNumberUnchecked(l), &a) ||
+    !ant_number_as_int32(Ant_Value_AsNumberUnchecked(r), &b)
+  ) return sv_op_bitwise_generic(vm, js, op);
+
+  uint32_t shift = (uint32_t)b & 0x1f;
+  double res;
+  switch (op) {
+    case OP_BAND: res = (double)(a & b); break;
+    case OP_BOR:  res = (double)(a | b); break;
+    case OP_BXOR: res = (double)(a ^ b); break;
+    case OP_SHL:  res = (double)(int32_t)((uint32_t)a << shift); break;
+    case OP_SHR:  res = (double)(a >> shift); break;
+    case OP_USHR: res = (double)((uint32_t)a >> shift); break;
+    default:      return sv_op_bitwise_generic(vm, js, op);
+  }
+
+  vm->sp--;
+  vm->stack[vm->sp - 1] = Ant_Value_FromNumber(res);
   return Ant_Value_FromNumber(0);
 }
 

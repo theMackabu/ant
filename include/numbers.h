@@ -42,11 +42,15 @@ static inline bool ant_number_as_int32(double value, int32_t *out) {
 }
 
 static inline size_t ant_int32_chars_len(int32_t value) {
+  static const uint32_t powers[] = {
+    0, 10, 100, 1000, 10000, 100000, 
+    1000000, 10000000, 100000000, 1000000000,
+  };
+
   uint32_t u = value < 0 ? (uint32_t)(-(int64_t)value) : (uint32_t)value;
-  size_t digits = u < 100000
-    ? (u < 100 ? (u < 10 ? 1 : 2) : (u < 1000 ? 3 : u < 10000 ? 4 : 5))
-    : (u < 10000000 ? (u < 1000000 ? 6 : 7) : (u < 100000000 ? 8 : u < 1000000000 ? 9 : 10));
-  return digits + (value < 0);
+  uint32_t estimate = ((32u - (uint32_t)__builtin_clz(u | 1)) * 1233u) >> 12;
+  
+  return (size_t)estimate + 1 - (u < powers[estimate]) + (value < 0);
 }
 
 static inline void ant_int32_write(char *dst, size_t len, int32_t value) {

@@ -1,17 +1,18 @@
 #pragma once
 
-#include "silver/eval_scope_flags.h"
-#include "gc.h"
-#include "gc/objects.h"
-#include "internal.h"
-#include "runtime.h"
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+#include "gc.h"
+#include "gc/objects.h"
+#include "internal.h"
+#include "runtime.h"
+#include "numbers.h"
+#include "silver/eval_scope_flags.h"
 
 static constexpr int SV_JIT_ARGS_BUF_CAP = 16;
 static constexpr unsigned SV_KEYED_PUT_ENTRIES = 256;
@@ -1580,6 +1581,47 @@ static inline ant_value_t *sv_frame_slot_ptr(sv_frame_t *frame, uint16_t slot_id
   }
   if (!frame->lp) return NULL;
   return &frame->lp[slot_idx - param_count];
+}
+
+__attribute__((always_inline)) 
+static inline bool Silver_StringBuilder_TryAppendTail(ant_value_t lhs, ant_value_t rhs) {
+  if (!str_is_heap_builder(lhs)) return false;
+  ant_string_builder_t *builder = ant_str_builder_ptr(lhs);
+  
+  size_t tail_len = builder->tail_len;
+  size_t room = STR_BUILDER_TAIL_CAP - tail_len;
+  size_t n;
+
+  if (vtype(rhs) == kTypeNumber) {
+    int32_t iv;
+    if (!ant_number_as_int32(Ant_Value_AsNumberUnchecked(rhs), &iv)) return false;
+    n = ant_int32_chars_len(iv);
+    if (n > room) return false;
+    
+    ant_int32_write(builder->tail + tail_len, n, iv);
+    ant_value_t cached = builder->cached;
+    
+    if (vtype(cached) == kTypeNumber)
+      builder->cached = Ant_Value_FromNumber(Ant_Value_AsNumberUnchecked(cached) + (double)n);
+  } else {
+    ant_flat_string_t *flat = ant_str_flat_ptr(rhs);
+    if (!flat || (flat->meta & STR_META_ASCII_MASK) != ((uint64_t)STR_ASCII_YES << STR_META_ASCII_SHIFT)) return false;
+    n = (size_t)flat->len;
+    if (n == 0 || n > room) return false;
+    
+    str_copy_small(builder->tail + tail_len, flat->bytes, n);
+    ant_value_t cached = builder->cached;
+    
+    builder->cached = vtype(cached) == kTypeNumber
+      ? Ant_Value_FromNumber(Ant_Value_AsNumberUnchecked(cached) + (double)n)
+      : Ant_Value_Undefined;
+  }
+
+  builder->tail_len = (uint16_t)(tail_len + n);
+  builder->len += (ant_offset_t)n;
+  if (builder->ascii_state == STR_ASCII_UNKNOWN) builder->ascii_state = STR_ASCII_YES;
+  
+  return true;
 }
 
 ant_value_t sv_string_builder_append_at(

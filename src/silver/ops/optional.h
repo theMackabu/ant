@@ -12,7 +12,7 @@ static inline ant_value_t sv_op_get_field_opt(sv_vm_t *vm, ant_t *js, sv_func_t 
     vm->stack[vm->sp++] = Ant_Value_Undefined;
     return Ant_Value_Undefined;
   } else {
-    ant_value_t res = sv_prop_get_field_ic(js, obj, a, func, ip);
+    ant_value_t res = sv_prop_get_field_ic_interp(js, obj, a, func, ip);
     if (is_err(res)) return res;
     vm->stack[vm->sp++] = res;
     return Ant_Value_Undefined;

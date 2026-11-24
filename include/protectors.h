@@ -9,6 +9,7 @@ void ant_protectors_invalidate(ant_t *js, ant_object_t *holder, const char *key)
 void ant_symbol_protectors_invalidate(ant_t *js, ant_object_t *holder, ant_offset_t sym_off);
 void ant_regexp_protectors_invalidate(ant_t *js, ant_object_t *holder, bool species);
 void ant_protector_break_all_realms(ant_t *js, uint32_t protectors);
+void ant_property_mutation_invalidate_slow(ant_t *js, ant_object_t *holder, const char *key);
 
 typedef enum: uint8_t {
 #define ANT_PROTECTOR(name) ANT_PROTECTOR_BIT_##name,
@@ -89,25 +90,16 @@ static inline void ant_regexp_protector_holder_mark(ant_value_t value) {
   if (obj) ant_object_protector_holder_add(obj, ANT_PROTECTOR_HOLDER_REGEXP);
 }
 
+__attribute__((always_inline)) 
 static inline void ant_property_mutation_invalidate(ant_t *js, ant_object_t *holder, const char *key) {
   if (!js || !holder || !key) return;
-  ant_proto_watch_note_change(holder);
   
-  if (__builtin_expect(ant_object_protector_holder(holder) & ANT_PROTECTOR_HOLDER_REGEXP, 0))
-    ant_regexp_protectors_invalidate(js, holder, false);
-
-  if (key == js->intern.prototype) {
-    ant_prototype_write_epoch_bump(js);
-    return;
-  }
-
-  if (__builtin_expect(ant_object_protector_holder(holder) & ANT_PROTECTOR_HOLDER_TYPED_ARRAY, 0) && key == js->intern.length)
-    ant_protector_break_all_realms(js, ANT_PROTECTOR_TYPED_ARRAY_LENGTH);
-
-  if (!ant_object_protector_holder(holder) && holder->type_tag != kTypeArray && !ant_object_promise_state(holder)) return;
-  if (!ant_property_key_breaks_protector(js, key)) return;
+  if (__builtin_expect(
+    !ant_object_protector_holder(holder) && key != js->intern.prototype &&
+    holder->type_tag != kTypeArray && holder->type_tag != kTypePromise, 1
+  )) return;
   
-  ant_protectors_invalidate(js, holder, key);
+  ant_property_mutation_invalidate_slow(js, holder, key);
 }
 
 static inline void ant_symbol_property_mutation_invalidate(ant_t *js, ant_object_t *holder, ant_offset_t sym_off) {

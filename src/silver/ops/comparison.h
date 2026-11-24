@@ -11,7 +11,7 @@
 static inline void sv_op_seq(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[vm->sp - 1];
   ant_value_t l = vm->stack[vm->sp - 2];
-  bool eq = strict_eq_values(js, l, r);
+  bool eq = Ant_Value_StrictEqualsFast(js, l, r);
   vm->sp -= 2;
   vm->stack[vm->sp++] = mkval(kTypeBool, eq);
 }
@@ -19,7 +19,7 @@ static inline void sv_op_seq(sv_vm_t *vm, ant_t *js) {
 static inline void sv_op_sne(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[vm->sp - 1];
   ant_value_t l = vm->stack[vm->sp - 2];
-  bool eq = strict_eq_values(js, l, r);
+  bool eq = Ant_Value_StrictEqualsFast(js, l, r);
   vm->sp -= 2;
   vm->stack[vm->sp++] = mkval(kTypeBool, !eq);
 }
@@ -89,9 +89,34 @@ static inline ant_value_t sv_abstract_eq(ant_t *js, ant_value_t l, ant_value_t r
   return res;
 }
 
+static inline bool sv_abstract_eq_simple(ant_value_t l, ant_value_t r, bool *eq) {
+  uint8_t lt = vtype(l), rty = vtype(r);
+  if (lt == kTypeNumber && rty == kTypeNumber) {
+    *eq = Ant_Value_AsNumberUnchecked(l) == Ant_Value_AsNumberUnchecked(r);
+    return true;
+  }
+
+  bool l_nullish = lt == kTypeNull || lt == kTypeUndefined;
+  bool r_nullish = rty == kTypeNull || rty == kTypeUndefined;
+  if (l_nullish || r_nullish) {
+    *eq = l_nullish && r_nullish;
+    return true;
+  }
+
+  if (lt != rty || lt == kTypeString || lt == kTypeBigInt) return false;
+  *eq = l == r;
+  return true;
+}
+
 static inline ant_value_t sv_op_eq(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[vm->sp - 1];
   ant_value_t l = vm->stack[vm->sp - 2];
+  bool simple;
+  if (sv_abstract_eq_simple(l, r, &simple)) {
+    vm->sp--;
+    vm->stack[vm->sp - 1] = mkval(kTypeBool, simple);
+    return Ant_Value_Undefined;
+  }
   ant_value_t eq = sv_abstract_eq(js, l, r);
   if (is_err(eq)) return eq;
   vm->sp -= 2;
@@ -102,6 +127,12 @@ static inline ant_value_t sv_op_eq(sv_vm_t *vm, ant_t *js) {
 static inline ant_value_t sv_op_ne(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[vm->sp - 1];
   ant_value_t l = vm->stack[vm->sp - 2];
+  bool simple;
+  if (sv_abstract_eq_simple(l, r, &simple)) {
+    vm->sp--;
+    vm->stack[vm->sp - 1] = mkval(kTypeBool, !simple);
+    return Ant_Value_Undefined;
+  }
   ant_value_t eq = sv_abstract_eq(js, l, r);
   if (is_err(eq)) return eq;
   vm->sp -= 2;

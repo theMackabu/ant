@@ -193,7 +193,7 @@ static inline __attribute__((always_inline)) ant_value_t sv_op_post_update(sv_vm
   return Ant_Value_Undefined;
 }
 
-static inline ant_value_t sv_op_update_local(
+static inline __attribute__((always_inline)) ant_value_t sv_op_update_local(
   ant_value_t *lp, ant_t *js, sv_func_t *func, uint8_t *ip, bool increment
 ) {
   uint8_t idx = sv_get_u8(ip + 1);

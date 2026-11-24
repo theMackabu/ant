@@ -122,6 +122,9 @@ static inline __attribute__((always_inline)) ant_value_t sv_jit_invoke(
   return sv_jit_invoke_same_realm(js, from, fn, vm, ctx, closure);
 }
 
+void sv_jit_warn_bailout(sv_func_t *fn, const char *reason, int bc_off);
+void sv_jit_warn_bailout_limit(sv_func_t *fn);
+
 static inline void sv_jit_on_bailout_at(sv_func_t *fn, const char *reason, int bc_off) {
   if (!fn) return;
 
@@ -138,33 +141,12 @@ static inline void sv_jit_on_bailout_at(sv_func_t *fn, const char *reason, int b
   fn->jit_code_retier = false;
   fn->back_edge_count = 0;
 
-  if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) {
-    const char *op_name = "entry";
-    if (bc_off >= 0 && bc_off < fn->code_len) {
-      uint8_t op = fn->code[bc_off];
-      if (op < OP__COUNT && sv_op_names[op]) op_name = sv_op_names[op];
-    }
-
-    uint32_t line = 0, col = 0;
-    (void)sv_lookup_srcpos(fn, bc_off, &line, &col);
-
-    fprintf(stderr,
-      "jit: bailout %u/%u tfb=%u func=%s op=%s bc=%d at %s:%u:%u reason=%s\n",
-      (unsigned)fn->jit_bailout_count, (unsigned)SV_JIT_BAILOUT_LIMIT,
-      fn->tfb_version, fn->debug->name ? fn->debug->name : "<anonymous>",
-      op_name, bc_off, fn->debug->filename ? fn->debug->filename : "<unknown>",
-      line, col, reason ? reason : "unknown"
-    );
-  }
+  if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) sv_jit_warn_bailout(fn, reason, bc_off);
 
   if (fn->jit_bailout_count >= SV_JIT_BAILOUT_LIMIT) {
     fn->jit_compile_failed = true;
     fn->call_count = 0;
-    if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) fprintf(
-      stderr, "jit: disabling %s after %u bailouts at tfb=%u\n",
-      fn->debug->name ? fn->debug->name : "<anonymous>",
-      (unsigned)fn->jit_bailout_count, fn->tfb_version
-    );
+    if (sv_debug_unlikely(SV_DEBUG_JIT_WARN)) sv_jit_warn_bailout_limit(fn);
     return;
   }
 
@@ -258,6 +240,7 @@ static inline void sv_tfb_site_update(sv_func_t *func, uint8_t *site, uint8_t ol
   if (neu != old) { *site = neu; func->tfb_version++; }
 }
 
+__attribute__((always_inline)) 
 static inline void sv_tfb_record2(sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r) {
   uint8_t *site = sv_tfb_site(func, ip);
   if (!site) return;
