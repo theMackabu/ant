@@ -2523,7 +2523,13 @@ void init_process_module(ant_t *js) {
   js_set(js, stdin_proto, "unref", Ant_Function_Create(js_stdin_unref));
   js_set_tostringtag(js, stdin_proto, js_mkstr(js, "ReadStream", 10));
   
-  ant_value_t stdin_obj = stream_construct_readable(js, stdin_proto, Ant_Value_Undefined, Ant_Value_Undefined);
+  ant_value_t stdin_options = Ant_Value_Undefined;
+  if (stdin_is_tty()) {
+    stdin_options = Ant_Object_Create(js);
+    js_set(js, stdin_options, "highWaterMark", Ant_Value_FromNumber(0));
+  }
+
+  ant_value_t stdin_obj = stream_construct_readable(js, stdin_proto, stdin_options, Ant_Value_Undefined);
   ps->stdin_obj = stdin_obj;
   eventemitter_set_listener_change_hook(js, stdin_obj, process_listener_change, ps);
   js_set(js, stdin_obj, "isTTY", Ant_Value_FromBool(stdin_is_tty()));
