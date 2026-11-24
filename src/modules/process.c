@@ -30,6 +30,7 @@
 
 #include "utf8.h"
 #include "cfunc.h"
+#include "crash.h"
 #include "errors.h"
 #include "sync.h"
 #include "output.h"
@@ -66,8 +67,13 @@ extern char **environ;
 static constexpr size_t STDIN_FILE_CHUNK = 65536;
 
 typedef struct {
-  uv_signal_t handle;
+  union {
+    uv_handle_t handle;
+    uv_signal_t signal;
+    uv_async_t crash_listener;
+  };
   int signum;
+  bool crash_owned;
   UT_hash_handle hh;
 } SignalHandle;
 
@@ -301,13 +307,24 @@ const char *process_signal_name(int signum) {
   return entry ? entry->name : NULL;
 }
 
-static void uv_signal_handler(uv_signal_t *handle, int signum) {
-  ant_t *js = handle->data;
+static void emit_signal_event(ant_t *js, int signum) {
   const char *name = process_signal_name(signum);
   if (name) {
     ant_value_t sig_arg = js_mkstr(js, name, strlen(name));
     emit_process_event(js, name, &sig_arg, 1);
   }
+}
+
+static void uv_signal_handler(uv_signal_t *handle, int signum) {
+  emit_signal_event(handle->data, signum);
+}
+
+static void crash_signal_handler(uv_async_t *handle) {
+  SignalHandle *sh = (SignalHandle *)handle;
+  ant_t *js = handle->data;
+  int signum = sh->signum;
+  unsigned deliveries = ant_crash_take_signal_deliveries(signum);
+  for (unsigned i = 0; i < deliveries; i++) emit_signal_event(js, signum);
 }
 
 static void start_signal_watch(ant_t *js, int signum) {
@@ -320,16 +337,31 @@ static void start_signal_watch(ant_t *js, int signum) {
 
   sh = malloc(sizeof(SignalHandle));
   sh->signum = signum;
-  uv_signal_init(js->loop, &sh->handle);
-  sh->handle.data = js;
-  uv_signal_start(&sh->handle, uv_signal_handler, signum);
-  uv_unref((uv_handle_t *)&sh->handle);
+  sh->crash_owned = ant_crash_handles_signal(signum);
+
+  if (sh->crash_owned) {
+    uv_async_init(js->loop, &sh->crash_listener, crash_signal_handler);
+    sh->handle.data = js;
+    ant_crash_set_signal_listener(signum, &sh->crash_listener);
+  } else {
+    uv_signal_init(js->loop, &sh->signal);
+    sh->handle.data = js;
+    uv_signal_start(&sh->signal, uv_signal_handler, signum);
+  }
+
+  uv_unref(&sh->handle);
   HASH_ADD_INT(ps->signal_handles, signum, sh);
 }
 
 static void on_signal_handle_close(uv_handle_t *handle) {
   SignalHandle *sh = (SignalHandle *)handle;
   free(sh);
+}
+
+static void close_signal_watch(SignalHandle *sh) {
+  if (sh->crash_owned) ant_crash_set_signal_listener(sh->signum, NULL);
+  else uv_signal_stop(&sh->signal);
+  uv_close(&sh->handle, on_signal_handle_close);
 }
 
 static void stop_signal_watch(ant_t *js, int signum) {
@@ -340,8 +372,7 @@ static void stop_signal_watch(ant_t *js, int signum) {
   if (!sh) return;
   
   HASH_DEL(ps->signal_handles, sh);
-  uv_signal_stop(&sh->handle);
-  uv_close((uv_handle_t *)&sh->handle, on_signal_handle_close);
+  close_signal_watch(sh);
 }
 
 
@@ -1107,8 +1138,7 @@ void cleanup_process_module(ant_t *js) {
   SignalHandle *sh, *tmp;
   HASH_ITER(hh, ps->signal_handles, sh, tmp) {
     HASH_DEL(ps->signal_handles, sh);
-    uv_signal_stop(&sh->handle);
-    uv_close((uv_handle_t *)&sh->handle, on_signal_handle_close);
+    close_signal_watch(sh);
   }
 
   stdin_close(ps);

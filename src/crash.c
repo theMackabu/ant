@@ -56,8 +56,12 @@ bool ant_crash_is_internal_report(int argc, char **argv) {
 #else
 #include <limits.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <sched.h>
+#include <stdatomic.h>
 #include <unistd.h>
+#include <uv.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 
@@ -943,7 +947,114 @@ static int install_altstack(void) {
   return 0;
 }
 
+typedef struct {
+  int sig;
+  _Atomic(uv_async_t *) listener;
+  atomic_uint pending;
+} crash_signal_t;
+
+static crash_signal_t crash_signals[] = {
+  { .sig = SIGSEGV }, { .sig = SIGBUS }, { .sig = SIGFPE },
+  { .sig = SIGILL },  { .sig = SIGABRT },
+};
+
+static atomic_bool crash_handlers_installed;
+static atomic_int crash_listener_readers;
+
+static crash_signal_t *crash_signal_find(int sig) {
+  for (size_t i = 0; i < sizeof(crash_signals) / sizeof(crash_signals[0]); i++)
+    if (crash_signals[i].sig == sig) return &crash_signals[i];
+  return NULL;
+}
+
+#ifdef __APPLE__
+#define ANT_CRASH_REPLAY_SLOTS         16
+#define ANT_CRASH_ESR_CLASS_SHIFT      26
+#define ANT_CRASH_ESR_CLASS_SVC        0x15
+#define ANT_CRASH_X86_FIRST_INTERRUPT  32
+
+static _Atomic uint64_t crash_replay_states[ANT_CRASH_REPLAY_SLOTS];
+static atomic_uint crash_replay_next;
+
+static bool crash_delivered_after_syscall(const ucontext_t *uc) {
+#if defined(__aarch64__)
+  return (uc->uc_mcontext->__es.__esr >> ANT_CRASH_ESR_CLASS_SHIFT) == ANT_CRASH_ESR_CLASS_SVC;
+#elif defined(__x86_64__)
+  return uc->uc_mcontext->__es.__trapno >= ANT_CRASH_X86_FIRST_INTERRUPT;
+#else
+  return false;
+#endif
+}
+
+static bool crash_thread_state_replayed(int sig, const ucontext_t *uc) {
+  const unsigned char *bytes = (const unsigned char *)&uc->uc_mcontext->__ss;
+  uint64_t hash = 0xcbf29ce484222325ULL ^ (uint64_t)sig;
+  for (size_t i = 0; i < sizeof(uc->uc_mcontext->__ss); i++)
+    hash = (hash ^ bytes[i]) * 0x100000001b3ULL;
+  hash |= 1;
+
+  for (size_t i = 0; i < ANT_CRASH_REPLAY_SLOTS; i++)
+    if (atomic_load(&crash_replay_states[i]) == hash) return true;
+
+  unsigned slot = atomic_fetch_add(&crash_replay_next, 1) % ANT_CRASH_REPLAY_SLOTS;
+  atomic_store(&crash_replay_states[slot], hash);
+  return false;
+}
+#endif
+
+static bool crash_signal_is_fault(int sig, const siginfo_t *info, void *ucontext) {
+  if (sig == SIGABRT) return false;
+  if (!info || !ucontext) return true;
+#if defined(__APPLE__)
+  const ucontext_t *uc = ucontext;
+  if (!uc->uc_mcontext) return true;
+  if (crash_delivered_after_syscall(uc)) return false;
+  return crash_thread_state_replayed(sig, uc);
+#elif defined(__linux__)
+  return info->si_code > 0;
+#else
+  return info->si_code > 0 && info->si_code != SI_USER && info->si_code != SI_QUEUE;
+#endif
+}
+
+static bool crash_notify_listener(int sig, const siginfo_t *info, void *ucontext) {
+  crash_signal_t *entry = crash_signal_find(sig);
+  if (!entry || !atomic_load(&entry->listener)) return false;
+  if (crash_signal_is_fault(sig, info, ucontext)) return false;
+
+  int saved_errno = errno;
+  atomic_fetch_add(&crash_listener_readers, 1);
+  uv_async_t *listener = atomic_load(&entry->listener);
+  if (listener) {
+    atomic_fetch_add(&entry->pending, 1);
+    uv_async_send(listener);
+  }
+  atomic_fetch_sub(&crash_listener_readers, 1);
+  errno = saved_errno;
+  return listener != NULL;
+}
+
+bool ant_crash_handles_signal(int sig) {
+  return atomic_load(&crash_handlers_installed) && crash_signal_find(sig);
+}
+
+void ant_crash_set_signal_listener(int sig, uv_async_t *listener) {
+  crash_signal_t *entry = crash_signal_find(sig);
+  if (!entry) return;
+
+  if (listener) atomic_store(&entry->pending, 0);
+  atomic_store(&entry->listener, listener);
+  if (!listener) while (atomic_load(&crash_listener_readers) > 0) sched_yield();
+}
+
+unsigned ant_crash_take_signal_deliveries(int sig) {
+  crash_signal_t *entry = crash_signal_find(sig);
+  return entry ? atomic_exchange(&entry->pending, 0) : 0;
+}
+
 static void crash_handler(int sig, siginfo_t *info, void *ucontext) {
+  if (crash_notify_listener(sig, info, ucontext)) return;
+
   struct sigaction dfl;
   memset(&dfl, 0, sizeof(dfl));
   
@@ -998,13 +1109,14 @@ void ant_crash_init(int argc, char **argv) {
   struct sigaction sa;
   memset(&sa, 0, sizeof(sa));
   sa.sa_sigaction = crash_handler;
-  sa.sa_flags = SA_SIGINFO;
+  sa.sa_flags = SA_SIGINFO | SA_RESTART;
 #ifdef SA_ONSTACK
   if (install_altstack()) sa.sa_flags |= SA_ONSTACK;
 #endif
   sigemptyset(&sa.sa_mask);
-  static const int sigs[] = { SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT };
-  for (size_t i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++) sigaction(sigs[i], &sa, NULL);
+  for (size_t i = 0; i < sizeof(crash_signals) / sizeof(crash_signals[0]); i++)
+    sigaction(crash_signals[i].sig, &sa, NULL);
+  atomic_store(&crash_handlers_installed, true);
 }
 
 #else // _WIN32
@@ -1140,6 +1252,16 @@ void ant_crash_init(int argc, char **argv) {
   init_argv_strings(argc, argv);
   init_report_controls();
   previous_filter = SetUnhandledExceptionFilter(windows_crash_handler);
+}
+
+bool ant_crash_handles_signal(int sig) {
+  return false;
+}
+
+void ant_crash_set_signal_listener(int sig, uv_async_t *listener) {}
+
+unsigned ant_crash_take_signal_deliveries(int sig) {
+  return 0;
 }
 
 #endif

@@ -563,6 +563,7 @@ export function targets() {
     'test_private_destructure_targets.cjs',
     'test_process_env_proxy.cjs',
     'test_process_exit_code.cjs',
+    'test_process_fault_signal_listener.cjs',
     'test_parser_arrow_chain_scope_facts.cjs',
     'test_parser_empty_parens.cjs',
     'test_parser_restricted_name_shapes.cjs',
