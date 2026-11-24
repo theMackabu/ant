@@ -594,8 +594,6 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_BNOT:
       case OP_NOT:
       case OP_IS_UNDEF:
-      case OP_IS_NULL:
-      case OP_IS_UNDEF_OR_NULL:
       case OP_IS_PRIMITIVE_TYPE:
       case OP_TYPEOF:
       case OP_VOID:
@@ -619,7 +617,6 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_THROW:
       case OP_THROW_ERROR:
       case OP_CATCH:
-      case OP_NIP_CATCH:
       case OP_TRY_PUSH_FINALLY:
       case OP_FINALLY:
       case OP_FINALLY_RET:
@@ -663,7 +660,6 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
         break;
       case OP_STR_APPEND_LOCAL:
       case OP_STR_ALC_SNAPSHOT:
-      case OP_STR_FLUSH_LOCAL:
       case OP_TO_STRING:
       case OP_TO_STRING_DEFER_NUMBER:
         jit_emit_strings(c);
@@ -680,7 +676,6 @@ static sv_jit_func_t jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *
       case OP_DEFINE_METHOD_COMP:
       case OP_GET_ELEM:
       case OP_GET_ELEM_OPT:
-      case OP_GET_ELEM2:
       case OP_PUT_ELEM:
       case OP_GET_PRIVATE:
       case OP_GET_PRIVATE_OPT:

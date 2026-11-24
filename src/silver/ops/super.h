@@ -3,11 +3,6 @@
 #include "silver/engine.h"
 #include "silver/glue.h"
 
-static inline void sv_op_get_super(sv_vm_t *vm, ant_t *js) {
-  ant_value_t obj = vm->stack[vm->sp - 1];
-  vm->stack[vm->sp - 1] = js_get_proto(js, obj);
-}
-
 static inline ant_value_t sv_op_get_super_val(sv_vm_t *vm, ant_t *js, sv_frame_t *frame) {
   ant_value_t res = Silver_Super_Get(
     js, frame->func, vm->stack[vm->sp - 3],

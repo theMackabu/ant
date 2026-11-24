@@ -8,56 +8,6 @@
 #include "arrays.h"
 #include "gc/roots.h"
 
-static inline void sv_define_method(
-  ant_t *js, sv_func_t *func, uint8_t *ip,
-  ant_value_t obj, ant_value_t fn
-) {
-  uint32_t atom_idx = sv_get_u32(ip + 1);
-  uint8_t flags = sv_get_u8(ip + 5);
-  
-  sv_atom_t *a = &func->atoms[atom_idx];
-  ant_value_t desc_obj = js_as_obj(obj);
-  
-  bool is_getter = (flags & SV_DEFINE_METHOD_GETTER) != 0;
-  bool is_setter = (flags & SV_DEFINE_METHOD_SETTER) != 0;
-  
-  uint8_t data_attrs = (flags & SV_DEFINE_METHOD_NON_ENUM)
-    ? (ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE)
-    : ANT_PROP_ATTR_DEFAULT;
-  
-  uint8_t accessor_desc = (flags & SV_DEFINE_METHOD_NON_ENUM)
-    ? JS_DESC_C
-    : (JS_DESC_E | JS_DESC_C);
-  
-  if (flags & SV_DEFINE_METHOD_SET_NAME) {
-    const char *prefix = is_getter ? "get " : is_setter ? "set " : "";
-    size_t prefix_len = is_getter || is_setter ? 4 : 0;
-    ant_value_t key = js_mkstr(js, a->str, a->len);
-    ant_value_t named = js_maybe_set_function_name_from_key(js, fn, key, prefix, prefix_len);
-    if (is_err(named)) return;
-  }
-  
-  if (is_getter) {
-    js_set_getter_desc(js, desc_obj, a->str, a->len, fn, accessor_desc);
-    return;
-  }
-  
-  if (is_setter) {
-    js_set_setter_desc(js, desc_obj, a->str, a->len, fn, accessor_desc);
-    return;
-  }
-  
-  ant_value_t key = js_mkstr(js, a->str, a->len);
-  mkprop(js, obj, key, fn, data_attrs);
-}
-
-static inline void sv_op_define_method(
-  sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip
-) {
-  sv_define_method(js, func, ip, vm->stack[vm->sp - 2], vm->stack[vm->sp - 1]);
-  vm->sp--;
-}
-
 ant_value_t sv_define_field(
   ant_t *js, uint8_t flags,
   ant_value_t obj, ant_value_t key, ant_value_t value
@@ -208,25 +158,6 @@ ant_value_t sv_op_define_class(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 );
-
-static inline ant_value_t sv_op_define_class_comp(
-  sv_vm_t *vm, ant_t *js,
-  sv_func_t *func, uint8_t *ip
-) {
-  ant_value_t name = vm->stack[vm->sp - 1];
-  vm->sp--;
-  
-  GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, name);
-  
-  ant_value_t result = sv_op_define_class(vm, js, func, ip);
-  GC_ROOT_RESTORE(js, root_mark);
-  
-  if (is_err(result)) return result;
-  vm->stack[vm->sp++] = name;
-  
-  return result;
-}
 
 #ifdef SV_OPS_IMPLEMENTATION
 

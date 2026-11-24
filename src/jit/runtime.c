@@ -51,7 +51,6 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_str_read_value);
   LOAD_EXT(jit_helper_str_append_local);
   LOAD_EXT(jit_helper_str_append_local_snapshot);
-  LOAD_EXT(jit_helper_str_flush_local);
   LOAD_EXT(jit_helper_lt);
   LOAD_EXT(jit_helper_le);
   LOAD_EXT(jit_helper_gt);
@@ -137,7 +136,6 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_get_elem);
   LOAD_EXT(jit_helper_realm_reenter);
   LOAD_EXT(js_get_index_fast);
-  LOAD_EXT(jit_helper_get_elem2);
   LOAD_EXT(jit_helper_get_elem_inline);
   LOAD_EXT(jit_helper_put_elem);
   LOAD_EXT(jit_helper_put_elem_strict);

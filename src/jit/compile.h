@@ -76,7 +76,6 @@ typedef struct jit_compile {
   MIR_item_t normalize_this_proto;
   MIR_item_t str_append_local_proto;
   MIR_item_t str_append_local_snapshot_proto;
-  MIR_item_t str_flush_local_proto;
   MIR_item_t truthy_proto;
   MIR_item_t resume_proto;
   MIR_item_t promote_start_proto;
@@ -135,7 +134,6 @@ typedef struct jit_compile {
   MIR_item_t imp_str_read_value;
   MIR_item_t imp_str_append_local;
   MIR_item_t imp_str_append_local_snapshot;
-  MIR_item_t imp_str_flush_local;
   MIR_item_t imp_lt;
   MIR_item_t imp_le;
   MIR_item_t imp_gt;
@@ -243,7 +241,6 @@ typedef struct jit_compile {
   MIR_item_t imp_throw_error;
   MIR_item_t imp_set_proto;
   MIR_item_t imp_copy_data_props;
-  MIR_item_t imp_get_elem2;
   MIR_item_t imp_get_elem_inline;
   MIR_item_t imp_band;
   MIR_item_t imp_bor;

@@ -189,12 +189,3 @@ static inline ant_value_t sv_op_str_append_local_snapshot(
   return sv_string_builder_append_snapshot_slot(vm, js, frame, func, idx, lhs, rhs);
 }
 
-static inline ant_value_t sv_op_str_flush_local(
-  sv_vm_t *vm, ant_t *js,
-  sv_frame_t *frame, uint8_t *ip
-) {
-  uint16_t idx = sv_get_u16(ip + 1);
-  ant_value_t flush = sv_string_builder_flush_slot(vm, js, frame, idx);
-  if (is_err(flush)) return flush;
-  return Ant_Value_Undefined;
-}

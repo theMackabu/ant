@@ -510,11 +510,6 @@ ant_value_t jit_helper_throw_error(
   const char *str, uint32_t len, int err_type
 );
 
-ant_value_t jit_helper_get_elem2(
-  sv_vm_t *vm, ant_t *js,
-  ant_value_t obj, ant_value_t key
-);
-
 ant_value_t jit_helper_set_proto(
   sv_vm_t *vm, ant_t *js,
   ant_value_t obj, ant_value_t proto
@@ -538,12 +533,6 @@ ant_value_t jit_helper_str_append_local_snapshot(
   ant_value_t *args, int argc,
   ant_value_t *locals, uint16_t slot_idx,
   ant_value_t lhs, ant_value_t rhs
-);
-
-ant_value_t jit_helper_str_flush_local(
-  sv_vm_t *vm, ant_t *js, sv_func_t *func,
-  ant_value_t *args, int argc,
-  ant_value_t *locals, uint16_t slot_idx
 );
 
 ant_value_t jit_helper_forward_arguments(

@@ -1582,11 +1582,6 @@ static inline ant_value_t *sv_frame_slot_ptr(sv_frame_t *frame, uint16_t slot_id
   return &frame->lp[slot_idx - param_count];
 }
 
-ant_value_t sv_string_builder_flush_slot(
-  sv_vm_t *vm, ant_t *js, 
-  sv_frame_t *frame, uint16_t slot_idx
-);
-
 ant_value_t sv_string_builder_append_at(
   sv_vm_t *vm, ant_t *js, ant_value_t *slot, sv_frame_t *frame,
   sv_func_t *func, uint16_t slot_idx, ant_value_t rhs

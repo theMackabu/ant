@@ -981,19 +981,6 @@ static ant_value_t sv_slot_generic_add_store(
   return Ant_Value_Undefined;
 }
 
-ant_value_t sv_string_builder_flush_slot(
-  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint16_t slot_idx
-) {
-  ant_value_t *slot = sv_frame_slot_ptr(frame, slot_idx);
-  if (!slot || vtype(*slot) != kTypeString || !str_is_heap_builder(*slot)) return Ant_Value_Undefined;
-
-  ant_value_t out = str_materialize(js, *slot);
-  if (is_err(out)) return out;
-  *slot = out;
-  sv_record_slot_feedback(frame, frame->func, slot_idx, out);
-  return out;
-}
-
 static bool sv_try_short_string_append(
   ant_t *js, ant_value_t lhs, ant_value_t rhs, ant_value_t *result
 ) {

@@ -943,19 +943,6 @@ void jit_emit_properties(jit_compile_t *c) {
       break;
     }
 
-    case OP_GET_ELEM2: {
-      vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
-      vstack_ensure_boxed(&c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);
-      MIR_reg_t key = vstack_pop(&c->vs);
-      MIR_reg_t obj = vstack_top(&c->vs);
-      MIR_reg_t dst = vstack_push(&c->vs);
-      mir_call_helper2(c->ctx, c->jit_func, dst,
-                       c->helper2_proto, c->imp_get_elem2,
-                       c->r_vm, c->r_js, obj, key);
-      jit_emit_throw_if_error(c, dst);
-      break;
-    }
-
     case OP_PUT_ELEM: {
       uint8_t feedback = sv_func_type_feedback(c->func)
                              ? sv_func_type_feedback(c->func)[c->bc_off]

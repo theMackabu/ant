@@ -94,7 +94,6 @@ OP_DEF(  GET_FIELD,         7,   1,   1, atom)      /* obj -> val (atom + ic_idx
 OP_DEF(  GET_FIELD2,        7,   1,   2, atom)      /* obj -> obj val (atom + ic_idx:u16) */
 OP_DEF(  PUT_FIELD,         7,   2,   0, atom)      /* obj val -> (atom + ic_idx:u16) */
 OP_DEF(  GET_ELEM,          1,   2,   1, none)      /* obj key -> val */
-OP_DEF(  GET_ELEM2,         1,   2,   2, none)      /* obj key -> obj val */
 OP_DEF(  PUT_ELEM,          1,   3,   0, none)      /* obj key val -> */
 OP_DEF(  DEFINE_FIELD,      5,   2,   1, atom)      /* obj val -> obj (own prop) */
 OP_DEF(  DEFINE_SLOT,       7,   2,   1, atom)      /* obj val -> obj (atom + slot:u16) */
@@ -109,7 +108,6 @@ OP_DEF(  PUT_PRIVATE,      1,   3,   1, none)       /* obj value private_name ->
 OP_DEF(  DEF_PRIVATE,      2,   3,   1, u8)         /* obj private_name value -> obj */
 OP_DEF(  HAS_PRIVATE,      1,   2,   1, none)       /* obj private_name -> bool */
 
-OP_DEF(  GET_SUPER,         1,   1,   1, none)      /* obj -> super */
 OP_DEF(  GET_SUPER_VAL,     1,   3,   1, none)      /* this obj prop -> value */
 OP_DEF(  PUT_SUPER_VAL,     1,   4,   1, none)      /* this obj prop value -> value */
 
@@ -134,7 +132,6 @@ OP_DEF(  DEC_LOCAL,         2,   0,   0, loc8)      /* locals[i]-- in-place */
 OP_DEF(  ADD_LOCAL,         2,   1,   0, loc8)      /* locals[i] += TOS */
 OP_DEF(  STR_APPEND_LOCAL,  3,   1,   0, loc)       /* logical slot += TOS via builder */
 OP_DEF(  STR_ALC_SNAPSHOT,  3,   2,   0, loc)       /* logical slot = snapshot + TOS */
-OP_DEF(  STR_FLUSH_LOCAL,   3,   0,   0, loc)       /* materialize logical slot builder */
 
 OP_DEF(  EQ,                1,   2,   1, none)      /* == (abstract) */
 OP_DEF(  NE,                1,   2,   1, none)      /* != */
@@ -147,8 +144,6 @@ OP_DEF(  GE,                1,   2,   1, none)
 OP_DEF(  INSTANCEOF,        3,   2,   1, u16)       /* l r -> bool (ic_idx:u16) */
 OP_DEF(  IN,                1,   2,   1, none)
 OP_DEF(  IN_FIELD,          7,   1,   1, atom)      /* obj -> bool (atom in obj; atom + ic_idx:u16) */
-OP_DEF(  IS_NULLISH,        1,   1,   1, none)      /* TOS is null|undefined? */
-OP_DEF(  IS_UNDEF_OR_NULL,  1,   1,   1, none)      /* same, for ?? chains */
 
 OP_DEF(  BAND,              1,   2,   1, none)      /* & (matches TOK_AND) */
 OP_DEF(  BOR,               1,   2,   1, none)      /* | (matches TOK_OR) */
@@ -205,7 +200,6 @@ OP_DEF(  EVAL_INTACT,       1,   0,   1, none)      /* push true while global ev
 OP_DEF(  RETURN,            1,   1,   0, none)
 OP_DEF(  RETURN_UNDEF,      1,   0,   0, none)
 OP_DEF(  CHECK_CTOR,        1,   0,   0, none)      /* verify called with new */
-OP_DEF(  CHECK_CTOR_RET,    1,   1,   2, none)      /* validate constructor return */
 OP_DEF(  HALT,              1,   0,   0, none)      /* stop execution */
 
 OP_DEF(  THROW,             1,   1,   0, none)
@@ -218,7 +212,6 @@ OP_DEF(  FINALLY,           5,   0,   0, label)     /* enter finally block */
 OP_DEF(  FINALLY_RET,       1,   0,   0, none)      /* return from finally (consumes the unwinder's completion, if any) */
 OP_DEF(  FINALLY_DISCARD,   1,   0,   0, none)      /* pop finally handler, drop completion */
 OP_DEF(  UNWIND_JMP,        7,   0,   0, label)     /* jump running n finally blocks */
-OP_DEF(  NIP_CATCH,         1,   2,   1, none)      /* catch ... a -> a */
 
 OP_DEF(  USING_PUSH,             1, 2, 1, none)   /* entries resource -> resource */
 OP_DEF(  USING_PUSH_ASYNC,       1, 2, 1, none)   /* entries resource -> resource */
@@ -234,11 +227,9 @@ OP_DEF(  FOR_IN,            1,   1,   1, none)      /* obj -> iterator */
 OP_DEF(  FOR_OF,            1,   1,   3, none)      /* iterable -> iter next catch_off */
 OP_DEF(  FOR_AWAIT_OF,      1,   1,   3, none)      /* async iterable -> iter next catch_off */
 OP_DEF(  ITER_NEXT,         2,   3,   5, u8)        /* advance iterator (u8 hint) */
-OP_DEF(  ITER_GET_VALUE,    1,   2,   3, none)      /* catch_off obj -> catch_off value done */
 OP_DEF(  ITER_CLOSE,        2,   3,   0, u8)        /* close iterator; u8 suppresses close errors */
 OP_DEF(  ITER_CLOSE_ASYNC,  1,   3,   1, none)      /* close async iterator -> awaitable */
 OP_DEF(  ITER_CLOSE_CHECK,  1,   1,   0, none)      /* validate awaited async close result */
-OP_DEF(  ITER_CALL,         2,   4,   5, u8)        /* call iterator method */
 OP_DEF(  AWAIT_ITER_NEXT,   1,   3,   5, none)      /* async iterator next -> iter next tag value done */
 OP_DEF(  DESTRUCTURE_INIT,  1,   1,   3, none)      /* iterable -> iter next tag */
 OP_DEF(  DESTRUCTURE_NEXT,  1,   3,   4, none)      /* iter next tag -> iter next tag value|undef */
@@ -259,7 +250,6 @@ OP_DEF(  YIELD_STAR_ASYNC_CALL,   3,   1,   1, loc) /* received -> next/throw/re
 OP_DEF(  YIELD_STAR_ASYNC_RESULT, 3,   1,   1, loc) /* awaited result -> final value (skips YIELD_STAR_NEXT) | suspend */
 
 OP_DEF(  SPREAD,            1,   1,   0, none)      /* arr iterable -> arr */
-OP_DEF(  DEFINE_METHOD,     6,   2,   1, atom_u8)   /* obj func -> obj (flags: get/set/static) */
 OP_DEF(  DEFINE_METHOD_COMP,2,   3,   1, u8)        /* obj key func -> obj (computed name) */
 OP_DEF(  SET_NAME,          5,   1,   1, atom)      /* set .name on function */
 OP_DEF(  SET_NAME_COMP,     1,   2,   2, none)      /* set .name from computed key */
@@ -269,12 +259,10 @@ OP_DEF(  APPEND,            1,   2,   1, none)      /* arr val -> arr */
 OP_DEF(  COPY_DATA_PROPS,   3,   2,   2, npop)      /* dst src excluded... -> dst src (CopyDataProperties) */
 
 OP_DEF(  DEFINE_CLASS,      14,  2,   2, atom_u8)   /* parent ctor -> ctor proto */
-OP_DEF(  DEFINE_CLASS_COMP, 14,  3,   3, atom_u8)   /* computed name variant */
 
 OP_DEF(  TO_OBJECT,         1,   1,   1, none)      /* coerce to object wrapper */
 OP_DEF(  TO_PROPKEY,        1,   1,   1, none)      /* coerce to string/symbol */
 OP_DEF(  IS_UNDEF,          1,   1,   1, none)      /* TOS === undefined */
-OP_DEF(  IS_NULL,           1,   1,   1, none)      /* TOS === null */
 
 OP_DEF(  IMPORT,            1,   2,   1, none)      /* dynamic import(specifier) */
 OP_DEF(  IMPORT_SYNC,       1,   1,   1, none)      /* sync module load for static import */
@@ -291,7 +279,6 @@ OP_DEF(  WITH_TRY_DEL,      9,   1,   1, atom_label)
 
 OP_DEF(  SPECIAL_OBJ,       2,   0,   1, u8)        /* arguments, new.target, super, module import, arguments.length */
 OP_DEF(  EMPTY,             1,   0,   1, none)      /* push T_EMPTY (array hole) */
-OP_DEF(  DEBUGGER,          1,   0,   0, none)      /* debugger statement (breakpoint hook) */
 OP_DEF(  NOP,               1,   0,   0, none)      /* no operation */
 OP_DEF(  PUT_CONST,         5,   1,   0, const)     /* constant pool[idx] = TOS */
 OP_DEF(  TO_STRING,         1,   1,   1, none)      /* val -> toString(val) */
@@ -388,7 +375,6 @@ OP_FLAG(GET_FIELD             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(GET_FIELD2            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_IC_EPOCH | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY | SV_OPF_JIT_INLINE_AFTER_EFFECT)
 OP_FLAG(PUT_FIELD             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_IC_EPOCH | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY | SV_OPF_JIT_INLINE_SIDE_EFFECT)
 OP_FLAG(GET_ELEM              , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_BAILOUT | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY | SV_OPF_JIT_INLINE_GUARD_RESTART)
-OP_FLAG(GET_ELEM2             , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(PUT_ELEM              , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY)
 OP_FLAG(DEFINE_FIELD          , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(DEFINE_SLOT           , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
@@ -423,7 +409,6 @@ OP_FLAG(DEC_LOCAL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT |
 OP_FLAG(ADD_LOCAL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT | SV_OPF_SLOT_READ | SV_OPF_SLOT_WRITE | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY)
 OP_FLAG(STR_APPEND_LOCAL      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT | SV_OPF_BUILDER_TARGET | SV_OPF_SLOT_READ | SV_OPF_SLOT_WRITE | SV_OPF_SLOT_FRAME | SV_OPF_OPT_NATIVE)
 OP_FLAG(STR_ALC_SNAPSHOT      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT | SV_OPF_BUILDER_TARGET | SV_OPF_SLOT_READ | SV_OPF_SLOT_WRITE | SV_OPF_SLOT_FRAME | SV_OPF_OPT_NATIVE)
-OP_FLAG(STR_FLUSH_LOCAL       , SV_OPF_JIT_NEEDS_BAILOUT | SV_OPF_BUILDER_TARGET | SV_OPF_SLOT_READ | SV_OPF_SLOT_WRITE | SV_OPF_SLOT_FRAME)
 
 OP_FLAG(EQ                    , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY)
 OP_FLAG(NE                    , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY)
@@ -436,7 +421,6 @@ OP_FLAG(GE                    , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(INSTANCEOF            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH | SV_OPF_OPT_NATIVE)
 OP_FLAG(IN                    , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(IN_FIELD              , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH | SV_OPF_OPT_NATIVE)
-OP_FLAG(IS_UNDEF_OR_NULL      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY | SV_OPF_JIT_INLINE_AFTER_EFFECT)
 
 OP_FLAG(BAND                  , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_BAILOUT | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY | SV_OPF_JIT_INLINE_GUARD_RESTART)
 OP_FLAG(BOR                   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_BAILOUT | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY | SV_OPF_JIT_INLINE_GUARD_RESTART)
@@ -503,7 +487,6 @@ OP_FLAG(FINALLY               , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_BRANCH32 | SV_O
 OP_FLAG(UNWIND_JMP            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_BRANCH32 | SV_OPF_TERMINAL | SV_OPF_OPT_NATIVE | SV_OPF_OPT_ROOT_ONLY)
 OP_FLAG(FINALLY_RET           , SV_OPF_JIT_ELIGIBLE | SV_OPF_TERMINAL | SV_OPF_OPT_HANDLER | SV_OPF_OPT_NATIVE | SV_OPF_OPT_ROOT_ONLY)
 OP_FLAG(FINALLY_DISCARD       , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NO_GENERIC | SV_OPF_OPT_HANDLER | SV_OPF_OPT_NATIVE | SV_OPF_OPT_ROOT_ONLY)
-OP_FLAG(NIP_CATCH             , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NO_GENERIC)
 
 OP_FLAG(FOR_IN                , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(FOR_OF                , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_ITER_ROOTS | SV_OPF_OPT_NATIVE)
@@ -523,7 +506,6 @@ OP_FLAG(SPREAD                , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(APPEND                , SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(TO_PROPKEY            , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(IS_UNDEF              , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY | SV_OPF_JIT_INLINE_AFTER_EFFECT)
-OP_FLAG(IS_NULL               , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY | SV_OPF_JIT_INLINE_AFTER_EFFECT)
 
 OP_FLAG(SPECIAL_OBJ           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(NOP                   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_MARKER | SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY | SV_OPF_JIT_INLINE_AFTER_EFFECT)
@@ -536,7 +518,6 @@ OP_FLAG(TO_STRING_DEFER_NUMBER, SV_OPF_JIT_ELIGIBLE | SV_OPF_OPT_NATIVE)
 OP_FLAG(ROT3R                 , SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY)
 OP_FLAG(GET_LOCAL_CHK         , SV_OPF_SLOT_READ)
 OP_FLAG(PUT_LOCAL_CHK         , SV_OPF_SLOT_READ | SV_OPF_SLOT_WRITE)
-OP_FLAG(IS_NULLISH            , SV_OPF_OPT_NATIVE | SV_OPF_OPT_INLINE_IN_TRY)
 OP_FLAG(RE_LITERAL_EXEC       , SV_OPF_JIT_QUIET_INELIGIBLE)
 OP_FLAG(STR_RE_LITERAL_REPLACE, SV_OPF_JIT_QUIET_INELIGIBLE)
 OP_FLAG(SUPER_APPLY           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_OPT_NO_GENERIC | SV_OPF_OPT_NATIVE)

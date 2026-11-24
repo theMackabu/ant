@@ -514,7 +514,7 @@ static bool opt_scan_memory(opt_builder_t *b) {
         }
         break;
       }
-      case OP_STR_APPEND_LOCAL: case OP_STR_ALC_SNAPSHOT: case OP_STR_FLUSH_LOCAL: {
+      case OP_STR_APPEND_LOCAL: case OP_STR_ALC_SNAPSHOT: {
         uint32_t slot = sv_get_u16(ip + 1);
         if (slot >= width) return opt_fail(b, "builder-slot");
         opt_bitset_insert(&b->builders, slot);
@@ -5604,10 +5604,10 @@ static opt_flow_t opt_build_relational(opt_builder_t *b, sv_op_t op) {
   return OPT_FLOW_CONTINUE;
 }
 
-static opt_flow_t opt_build_is_constant(opt_builder_t *b, sv_op_t op) {
+static opt_flow_t opt_build_is_undefined(opt_builder_t *b) {
   ir_op_t equals = ir_op(IR_OP_TAGGED_EQUALS);
   equals.equal = true;
-  ir_node_id_t inputs[2] = {opt_tagged(b, opt_peek(b, 0)), opt_constant(b, op == OP_IS_UNDEF ? IR_VALUE_UNDEFINED : IR_VALUE_NULL)};
+  ir_node_id_t inputs[2] = {opt_tagged(b, opt_peek(b, 0)), opt_constant(b, IR_VALUE_UNDEFINED)};
   opt_poke(b, 0, opt_box_bool(b, opt_emit(b, equals, inputs, 2, OPT_REPR_BOOL)));
   return OPT_FLOW_CONTINUE;
 }
@@ -6955,11 +6955,8 @@ static opt_flow_t opt_build_instruction(opt_builder_t *b) {
       return opt_build_equality(b, op == OP_SEQ);
     case OP_EQ: case OP_NE:
       return opt_build_loose_equality(b, op == OP_EQ);
-    case OP_IS_UNDEF: case OP_IS_NULL:
-      return opt_build_is_constant(b, op);
-    case OP_IS_NULLISH: case OP_IS_UNDEF_OR_NULL:
-      opt_poke(b, 0, opt_box_bool(b, opt_is_nullish(b, opt_peek(b, 0), true)));
-      return OPT_FLOW_CONTINUE;
+    case OP_IS_UNDEF:
+      return opt_build_is_undefined(b);
     case OP_IS_PRIMITIVE_TYPE:
       return opt_build_typeof_is(b, ip);
     case OP_TYPEOF:

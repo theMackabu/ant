@@ -37,7 +37,7 @@ static bool jit_integer_consumer(jit_compile_t *c, uint8_t *ip, bool nonneg) {
         case OP_BAND: case OP_BOR: case OP_BXOR:
         case OP_SHL: case OP_SHR: case OP_USHR:
           return true;
-        case OP_GET_ELEM: case OP_GET_ELEM2:
+        case OP_GET_ELEM:
           return above == 0;
         case OP_PUT_ELEM: case OP_INSERT3:
           return above == 1;

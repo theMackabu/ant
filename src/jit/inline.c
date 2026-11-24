@@ -214,8 +214,6 @@ static bool jit_analyze_empty_object_reuse(sv_func_t *f) {
       case OP_GET_LENGTH:
       case OP_NOT:
       case OP_IS_UNDEF:
-      case OP_IS_NULL:
-      case OP_IS_UNDEF_OR_NULL:
       case OP_IS_PRIMITIVE_TYPE:
         stack[sp - 1] = 0;
         break;
@@ -437,7 +435,7 @@ static bool jit_inline_reader_leaf(sv_func_t *func) {
       case OP_UNDEF: case OP_NULL: case OP_TRUE: case OP_FALSE:
       case OP_DUP: case OP_POP: case OP_NIP:
       case OP_SEQ: case OP_SNE:
-      case OP_IS_UNDEF: case OP_IS_NULL: case OP_IS_UNDEF_OR_NULL:
+      case OP_IS_UNDEF:
       case OP_JMP: case OP_JMP_TRUE: case OP_JMP_FALSE:
       case OP_JMP_TRUE8: case OP_JMP_FALSE8:
       case OP_JMP_TRUE_PEEK: case OP_JMP_FALSE_PEEK: case OP_JMP_NOT_NULLISH:
@@ -1389,30 +1387,7 @@ void jit_emit_inline_body(
         break;
       }
 
-      case OP_IS_UNDEF:
-      case OP_IS_NULL: {
-        INL_FLUSH_SLOT(isp - 1);
-        MIR_reg_t rs = inl_vs[isp - 1];
-        uint64_t cmp_val = (op == OP_IS_UNDEF)
-                               ? mkval(kTypeUndefined, 0)
-                               : mkval(kTypeNull, 0);
-        MIR_label_t is_true = MIR_new_label(ctx);
-        MIR_label_t is_done = MIR_new_label(ctx);
-        MIR_append_insn(ctx, jit_func,
-                        MIR_new_insn(ctx, MIR_BEQ,
-                                     MIR_new_label_op(ctx, is_true),
-                                     MIR_new_reg_op(ctx, rs),
-                                     MIR_new_uint_op(ctx, cmp_val)));
-        mir_load_imm(ctx, jit_func, rs, Ant_Value_False);
-        MIR_append_insn(ctx, jit_func,
-                        MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, is_done)));
-        MIR_append_insn(ctx, jit_func, is_true);
-        mir_load_imm(ctx, jit_func, rs, Ant_Value_True);
-        MIR_append_insn(ctx, jit_func, is_done);
-        break;
-      }
-
-      case OP_IS_UNDEF_OR_NULL: {
+      case OP_IS_UNDEF: {
         INL_FLUSH_SLOT(isp - 1);
         MIR_reg_t rs = inl_vs[isp - 1];
         MIR_label_t is_true = MIR_new_label(ctx);
@@ -1422,11 +1397,6 @@ void jit_emit_inline_body(
                                      MIR_new_label_op(ctx, is_true),
                                      MIR_new_reg_op(ctx, rs),
                                      MIR_new_uint_op(ctx, mkval(kTypeUndefined, 0))));
-        MIR_append_insn(ctx, jit_func,
-                        MIR_new_insn(ctx, MIR_BEQ,
-                                     MIR_new_label_op(ctx, is_true),
-                                     MIR_new_reg_op(ctx, rs),
-                                     MIR_new_uint_op(ctx, mkval(kTypeNull, 0))));
         mir_load_imm(ctx, jit_func, rs, Ant_Value_False);
         MIR_append_insn(ctx, jit_func,
                         MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, is_done)));

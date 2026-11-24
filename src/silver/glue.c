@@ -192,28 +192,6 @@ ant_value_t jit_helper_str_append_local_snapshot(
   return sv_string_builder_append_snapshot_slot(vm, js, &frame, func, slot_idx, lhs, rhs);
 }
 
-ant_value_t jit_helper_str_flush_local(
-  sv_vm_t *vm, ant_t *js, sv_func_t *func,
-  ant_value_t *args, int argc,
-  ant_value_t *locals, uint16_t slot_idx
-) {
-  if (!func)
-    return SV_JIT_BAILOUT;
-
-  sv_frame_t frame = {
-    .func = func,
-    .bp = args,
-    .lp = locals,
-    .argc = argc,
-    .arguments_obj = Ant_Value_Undefined,
-    .eval_env = Ant_Value_Undefined,
-  };
-
-  ant_value_t flush = sv_string_builder_flush_slot(vm, js, &frame, slot_idx);
-  if (is_err(flush)) return flush;
-  return Ant_Value_Undefined;
-}
-
 static inline bool jit_rel_plain(ant_value_t v) {
   uint8_t t = vtype(v);
   return t == kTypeNumber || t == kTypeString || t == kTypeBool || t == kTypeUndefined || t == kTypeNull;
@@ -1886,16 +1864,6 @@ ant_value_t jit_helper_throw_error(
   sv_vm_t *vm, ant_t *js, const char *str, uint32_t len, int err_type
 ) { 
   return js_mkerr_typed(js, (js_err_type_t)err_type, "%.*s", (int)len, str); 
-}
-
-ant_value_t jit_helper_get_elem2(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key) {
-  uint32_t idx;
-  if (vtype(obj) == kTypeArray && sv_number_key_index(key, &idx)) return js_arr_get(js, obj, idx);
-  
-  ant_value_t str_elem = Ant_Value_Undefined;
-  if (sv_try_index_get(js, obj, key, &str_elem)) return str_elem;
-  
-  return sv_getprop_by_key(js, obj, key);
 }
 
 ant_value_t jit_helper_get_elem_inline(ant_t *js, ant_value_t obj, ant_value_t key) {
