@@ -292,6 +292,7 @@ static const stream_field_t stream_fields[] = {
   STREAM_FIELD(WRITABLE,       "writableFinished",      BOOL,   writable.finished,           true),
   STREAM_FIELD(WRITABLE,       "writableHighWaterMark", NUM,    writable.high_water_mark,    true),
   STREAM_FIELD(WRITABLE,       "writableLength",        NUM,    writable.length,             true),
+  STREAM_FIELD(WRITABLE,       "writableObjectMode",    BOOL,   writable.object_mode,        true),
   STREAM_FIELD(WRITABLE,       "writableNeedDrain",     BOOL,   writable.need_drain,         true),
   STREAM_FIELD(WRITABLE,       "writableCorked",        NUM,    writable.corked,             true),
   STREAM_FIELD(READABLE_STATE, "objectMode",            BOOL,   readable.object_mode,        false),
