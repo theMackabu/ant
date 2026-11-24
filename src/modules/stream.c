@@ -116,6 +116,8 @@ typedef struct {
   bool gen_final: 1;
   bool gen_ended: 1;
   bool gen_aborted: 1;
+  bool finished_readable: 1;
+  bool finished_writable: 1;
 
   union {
     ant_value_t values[STREAM_OP_VALUES];
@@ -3156,7 +3158,7 @@ static void stream_finished_cleanup(ant_t *js, stream_finished_op_t *finished) {
 
   stream_remove_listener(js, stream_obj, "end", finished->on_finish);
   stream_remove_listener(js, stream_obj, "finish", finished->on_finish);
-  stream_remove_listener(js, stream_obj, "close", finished->on_finish);
+  stream_remove_listener(js, stream_obj, "close", finished->on_close);
   stream_remove_listener(js, stream_obj, "error", finished->on_error);
 }
 
@@ -3172,15 +3174,34 @@ static ant_value_t stream_finished_fire(ant_t *js, stream_op_t *op, ant_value_t 
   return Ant_Value_Undefined;
 }
 
+static bool stream_finished_pending(stream_op_t *op) {
+  stream_private_state_t *priv = stream_private_state(op->finished.stream);
+  if (!priv) return false;
+
+  if (op->finished_readable && priv->has_readable && !priv->readable.end_emitted) return true;
+  return op->finished_writable && priv->has_writable && !priv->writable.finished;
+}
+
 static ant_value_t stream_finished_on_finish(ant_params_t) {
-  return stream_finished_fire(js, stream_op_current(js, call_func), Ant_Value_Undefined);
+  stream_op_t *op = stream_op_current(js, call_func);
+  if (stream_finished_pending(op)) return Ant_Value_Undefined;
+  return stream_finished_fire(js, op, Ant_Value_Undefined);
+}
+
+static ant_value_t stream_finished_on_close(ant_params_t) {
+  stream_op_t *op = stream_op_current(js, call_func);
+  if (op->called || !stream_finished_pending(op)) return stream_finished_fire(js, op, Ant_Value_Undefined);
+  return stream_finished_fire(js, op, stream_coded_error(js, "ERR_STREAM_PREMATURE_CLOSE", "Premature close"));
 }
 
 static ant_value_t stream_finished_on_error(ant_params_t) {
   return stream_finished_fire(js, stream_op_current(js, call_func), nargs > 0 ? args[0] : Ant_Value_Undefined);
 }
 
-static ant_value_t stream_finished_register(ant_t *js, ant_value_t stream_obj, ant_value_t callback) {
+static ant_value_t stream_finished_register(
+  ant_t *js, ant_value_t stream_obj, ant_value_t callback,
+  bool readable, bool writable
+) {
   if (!is_callable(callback)) callback = Ant_Function_Create(js_cfunc_noop);
 
   ant_value_t state;
@@ -3188,28 +3209,40 @@ static ant_value_t stream_finished_register(ant_t *js, ant_value_t stream_obj, a
   if (!op) return Ant_Error_CreateOutOfMemory(js);
 
   ant_value_t on_finish = js_heavy_mkfun(js, stream_finished_on_finish, state);
+  ant_value_t on_close = js_heavy_mkfun(js, stream_finished_on_close, state);
   ant_value_t on_error = js_heavy_mkfun(js, stream_finished_on_error, state);
 
+  op->finished_readable = readable;
+  op->finished_writable = writable;
   op->finished.stream = stream_obj;
   op->finished.callback = callback;
   op->finished.on_finish = on_finish;
+  op->finished.on_close = on_close;
   op->finished.on_error = on_error;
   stream_op_barrier(js, op);
 
-  static const char *const events[] = { "end", "finish", "close" };
-  for (size_t i = 0; i < countof(events); i++) {
-    ant_value_t added = stream_add_listener(js, stream_obj, events[i], on_finish, false);
-  if (is_err(added)) return added;
-  }
+  const char *const events[] = { "end", "finish", "close", "error" };
+  const ant_value_t listeners[] = { on_finish, on_finish, on_close, on_error };
   
-  ant_value_t added = stream_add_listener(js, stream_obj, "error", on_error, false);
-  return is_err(added) ? added : stream_obj;
+  for (size_t i = 0; i < countof(events); i++) {
+    ant_value_t added = stream_add_listener(js, stream_obj, events[i], listeners[i], false);
+    if (is_err(added)) return added;
+  }
+
+  return stream_obj;
 }
 
 static ant_value_t js_stream_finished(ant_params_t) {
-  ant_value_t callback = nargs > 1 ? args[1] : Ant_Value_Undefined;
   if (nargs < 1 || !is_object_type(args[0])) return js_mkerr(js, "finished requires a stream");
-  return stream_finished_register(js, args[0], callback);
+
+  ant_value_t options = nargs > 2 && is_object_type(args[1]) && !is_callable(args[1]) ? args[1] : Ant_Value_Undefined;
+  ant_value_t callback = is_undefined(options) ? (nargs > 1 ? args[1] : Ant_Value_Undefined) : args[2];
+
+  return stream_finished_register(
+    js, args[0], callback,
+    stream_get_option(js, options, "readable") != Ant_Value_False,
+    stream_get_option(js, options, "writable") != Ant_Value_False
+  );
 }
 
 static ant_value_t stream_pipeline_done(ant_params_t) {
@@ -3262,8 +3295,7 @@ static ant_value_t js_stream_pipeline(ant_params_t) {
   }
 
   for (int i = 0; i < stream_count - 1; i++) {
-    ant_value_t finished_args[2] = { args[i], js_heavy_mkfun(js, stream_pipeline_error, done) };
-    ant_value_t registered = js_stream_finished(js, finished_args, 2, Ant_Value_Undefined, call_this, call_func);
+    ant_value_t registered = stream_finished_register(js, args[i], js_heavy_mkfun(js, stream_pipeline_error, done), true, i > 0);
     if (is_err(registered)) return registered;
     
     ant_value_t pipe_args[2] = { args[i + 1], Ant_Value_Undefined };
@@ -3271,9 +3303,8 @@ static ant_value_t js_stream_pipeline(ant_params_t) {
     if (is_err(piped)) return piped;
   }
 
-  ant_value_t finished_args[2] = { args[stream_count - 1], done };
-    ant_value_t registered = js_stream_finished(js, finished_args, 2, Ant_Value_Undefined, call_this, call_func);
-    if (is_err(registered)) return registered;
+  ant_value_t registered = stream_finished_register(js, args[stream_count - 1], done, false, true);
+  if (is_err(registered)) return registered;
 
   return args[stream_count - 1];
 }
@@ -3293,7 +3324,7 @@ static ant_value_t js_stream_promises_finished(ant_params_t) {
     return promise;
   }
 
-  ant_value_t result = stream_finished_register(js, args[0], js_heavy_mkfun(js, stream_promise_callback, promise));
+  ant_value_t result = stream_finished_register(js, args[0], js_heavy_mkfun(js, stream_promise_callback, promise), true, true);
   if (is_err(result)) js_reject_promise(js, promise, result);
 
   return promise;
@@ -3346,7 +3377,7 @@ static ant_value_t js_stream_async_dispose(ant_params_t) {
   stream_op_barrier(js, op);
   
   ant_value_t done = js_heavy_mkfun(js, stream_async_dispose_done, state);
-  ant_value_t registered = stream_finished_register(js, stream_obj, done);
+  ant_value_t registered = stream_finished_register(js, stream_obj, done, true, true);
   
   if (is_err(registered)) {
     js_reject_promise(js, promise, registered);
@@ -3642,13 +3673,25 @@ static ant_value_t stream_readable_from_read(ant_params_t) {
   return stream_readable_from_read_state(js, js_func_data(call_func));
 }
 
+static ant_value_t stream_settle_callback(
+  ant_t *js, ant_value_t result,
+  ant_value_t callback, ant_value_t error, bool fixed
+);
+
 static ant_value_t stream_readable_from_destroy(ant_params_t) {
   stream_op_t *op = stream_op_current(js, call_func);
   ant_value_t error = nargs > 0 ? args[0] : Ant_Value_Null;
   ant_value_t callback = nargs > 1 ? args[1] : Ant_Value_Undefined;
   ant_value_t iterator = op->from.iterator;
+  ant_value_t reader = op->from.reader;
 
-  stream_release_reader(js, op);
+  if (is_object_type(reader)) {
+    bool has_error = !is_null(error) && !is_undefined(error);
+    ant_value_t cancelled = stream_call_prop(js, reader, "cancel", &error, has_error ? 1 : 0);
+    stream_release_reader(js, op);
+    return stream_settle_callback(js, cancelled, callback, error, true);
+  }
+
   if (is_object_type(iterator) && stream_op_extra(op, from)->mode != STREAM_FROM_READER) {
     ant_value_t returned = stream_call_prop(js, iterator, "return", NULL, 0);
     if (is_err(returned)) Ant_Error_ConsumeMarker(js, returned);
@@ -3704,10 +3747,11 @@ static ant_value_t stream_readable_from_source(ant_t *js, ant_value_t source, an
     (is_object_type(source) && js_instance_of_proto(js, source, js->builtins.buffer_proto));
 
   if (!is_value) {
-    ant_value_t async_fn = is_object_type(source) ? js_get_sym(js, source, js->sym.asyncIterator_sym) : Ant_Value_Undefined;
+    bool iterable = is_object_type(source) && !rs_is_stream(source);
+    ant_value_t async_fn = iterable ? js_get_sym(js, source, js->sym.asyncIterator_sym) : Ant_Value_Undefined;
     if (is_err(async_fn)) { result = async_fn; goto done; }
 
-    ant_value_t sync_fn = !is_callable(async_fn) && is_object_type(source)
+    ant_value_t sync_fn = !is_callable(async_fn) && iterable
       ? js_get_sym(js, source, js->sym.iterator_sym)
       : Ant_Value_Undefined;
     if (is_err(sync_fn)) { result = sync_fn; goto done; }
@@ -4088,6 +4132,21 @@ static ant_value_t js_writable_has_instance(ant_params_t) {
 static ant_value_t stream_construct_duplex_like(ant_t *js, ant_value_t base_proto, ant_value_t options, ant_value_t new_target) {
   ant_value_t obj = stream_construct(js, base_proto, options, stream_init_duplex, new_target);
   js_set(js, obj, "allowHalfOpen", Ant_Value_FromBool(stream_get_option(js, options, "allowHalfOpen") != Ant_Value_False));
+
+  stream_private_state_t *priv = stream_private_state(obj);
+  if (!priv) return obj;
+
+  if (stream_get_option(js, options, "readable") == Ant_Value_False) {
+    priv->is_readable = false;
+    priv->readable.ended = true;
+    priv->readable.end_emitted = true;
+  }
+
+  if (stream_get_option(js, options, "writable") == Ant_Value_False) {
+    priv->writable.ended = true;
+    priv->writable.finished = true;
+  }
+
   return obj;
 }
 
@@ -4658,6 +4717,8 @@ static ant_value_t stream_duplexify(ant_t *js, ant_value_t readable, ant_value_t
   ant_value_t options = Ant_Object_Create(js);
   js_set(js, options, "readableObjectMode", Ant_Value_FromBool(has_readable && js_truthy(js, js_get(js, readable, "readableObjectMode"))));
   js_set(js, options, "writableObjectMode", Ant_Value_FromBool(has_writable && js_truthy(js, js_get(js, writable, "writableObjectMode"))));
+  js_set(js, options, "readable", Ant_Value_FromBool(has_readable));
+  js_set(js, options, "writable", Ant_Value_FromBool(has_writable));
 
   ant_value_t duplex = stream_construct_duplex_like(js, js->builtins.duplex_proto, options, Ant_Value_Undefined);
   if (is_err(duplex)) return duplex;
@@ -4671,33 +4732,25 @@ static ant_value_t stream_duplexify(ant_t *js, ant_value_t readable, ant_value_t
   op->duplex.writable = writable;
   stream_op_barrier(js, op);
 
-  stream_private_state_t *priv = stream_private_state(duplex);
   ant_value_t on_finished = js_heavy_mkfun(js, stream_duplex_on_finished, state);
 
   if (has_writable) {
-    ant_value_t registered = stream_finished_register(js, writable, on_finished);
+    ant_value_t registered = stream_finished_register(js, writable, on_finished, true, true);
     if (is_err(registered)) return registered;
 
     js_set(js, duplex, "_write", js_heavy_mkfun(js, stream_duplex_write, state));
     js_set(js, duplex, "_final", js_heavy_mkfun(js, stream_duplex_final, state));
     stream_add_listener(js, writable, "drain", js_heavy_mkfun(js, stream_duplex_on_drain, state), false);
     stream_add_listener(js, writable, "finish", js_heavy_mkfun(js, stream_duplex_on_finish, state), false);
-  } else if (priv) {
-    priv->writable.ended = true;
-    priv->writable.finished = true;
   }
 
   if (has_readable) {
-    ant_value_t registered = stream_finished_register(js, readable, on_finished);
+    ant_value_t registered = stream_finished_register(js, readable, on_finished, true, true);
     if (is_err(registered)) return registered;
 
     js_set(js, duplex, "_read", js_heavy_mkfun(js, stream_duplex_read, state));
     stream_add_listener(js, readable, "readable", js_heavy_mkfun(js, stream_duplex_on_readable, state), false);
     stream_add_listener(js, readable, "end", js_heavy_mkfun(js, stream_duplex_on_end, state), false);
-  } else if (priv) {
-    priv->is_readable = false;
-    priv->readable.ended = true;
-    priv->readable.end_emitted = true;
   }
 
   js_set(js, duplex, "_destroy", js_heavy_mkfun(js, stream_duplex_destroy, state));

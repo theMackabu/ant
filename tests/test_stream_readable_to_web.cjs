@@ -51,6 +51,17 @@ async function main() {
   }
   assert.strictEqual(expected, next);
 
+  let cancelled;
+  const cancellable = new ReadableStream({ cancel(reason) { cancelled = reason; } });
+  const fromWeb = Readable.fromWeb(cancellable);
+  const reason = new Error('stop');
+  fromWeb.on('error', () => {});
+  await new Promise((resolve) => {
+    fromWeb.on('close', resolve);
+    fromWeb.destroy(reason);
+  });
+  assert.strictEqual(cancelled, reason);
+
   console.log('stream-readable-to-web:ok');
 }
 
