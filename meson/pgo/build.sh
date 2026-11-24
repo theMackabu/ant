@@ -6,6 +6,9 @@ PGO_DIR="$ROOT/meson/pgo"
 PROFILE_DIR="$PGO_DIR/profiles"
 BUILD_DIR="$ROOT/build"
 RAW_DIR="$BUILD_DIR/pgo-raw"
+RAW_DEFAULT_DIR="$RAW_DIR/default"
+RAW_JITLESS_DIR="$RAW_DIR/jitless"
+DEFAULT_TIER_WEIGHT="${ANT_PGO_DEFAULT_TIER_WEIGHT:-16}"
 
 case "$(uname -s)" in
   Darwin) PLATFORM=darwin ;;
@@ -53,6 +56,7 @@ for arg in "$@"; do
     --help|-h)
       echo "usage: $0 [--skip-train]"
       echo "  --skip-train     reuse the existing merged .profdata"
+      echo "  ANT_PGO_DEFAULT_TIER_WEIGHT=N   weight of the default-tier profile against the --jitless one (default 16)"
       exit 0
       ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
@@ -75,12 +79,12 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
   meson compile -C "$BUILD_DIR"
 
   echo "==> [2/3] Training (writes profraw to $RAW_DIR)"
-  mkdir -p "$RAW_DIR"
+  mkdir -p "$RAW_DEFAULT_DIR" "$RAW_JITLESS_DIR"
   # no %c (continuous mode) here: it would keep profiles of killed processes
   # valid, but the runtime drops value profiling (indirect-call targets, memop
   # sizes) in continuous mode, which costs the VM dispatch its call promotion.
   # Truncated profiles from killed children are tolerated at merge instead.
-  export LLVM_PROFILE_FILE="$RAW_DIR/profile-%p-%m.profraw"
+  export LLVM_PROFILE_FILE="$RAW_DEFAULT_DIR/profile-%p-%m.profraw"
 
   now_ms() {
     perl -MTime::HiRes=time -e 'printf "%d", time()*1000' 2>/dev/null || echo $(( $(date +%s) * 1000 ))
@@ -90,7 +94,7 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
   }
   check_new_profraws() {
     local f
-    for f in "$RAW_DIR"/*.profraw; do
+    for f in "$RAW_DEFAULT_DIR"/*.profraw "$RAW_JITLESS_DIR"/*.profraw; do
       [ -e "$f" ] || continue
       grep -qxF "$f" "$RAW_DIR/.checked" 2>/dev/null && continue
       echo "$f" >> "$RAW_DIR/.checked"
@@ -108,21 +112,25 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
     check_new_profraws "spec suite"
   fi
 
+  train_benches() {
+    while IFS= read -r -d '' bench; do
+      start=$(now_ms)
+      rc=0
+      timeout 60s "$BUILD_DIR/ant" "$@" "$bench" >/dev/null 2>&1 || rc=$?
+      elapsed=$(fmt_secs $(( $(now_ms) - start )))
+      note=""
+      if [ "$rc" -eq 124 ]; then
+        note="  [TIMEOUT — killed, no profile data from this run]"
+      elif [ "$rc" -ne 0 ]; then
+        note="  [exit $rc]"
+      fi
+      printf '      %-40s %8s%s\n' "$(basename "$bench")" "$elapsed" "$note"
+      check_new_profraws "$(basename "$bench") $*"
+    done < <(find "$ROOT/tests" -maxdepth 2 -type f \( -name 'bench_*.js' -o -name 'bench_*.cjs' -o -name 'bench_*.mjs' \) ! -name 'bench_server.*' -print0)
+  }
+
   echo "    - bench files in tests/"
-  while IFS= read -r -d '' bench; do
-    start=$(now_ms)
-    rc=0
-    timeout 60s "$BUILD_DIR/ant" "$bench" >/dev/null 2>&1 || rc=$?
-    elapsed=$(fmt_secs $(( $(now_ms) - start )))
-    note=""
-    if [ "$rc" -eq 124 ]; then
-      note="  [TIMEOUT — killed, no profile data from this run]"
-    elif [ "$rc" -ne 0 ]; then
-      note="  [exit $rc]"
-    fi
-    printf '      %-40s %8s%s\n' "$(basename "$bench")" "$elapsed" "$note"
-    check_new_profraws "$(basename "$bench")"
-  done < <(find "$ROOT/tests" -maxdepth 2 -type f \( -name 'bench_*.js' -o -name 'bench_*.cjs' -o -name 'bench_*.mjs' \) ! -name 'bench_server.*' -print0)
+  train_benches
 
   if [ -f "$PGO_DIR/train_server.js" ] && command -v curl >/dev/null 2>&1; then
     SERVER_PORT=34117
@@ -168,14 +176,24 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
     fi
   fi
 
-  echo "==> Merging profiles -> $PROFDATA"
+  echo "    - bench files in tests/ (--jitless)"
+  export LLVM_PROFILE_FILE="$RAW_JITLESS_DIR/profile-%p-%m.profraw"
+  train_benches --jitless
+  unset LLVM_PROFILE_FILE
+
+  echo "==> Merging profiles -> $PROFDATA (default tier x$DEFAULT_TIER_WEIGHT, --jitless x1)"
   shopt -s nullglob
-  raw=( "$RAW_DIR"/*.profraw )
-  if [ ${#raw[@]} -eq 0 ]; then
-    echo "error: no .profraw files were produced; training crashed or wrote nothing" >&2
+  raw_default=( "$RAW_DEFAULT_DIR"/*.profraw )
+  raw_jitless=( "$RAW_JITLESS_DIR"/*.profraw )
+  if [ ${#raw_default[@]} -eq 0 ] || [ ${#raw_jitless[@]} -eq 0 ]; then
+    echo "error: a training pass produced no .profraw files; training crashed or wrote nothing" >&2
     exit 1
   fi
-  "$LLVM_PROFDATA" merge --failure-mode=all -output="$PROFDATA" "${raw[@]}"
+  "$LLVM_PROFDATA" merge --failure-mode=all -output="$RAW_DIR/default.profdata" "${raw_default[@]}"
+  "$LLVM_PROFDATA" merge --failure-mode=all -output="$RAW_DIR/jitless.profdata" "${raw_jitless[@]}"
+  "$LLVM_PROFDATA" merge -output="$PROFDATA" \
+    "-weighted-input=$DEFAULT_TIER_WEIGHT,$RAW_DIR/default.profdata" \
+    "-weighted-input=1,$RAW_DIR/jitless.profdata"
   echo "    $(ls -lh "$PROFDATA" | awk '{print $5}') of profile data"
 else
   mkdir -p "$PROFILE_DIR"
