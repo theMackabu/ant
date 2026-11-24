@@ -461,7 +461,7 @@ __attribute__((noinline)) ant_value_t sv_jit_try_osr(
     osr_sp < interp_seg->lo && interp_seg->lo < interp_seg->hi;
   
   if (cover_osr_frame) interp_seg->lo = osr_sp;
-  sv_jit_scrub_stack();
+  gc_scrub_dead_stack();
   
   vm->jit.osr.active = SV_JIT_OSR_LOOP;
   vm->jit.osr.bc_offset = bc_offset;

@@ -10,6 +10,7 @@
 #include "interrupt.h"
 #include "errors.h"
 #include "gc/roots.h"
+#include "gc/objects.h"
 #include "tokens.h"
 #include "silver/glue.h"
 #include "silver/jit.h"
@@ -1304,7 +1305,7 @@ ant_value_t jit_resume_in_interpreter(
   vm->jit.resume.vstack_sp  = (int)vstack_sp;
   vm->jit.resume.finally    = finally;
 
-  sv_jit_scrub_stack();
+  gc_scrub_dead_stack();
   ant_value_t final_this = this_val;
   
   ant_value_t result = sv_execute_closure_entry(

@@ -93,11 +93,6 @@ static inline void sv_jit_prime_osr(sv_func_t *func) {
   func->back_edge_count = func->jit_osr_threshold > 0 ? func->jit_osr_threshold - 1 : 0;
 }
 
-static inline __attribute__((noinline)) void sv_jit_scrub_stack(void) {
-  volatile uint64_t words[512];
-  for (size_t i = 0; i < sizeof(words) / sizeof(*words); i++) words[i] = 0;
-}
-
 static inline uint32_t sv_jit_osr_threshold_for(int code_len) {
   if (code_len <= 0) return SV_JIT_OSR_THRESHOLD;
   

@@ -27,6 +27,7 @@ libant_tests = [
   'gc-jit-entry-saves',
   'gc-code-stack-segments',
   'gc-uv-segments',
+  'gc-stack-residue',
   'gc-array-cards',
   'code-unit-feedback',
   'code-unit-lifetime',

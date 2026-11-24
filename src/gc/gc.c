@@ -378,6 +378,7 @@ void gc_run(ant_t *js) {
   gc_trace_major_end(js, &trace, mark_ns, end_ns);
   
   js->gc_running = false;
+  gc_scrub_dead_stack();
 }
 
 void gc_run_minor(ant_t *js) {
@@ -426,7 +427,9 @@ void gc_run_minor(ant_t *js) {
   
   gc_refresh_alloc_limit(js);
   gc_trace_minor_end(js, start_ns, young_before, survivors);
+  
   js->gc_running = false;
+  gc_scrub_dead_stack();
 }
 
 void gc_pressure(ant_t *js) {

@@ -128,6 +128,7 @@ void gc_objects_run_minor(ant_t *js);
 void gc_pin_existing_objects(ant_t *js);
 void gc_object_free(ant_t *js, ant_object_t *obj);
 void gc_stack_live_ranges(ant_t *js, gc_stack_range_fn fn, void *ctx);
+void gc_scrub_dead_stack(void);
 
 ant_value_t *gc_array_storage_alloc(ant_t *js, uint32_t cap);
 ant_value_t *gc_array_storage_grow(ant_t *js, ant_value_t *data, uint32_t old_cap, uint32_t new_cap);

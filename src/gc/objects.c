@@ -1295,6 +1295,20 @@ static inline void gc_walk_current_stack(ant_t *js, gc_stack_range_fn fn, void *
   fn(js, ctx, lo, hi);
 }
 
+static constexpr size_t GC_DEAD_STACK_SCRUB_WORDS = 2048;
+
+__attribute__((noinline))
+void gc_scrub_dead_stack(void) {
+#if defined(__aarch64__) || defined(__x86_64__)
+  uint64_t words[GC_DEAD_STACK_SCRUB_WORDS];
+  memset(words, 0, sizeof(words));
+  __asm__ volatile("" : : "r"(words) : "memory");
+#else
+  volatile uint64_t words[GC_DEAD_STACK_SCRUB_WORDS];
+  for (size_t i = 0; i < GC_DEAD_STACK_SCRUB_WORDS; i++) words[i] = 0;
+#endif
+}
+
 __attribute__((noinline))
 void gc_stack_live_ranges(ant_t *js, gc_stack_range_fn fn, void *ctx) {
   gc_walk_current_stack(js, fn, ctx);
