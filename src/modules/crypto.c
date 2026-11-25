@@ -4,11 +4,12 @@
 #include <time.h>
 #include <limits.h>
 #include <math.h>
+
 #include <openssl/ec.h>
 #include <openssl/evp.h>
+#include <openssl/crypto.h>
 #include <openssl/hmac.h>
-#include <openssl/mem.h>
-#include <openssl/obj.h>
+#include <openssl/objects.h>
 #include <openssl/rand.h>
 
 #pragma GCC diagnostic push
@@ -18,7 +19,7 @@
 
 #include "ant.h"
 #include "cfunc.h"
-#include "internal.h"
+#include "sync.h"
 #include "list.h"
 #include "ascii.h"
 #include "ptr.h"
@@ -26,12 +27,14 @@
 #include "utf8.h"
 #include "base64.h"
 #include "errors.h"
+#include "internal.h"
+
 #include "gc/modules.h"
 #include "gc/roots.h"
 #include "gc/uv.h"
-#include "silver/call.h"
-#include "sync.h"
 #include "gc/strings.h"
+#include "silver/vm.h"
+
 #include "modules/crypto.h"
 #include "modules/buffer.h"
 #include "modules/domexception.h"

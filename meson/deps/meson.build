@@ -1,44 +1,53 @@
 cc = meson.get_compiler('c')
 cmake = import('cmake')
 
-boringssl_opts = cmake.subproject_options()
-boringssl_opts.add_cmake_defines({
-  'BUILD_SHARED_LIBS': 'OFF',
-  'BUILD_TESTING': 'OFF',
-  'INSTALL_ENABLED': '0',
-})
+ssl_mode = get_option('ssl')
 
-if host_machine.system() == 'darwin'
-  deployment_flag = '-mmacosx-version-min=15.0'
+if ssl_mode == 'system'
+  ssl_dep = dependency('libssl', version: '>=3.0')
+  crypto_dep = dependency('libcrypto', version: '>=3.0')
+  tls_backend = 'openssl'
+else
+  boringssl_opts = cmake.subproject_options()
   boringssl_opts.add_cmake_defines({
-    'CMAKE_EXE_LINKER_FLAGS': deployment_flag,
-    'CMAKE_SHARED_LINKER_FLAGS': deployment_flag,
-    'CMAKE_MODULE_LINKER_FLAGS': deployment_flag,
+    'BUILD_SHARED_LIBS': 'OFF',
+    'BUILD_TESTING': 'OFF',
+    'INSTALL_ENABLED': '0',
   })
+
+  if host_machine.system() == 'darwin'
+    deployment_flag = '-mmacosx-version-min=15.0'
+    boringssl_opts.add_cmake_defines({
+      'CMAKE_EXE_LINKER_FLAGS': deployment_flag,
+      'CMAKE_SHARED_LINKER_FLAGS': deployment_flag,
+      'CMAKE_MODULE_LINKER_FLAGS': deployment_flag,
+    })
+  endif
+
+  boringssl_warning_flag = cc.get_argument_syntax() == 'msvc' ? '/W0' : '-w'
+  boringssl_opts.append_compile_args('c', boringssl_warning_flag)
+  boringssl_opts.append_compile_args('cpp', boringssl_warning_flag)
+
+  boringssl_opts.append_compile_args('c', '-g0')
+  boringssl_opts.append_compile_args('cpp', '-g0')
+
+  # drop precomputed EC tables (P-256, Ed25519 base point); saves ~225 KB.
+  # P-256 ops get ~2x slower but only run during TLS handshakes (~90us/connect).
+  boringssl_opts.append_compile_args('c', '-DOPENSSL_SMALL')
+  boringssl_opts.append_compile_args('cpp', '-DOPENSSL_SMALL')
+
+  if host_machine.system() == 'windows'
+    boringssl_opts.append_compile_args('c', '-DOPENSSL_WINDOWS')
+    boringssl_opts.append_compile_args('cpp', '-DOPENSSL_WINDOWS')
+  endif
+
+  boringssl_opts.set_override_option('warning_level', '0')
+  boringssl_sub = cmake.subproject('boringssl', options: boringssl_opts)
+
+  ssl_dep = boringssl_sub.dependency('ssl')
+  crypto_dep = boringssl_sub.dependency('crypto')
+  tls_backend = 'boringssl'
 endif
-
-boringssl_warning_flag = cc.get_argument_syntax() == 'msvc' ? '/W0' : '-w'
-boringssl_opts.append_compile_args('c', boringssl_warning_flag)
-boringssl_opts.append_compile_args('cpp', boringssl_warning_flag)
-
-boringssl_opts.append_compile_args('c', '-g0')
-boringssl_opts.append_compile_args('cpp', '-g0')
-
-# drop precomputed EC tables (P-256, Ed25519 base point); saves ~225 KB.
-# P-256 ops get ~2x slower but only run during TLS handshakes (~90us/connect).
-boringssl_opts.append_compile_args('c', '-DOPENSSL_SMALL')
-boringssl_opts.append_compile_args('cpp', '-DOPENSSL_SMALL')
-
-if host_machine.system() == 'windows'
-  boringssl_opts.append_compile_args('c', '-DOPENSSL_WINDOWS')
-  boringssl_opts.append_compile_args('cpp', '-DOPENSSL_WINDOWS')
-endif
-
-boringssl_opts.set_override_option('warning_level', '0')
-boringssl_sub = cmake.subproject('boringssl', options: boringssl_opts)
-
-ssl_dep = boringssl_sub.dependency('ssl')
-crypto_dep = boringssl_sub.dependency('crypto')
 
 meson.override_dependency('ssl', ssl_dep)
 meson.override_dependency('crypto', crypto_dep)
@@ -88,11 +97,10 @@ brotli_sub = subproject('google-brotli', default_options: [
 brotli_common_dep = brotli_sub.get_variable('brotli_common_dep')
 brotli_dec_dep = brotli_sub.get_variable('brotli_decoder_dep')
 brotli_enc_dep = brotli_sub.get_variable('brotli_encoder_dep')
-
 cmake_prefix = get_option('deps_prefix_cmake')
 
 tlsuv_sub = subproject('tlsuv', default_options: [
-  'tls_backend=boringssl',
+  'tls_backend=' + tls_backend,
   'deps_prefix_cmake=' + cmake_prefix,
   'warning_level=0',
   'optimization=s',

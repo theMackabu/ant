@@ -8,6 +8,7 @@
 #include <time.h>
 #include <uthash.h>
 #include <uv.h>
+#include <openssl/crypto.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -2453,7 +2454,11 @@ void init_process_module(ant_t *js) {
 
   ant_value_t features_obj = Ant_Object_Create(js);
   js_set(js, features_obj, "uv", Ant_Value_True);
+#ifdef OPENSSL_IS_BORINGSSL
   process_set_string(js, features_obj, "tls", "BoringSSL");
+#else
+  process_set_string(js, features_obj, "tls", "OpenSSL");
+#endif
   process_set_string(js, features_obj, "typescript", "transform");
   js_set(js, process_obj, "features", features_obj);
   process_set_string(js, process_obj, "version", "v26.13.0");
@@ -2470,7 +2475,11 @@ void init_process_module(ant_t *js) {
   process_set_string(js, versions_obj, "utf8proc", ANT_DEP_UTF8PROC_VERSION);
   process_set_string(js, versions_obj, "zlib", ANT_DEP_ZLIB_VERSION);
   process_set_string(js, versions_obj, "wamr", ANT_DEP_WAMR_VERSION);
+#ifdef OPENSSL_IS_BORINGSSL
   process_set_string(js, versions_obj, "boringssl", ANT_DEP_BORINGSSL_VERSION);
+#else
+  process_set_string(js, versions_obj, "openssl", OpenSSL_version(OPENSSL_VERSION_STRING));
+#endif
   process_set_string(js, versions_obj, "yyjson", ANT_DEP_YYJSON_VERSION);
   process_set_string(js, versions_obj, "unicode", ANT_DEP_UNICODE_VERSION);
 

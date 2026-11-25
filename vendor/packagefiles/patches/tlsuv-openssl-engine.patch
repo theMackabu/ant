@@ -1,0 +1,397 @@
+diff --git a/src/openssl/engine.c b/src/openssl/engine.c
+index 215c281..6f7f161 100644
+--- a/src/openssl/engine.c
++++ b/src/openssl/engine.c
+@@ -32,6 +32,9 @@
+ #include <openssl/core_names.h>
+ #include <openssl/params.h>
+ #include <openssl/provider.h>
++#include <openssl/sha.h>
++
++#include <uv.h>
+ 
+ #include "keys.h"
+ #include "../keychain.h"
+@@ -41,10 +44,13 @@
+ #ifndef PATH_MAX
+ #define PATH_MAX MAX_PATH
+ #endif
++#else
++#include <unistd.h>
+ #endif
+ 
+ #if __APPLE__
+ #include <Security/Security.h>
++#include <dlfcn.h>
+ #endif
+ 
+ struct openssl_ctx {
+@@ -60,6 +66,8 @@ struct openssl_ctx {
+     // it, and only request a client cert when it (or cert_verify_f) is set.
+     X509_STORE* ca_store;
+ 
++    bool system_store;
++
+     int (*cert_verify_f)(const struct tlsuv_certificate_s * cert, void *v_ctx);
+     void *verify_ctx;
+ };
+@@ -147,8 +155,9 @@ static BIO_METHOD *BIO_s_engine(void);
+ 
+ static X509_LOOKUP_METHOD * old_hash_lookup(void);
+ 
+-#if _WIN32
+-static X509_STORE *load_system_certs();
++#if !__APPLE__ && !defined(ANDROID) && !defined(__ANDROID__)
++#define TLSUV_SHARED_SYSTEM_STORE 1
++static X509_STORE *system_store(void);
+ #endif
+ 
+ static tls_context openssl_context_api = {
+@@ -462,41 +471,140 @@ static X509_LOOKUP_METHOD * old_hash_lookup(void) {
+ }
+ 
+ #if __APPLE__
++typedef struct {
++    __typeof__(&CFArrayAppendValue) array_append_value;
++    __typeof__(&CFArrayCreateMutable) array_create_mutable;
++    __typeof__(&CFDataCreate) data_create;
++    __typeof__(&CFRelease) release;
++    __typeof__(&SecCertificateCreateWithData) certificate_create_with_data;
++    __typeof__(&SecPolicyCreateBasicX509) policy_create_basic_x509;
++    __typeof__(&SecTrustCreateWithCertificates) trust_create_with_certificates;
++    __typeof__(&SecTrustEvaluateWithError) trust_evaluate_with_error;
++    const CFArrayCallBacks *array_callbacks;
++    int result;
++} apple_trust_api_t;
++
++static apple_trust_api_t apple_trust = { .result = -1 };
++static uv_once_t apple_trust_once = UV_ONCE_INIT;
++
++static void apple_trust_load(void) {
++    void *core_foundation = dlopen(
++        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_LAZY | RTLD_LOCAL);
++    void *security = dlopen(
++        "/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY | RTLD_LOCAL);
++    if (!core_foundation || !security) return;
++
++#define APPLE_TRUST_LOAD(handle, field, symbol) do { \
++    apple_trust.field = (__typeof__(apple_trust.field))dlsym(handle, symbol); \
++    if (!apple_trust.field) return; \
++} while (0)
++
++    APPLE_TRUST_LOAD(core_foundation, array_append_value, "CFArrayAppendValue");
++    APPLE_TRUST_LOAD(core_foundation, array_create_mutable, "CFArrayCreateMutable");
++    APPLE_TRUST_LOAD(core_foundation, data_create, "CFDataCreate");
++    APPLE_TRUST_LOAD(core_foundation, release, "CFRelease");
++    APPLE_TRUST_LOAD(security, certificate_create_with_data, "SecCertificateCreateWithData");
++    APPLE_TRUST_LOAD(security, policy_create_basic_x509, "SecPolicyCreateBasicX509");
++    APPLE_TRUST_LOAD(security, trust_create_with_certificates, "SecTrustCreateWithCertificates");
++    APPLE_TRUST_LOAD(security, trust_evaluate_with_error, "SecTrustEvaluateWithError");
++    APPLE_TRUST_LOAD(core_foundation, array_callbacks, "kCFTypeArrayCallBacks");
++
++#undef APPLE_TRUST_LOAD
++
++    apple_trust.result = 0;
++}
++
+ static int apple_ca_verify(int pre_verify, X509_STORE_CTX *st) {
++    if (pre_verify) return 1;
++
++    switch (X509_STORE_CTX_get_error(st)) {
++        case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
++        case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY:
++        case X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE:
++        case X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT:
++        case X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN:
++        case X509_V_ERR_CERT_UNTRUSTED:
++            break;
++        default:
++            return 0;
++    }
++
++    uv_once(&apple_trust_once, apple_trust_load);
++    if (apple_trust.result != 0) return 0;
+ 
+-    CFMutableArrayRef certs = CFArrayCreateMutable(kCFAllocatorDefault, 10, &kCFTypeArrayCallBacks);
++    CFMutableArrayRef certs = apple_trust.array_create_mutable(NULL, 10, apple_trust.array_callbacks);
+ 
+     STACK_OF(X509) *chain = X509_STORE_CTX_get1_chain(st);
+     for (int i = 0; i < sk_X509_num(chain); i++) {
+         X509 *x = sk_X509_value(chain, i);
+         uint8_t *der = NULL;
+         int der_len = i2d_X509(x, &der);
+-        CFDataRef d = CFDataCreate(kCFAllocatorDefault, der, der_len);
++        CFDataRef d = apple_trust.data_create(NULL, der, der_len);
+         OPENSSL_free(der);
+ 
+-        SecCertificateRef c = SecCertificateCreateWithData(kCFAllocatorDefault, d);
+-        CFArrayAppendValue(certs, c);
+-        CFRelease(d);
+-        CFRelease(c);
++        SecCertificateRef c = apple_trust.certificate_create_with_data(NULL, d);
++        apple_trust.array_append_value(certs, c);
++        apple_trust.release(d);
++        apple_trust.release(c);
+     }
+     sk_X509_pop_free(chain, X509_free);
+ 
+     SecTrustRef trust = NULL;
+-    SecPolicyRef policy = SecPolicyCreateBasicX509();
++    SecPolicyRef policy = apple_trust.policy_create_basic_x509();
+ 
+     CFErrorRef err = NULL;
+     bool result =
+-            SecTrustCreateWithCertificates(certs, policy, &trust) == errSecSuccess &&
+-            SecTrustEvaluateWithError(trust, &err);
+-    if (err) CFRelease(err);
+-    if (trust) CFRelease(trust);
+-    CFRelease(policy);
+-    CFRelease(certs);
++            apple_trust.trust_create_with_certificates(certs, policy, &trust) == errSecSuccess &&
++            apple_trust.trust_evaluate_with_error(trust, &err);
++    if (err) apple_trust.release(err);
++    if (trust) apple_trust.release(trust);
++    apple_trust.release(policy);
++    apple_trust.release(certs);
+ 
+     return result;
+ }
+ #endif
+ 
++#if TLSUV_SHARED_SYSTEM_STORE
++static X509_STORE *system_store_ = NULL;
++static uv_once_t system_store_once = UV_ONCE_INIT;
++
++static void system_store_load(void);
++
++#if !_WIN32
++static const char *const ca_bundles[] = {
++    "/etc/ssl/certs/ca-certificates.crt",
++    "/etc/pki/tls/certs/ca-bundle.crt",
++    "/etc/ssl/ca-bundle.pem",
++    "/etc/pki/tls/cacert.pem",
++    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
++    "/etc/ssl/certs/ca-bundle.crt",
++};
++
++static void system_store_load(void) {
++    X509_STORE *certs = X509_STORE_new();
++    X509_STORE_set_default_paths(certs);
++
++    if (getenv(X509_get_default_cert_file_env()) == NULL &&
++        access(X509_get_default_cert_file(), R_OK) != 0) {
++        for (size_t i = 0; i < sizeof(ca_bundles) / sizeof(ca_bundles[0]); i++) {
++            if (access(ca_bundles[i], R_OK) == 0 && X509_STORE_load_locations(certs, ca_bundles[i], NULL)) {
++                UM_LOG(VERB, "loaded system CA bundle[%s]", ca_bundles[i]);
++                break;
++            }
++        }
++    }
++    ERR_clear_error();
++    system_store_ = certs;
++}
++#endif
++
++static X509_STORE *system_store(void) {
++    uv_once(&system_store_once, system_store_load);
++    return system_store_;
++}
++#endif
++
+ static int set_ca_bundle(tls_context *tls, const char *ca, size_t ca_len) {
+     struct openssl_ctx *c = (struct openssl_ctx *) tls;
+     SSL_CTX *ctx = c->ctx;
+@@ -514,6 +622,7 @@ static int set_ca_bundle(tls_context *tls, const char *ca, size_t ca_len) {
+     // may be called more than once on the same context
+     X509_STORE_free(c->ca_store);
+     c->ca_store = NULL;
++    c->system_store = !custom;
+ 
+     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+     if (custom) {
+@@ -525,13 +634,7 @@ static int set_ca_bundle(tls_context *tls, const char *ca, size_t ca_len) {
+         // loaders below fill, so drop the one a previous bundle set
+         SSL_CTX_set0_verify_cert_store(ctx, NULL);
+         // try loading default CA stores
+-#if _WIN32
+-        // try to use windows trust store provider
+-        if (!SSL_CTX_load_verify_store(ctx, "org.openssl.winstore:")) {
+-            X509_STORE *sys_ca = load_system_certs();
+-            SSL_CTX_set0_verify_cert_store(ctx, sys_ca);
+-        }
+-#elif __APPLE__
++#if __APPLE__
+         // Apple deprecated all access to system CA roots store on macOS and iOS(was never available).
+         // use native Apple trust verification
+         SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, apple_ca_verify);
+@@ -539,13 +642,66 @@ static int set_ca_bundle(tls_context *tls, const char *ca, size_t ca_len) {
+         X509_STORE *ca = SSL_CTX_get_cert_store(ctx);
+         X509_LOOKUP *lu = X509_STORE_add_lookup(ca, old_hash_lookup());
+         X509_LOOKUP_set_method_data(lu, (void*)"/etc/security/cacerts");
+-#else
+-        SSL_CTX_set_default_verify_paths(ctx);
+ #endif
+     }
+     return 0;
+ }
+ 
++static const uint8_t blocked_spkis[][SHA256_DIGEST_LENGTH] = {
++    {0x49, 0xdd, 0x35, 0x3d, 0xc2, 0xb9, 0x19, 0xa3, 0x77, 0x06, 0x45,
++     0x11, 0x7d, 0x0e, 0x60, 0xc1, 0x61, 0x15, 0xe7, 0xd1, 0xbc, 0x25,
++     0x9e, 0xef, 0xe7, 0x34, 0xb0, 0x0e, 0xa4, 0x34, 0xfe, 0x5f},
++    {0x5c, 0x06, 0x60, 0xa2, 0xb1, 0x64, 0x91, 0x0d, 0x8f, 0xf5, 0x89,
++     0xc1, 0x8e, 0x14, 0x55, 0x2e, 0x9e, 0x0e, 0xc2, 0x37, 0xdc, 0xef,
++     0xe2, 0xcb, 0x73, 0x6d, 0x41, 0xa4, 0x81, 0x1f, 0x81, 0xa0},
++    {0x63, 0xec, 0xef, 0xee, 0x43, 0x1d, 0x49, 0x52, 0x3b, 0xc1, 0x13,
++     0x6c, 0x4e, 0x72, 0xd0, 0x20, 0x6a, 0x47, 0x70, 0x86, 0xca, 0xf6,
++     0x06, 0xcd, 0x5c, 0xf0, 0x25, 0x68, 0x6c, 0x10, 0x9c, 0xf8},
++    {0x92, 0xc0, 0x63, 0xd6, 0x7e, 0x8f, 0x14, 0xdb, 0x71, 0xd2, 0x88,
++     0xe1, 0x12, 0x66, 0xff, 0xda, 0xf6, 0x9c, 0xbf, 0x11, 0x5f, 0x7b,
++     0xab, 0x14, 0xf3, 0xbc, 0x2f, 0x68, 0xd2, 0x5e, 0x0e, 0x30},
++    {0xeb, 0xed, 0x64, 0x75, 0xc2, 0xc2, 0xd8, 0x0f, 0xcb, 0x19, 0x9f,
++     0x3f, 0xe8, 0xdd, 0x6e, 0x6b, 0x3c, 0xe6, 0x0b, 0x77, 0xeb, 0x15,
++     0xd4, 0xe4, 0x2c, 0x3d, 0xec, 0x0c, 0x6f, 0x5b, 0x51, 0x05},
++    {0xec, 0x4f, 0xfa, 0x1a, 0xd0, 0xac, 0x88, 0x08, 0x13, 0x14, 0xb7,
++     0xaa, 0xff, 0xef, 0x6a, 0x91, 0xf9, 0x7c, 0xd5, 0x72, 0x91, 0xbb,
++     0x5b, 0xa6, 0x86, 0xc5, 0x41, 0x5f, 0x5e, 0xb4, 0xf6, 0xb6},
++    {0x43, 0xbf, 0xfa, 0x19, 0xd6, 0xef, 0x65, 0x14, 0x51, 0xf6, 0x84,
++     0x1e, 0x01, 0x99, 0x31, 0xe9, 0x6f, 0x6f, 0x2e, 0xae, 0xff, 0x28,
++     0xab, 0x4b, 0x6f, 0x1c, 0xe4, 0x57, 0x6d, 0xe2, 0x71, 0x7b},
++    {0xe0, 0x25, 0x4c, 0x7f, 0xcd, 0xc2, 0x65, 0xe2, 0xf0, 0xf8, 0xa4,
++     0x28, 0xda, 0xbb, 0x75, 0xab, 0x4a, 0xe0, 0x39, 0xb4, 0x87, 0x2d,
++     0x62, 0xf5, 0xee, 0x57, 0xf0, 0x87, 0x7d, 0x5a, 0x8a, 0x41},
++};
++
++static bool spki_blocked(X509 *cert) {
++    uint8_t *der = NULL;
++    int len = i2d_X509_PUBKEY(X509_get_X509_PUBKEY(cert), &der);
++    if (len <= 0) return false;
++
++    uint8_t digest[SHA256_DIGEST_LENGTH];
++    SHA256(der, (size_t)len, digest);
++    OPENSSL_free(der);
++
++    for (size_t i = 0; i < sizeof(blocked_spkis) / sizeof(blocked_spkis[0]); i++) {
++        if (memcmp(digest, blocked_spkis[i], SHA256_DIGEST_LENGTH) == 0) return true;
++    }
++    return false;
++}
++
++static int chain_verify_cb(X509_STORE_CTX *st, void *arg) {
++    (void)arg;
++    if (X509_verify_cert(st) <= 0) return 0;
++
++    STACK_OF(X509) *chain = X509_STORE_CTX_get0_chain(st);
++    for (int i = 0; i < sk_X509_num(chain); i++) {
++        if (!spki_blocked(sk_X509_value(chain, i))) continue;
++        X509_STORE_CTX_set_error(st, X509_V_ERR_CERT_REVOKED);
++        return 0;
++    }
++    return 1;
++}
++
+ static void init_ssl_context(struct openssl_ctx *c) {
+     // a single SSL_CTX serves both roles; the role is fixed per-SSL with
+     // SSL_set_connect_state()/SSL_set_accept_state()
+@@ -566,6 +722,7 @@ static void init_ssl_context(struct openssl_ctx *c) {
+     // TLS_method() defaults to SSL_SESS_CACHE_SERVER, but tlsuv implements no
+     // session resumption - don't grow a cache nothing reads.
+     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
++    SSL_CTX_set_cert_verify_callback(ctx, chain_verify_cb, NULL);
+ 
+     set_ca_bundle((tls_context *) c, NULL, 0);
+     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+@@ -776,12 +933,25 @@ tlsuv_engine_t new_openssl_engine(tls_context *ctx, const char *host) {
+ 
+     X509_VERIFY_PARAM* vfy_param = SSL_get0_param(engine->ssl);
+     X509_VERIFY_PARAM_set_purpose(vfy_param, X509_PURPOSE_ANY);
+-    SSL_set_tlsext_host_name(engine->ssl, host);
++    if (host != NULL) {
++        ASN1_OCTET_STRING *host_ip = a2i_IPADDRESS(host);
++        if (host_ip != NULL) {
++            ASN1_OCTET_STRING_free(host_ip);
++        } else {
++            SSL_set_tlsext_host_name(engine->ssl, host);
++        }
++    }
+     SSL_set1_host(engine->ssl, host);
+     SSL_set_connect_state(engine->ssl);
+ 
+     SSL_set_app_data(engine->ssl, engine);
+ 
++#if TLSUV_SHARED_SYSTEM_STORE
++    if (context->system_store && system_store() != NULL) {
++        SSL_set1_verify_cert_store(engine->ssl, system_store());
++    }
++#endif
++
+     if (context->pkey != NULL) {
+         if (tls_set_cert_internal(engine->ssl, context->store, context->pkey) != 0) {
+             UM_LOG(ERR, "failed to set cert/key pair");
+@@ -1347,7 +1517,7 @@ tls_read(tlsuv_engine_t self, char *out, size_t *out_bytes, size_t maxout) {
+ 
+     *out_bytes = 0;
+ 
+-    if (SSL_get_shutdown(eng->ssl)) {
++    if (SSL_get_shutdown(eng->ssl) & SSL_RECEIVED_SHUTDOWN) {
+         return TLS_EOF;
+     }
+ 
+@@ -1481,26 +1651,25 @@ goto on_error;            \
+ #include <wincrypt.h>
+ #pragma comment (lib, "crypt32.lib")
+ 
+-static X509_STORE *load_system_certs() {
+-    X509_STORE *store = X509_STORE_new();
+-    X509 *c;
+-
+-    HCERTSTORE hCertStore;
+-    PCCERT_CONTEXT pCertContext = NULL;
+-
+-    if (!(hCertStore = CertOpenSystemStore(0, "ROOT"))) {
+-        UM_LOG(ERR, "The first system store did not open.");
+-        return store;
++static void system_store_load(void) {
++    HCERTSTORE store = CertOpenSystemStoreA(0, "ROOT");
++    if (store == NULL) {
++        UM_LOG(ERR, "failed to open system ROOT certificate store");
++        return;
+     }
+ 
+-    while ((pCertContext = CertEnumCertificatesInStore(hCertStore, pCertContext)) != NULL) {
+-        c = d2i_X509(NULL, (const uint8_t **)&pCertContext->pbCertEncoded, (long)pCertContext->cbCertEncoded);
+-        X509_STORE_add_cert(store, c);
++    X509_STORE *certs = X509_STORE_new();
++    PCCERT_CONTEXT ctx = NULL;
++    while ((ctx = CertEnumCertificatesInStore(store, ctx)) != NULL) {
++        const uint8_t *der = ctx->pbCertEncoded;
++        X509 *c = d2i_X509(NULL, &der, (long)ctx->cbCertEncoded);
++        if (c != NULL) {
++            X509_STORE_add_cert(certs, c);
++            X509_free(c);
++        }
+     }
+-    CertFreeCertificateContext(pCertContext);
+-    CertCloseStore(hCertStore, 0);
+-
+-    return store;
++    CertCloseStore(store, 0);
++    system_store_ = certs;
+ }
+ #endif
+ 
+diff --git a/src/openssl/keys.c b/src/openssl/keys.c
+index c496379..b59f72d 100644
+--- a/src/openssl/keys.c
++++ b/src/openssl/keys.c
+@@ -393,8 +393,8 @@ static int load_pkcs11_ec(EVP_PKEY *pkey, p11_key_ctx *p11_key, const char *id,
+         a = (const unsigned char*)value;
+         os = d2i_ASN1_OCTET_STRING(NULL, &a, (long)len);
+         if (os) {
+-            a = os->data;
+-            if (o2i_ECPublicKey(&ec, &a, os->length) == NULL) {
++            a = ASN1_STRING_get0_data(os);
++            if (o2i_ECPublicKey(&ec, &a, ASN1_STRING_length(os)) == NULL) {
+                 unsigned long err = ERR_get_error();
+                 UM_LOG(WARN, "failed to set EC pubkey for key id[%s] label[%s]: %ld/%s", id, label, err, ERR_lib_error_string(err));
+                 goto error;

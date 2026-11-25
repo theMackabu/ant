@@ -225,12 +225,14 @@ http_protocols_test = executable(
 )
 test('http-protocols', http_protocols_test)
 
-executable(
-  'tlsuv-boringssl-smoke',
-  files(tests_root / 'tlsuv_boringssl_smoke.c'),
-  dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep],
-  build_by_default: false
-)
+if ssl_mode == 'bundled'
+  executable(
+    'tlsuv-boringssl-smoke',
+    files(tests_root / 'tlsuv_boringssl_smoke.c'),
+    dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep],
+    build_by_default: false
+  )
+endif
 
 executable(
   'test-websocket-connect-cancel',

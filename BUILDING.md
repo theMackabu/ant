@@ -94,7 +94,8 @@ and are fetched automatically:
 - Ada URL 4.0.0
 - aklomp-base64 0.5.3
 - argtable3 3.3.1
-- BoringSSL `98ffd075a2db87093a62ca46f9e6e66e5f2f9f23`
+- BoringSSL `98ffd075a2db87093a62ca46f9e6e66e5f2f9f23` (`-Dssl=system` uses the
+  system OpenSSL 3+ instead)
 - c-ares 1.34.9
 - crprintf `d396ba00998fc4c99283e9fd30b27ed2ccf58291`
 - double-conversion 3.4.0
@@ -455,6 +456,10 @@ archive list and headers come from the build itself, so new dependencies and
 headers need no packaging changes. `examples/embed/embed.c` is the reference
 host, and `embed-example` is built from the packaged files alone.
 
+Hosts that already ship OpenSSL can configure the tree with `-Dssl=system`.
+BoringSSL and its CMake build (NASM on Windows) are then skipped, and
+`libant.pc` lists the system `libssl` and `libcrypto` instead of merging them.
+
 #### Troubleshooting Unix and macOS builds
 
 Stale builds can sometimes result in errors. Clean the build directory and
@@ -526,6 +531,7 @@ Configure options are set via `meson setup` or `meson configure`:
 | ------------------- | ------- | ---------- | -------------------------------------------------------- |
 | `allocator`         | combo   | `system`   | Runtime malloc implementation (`system`, `mimalloc`)     |
 | `static_link`       | boolean | `false`    | Statically link the final binary                         |
+| `ssl`               | combo   | `bundled`  | `bundled` BoringSSL or `system` OpenSSL 3+ (pkg-config)  |
 | `temporal`          | feature | `enabled`  | Build the Temporal API using the hermetic Rust toolchain |
 | `pgo`               | feature | `auto`     | Use matching `meson/pgo/profiles/*.profdata` profiles    |
 | `pgo_profile`       | string  | (empty)    | Override the merged LLVM profile path                  |

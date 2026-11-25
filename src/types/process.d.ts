@@ -28,7 +28,8 @@ interface Versions {
   modules: string;
   napi: string;
   wamr: string;
-  boringssl: string;
+  boringssl?: string;
+  openssl?: string;
 }
 
 interface Release {

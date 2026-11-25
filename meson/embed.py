@@ -29,7 +29,7 @@ def link_inputs(build_root, target):
   for arg in params:
     if arg == '-framework':
       system += [arg, next(params)]
-    elif arg.startswith('-l') or arg in ('-pthread', '-no-pie'):
+    elif arg.startswith(('-l', '-L')) or arg in ('-pthread', '-no-pie'):
       system.append(arg)
     elif arg.endswith(ARCHIVE_SUFFIXES):
       path = os.path.realpath(os.path.join(build_root, arg))

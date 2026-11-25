@@ -28,8 +28,8 @@
 #include <unistd.h>
 #endif
 
-#include <openssl/base64.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
@@ -1965,12 +1965,17 @@ static int tls_strcmp_ptr(const void *a, const void *b) {
 }
 
 static ant_value_t js_tls_get_ciphers(ant_params_t) {
+#ifdef OPENSSL_IS_BORINGSSL
   static const uint16_t tls13_suites[] = { 0x1301, 0x1302, 0x1303 };
+  const size_t tls13_count = sizeof(tls13_suites) / sizeof(tls13_suites[0]);
+#else
+  const size_t tls13_count = 0;
+#endif
   SSL_CTX *ctx = SSL_CTX_new(TLS_method());
   STACK_OF(SSL_CIPHER) *ciphers = ctx ? SSL_CTX_get_ciphers(ctx) : NULL;
   
   size_t count = ciphers ? sk_SSL_CIPHER_num(ciphers) : 0;
-  size_t total = count + sizeof(tls13_suites) / sizeof(tls13_suites[0]);
+  size_t total = count + tls13_count;
   
   char **names = calloc(total, sizeof(char *));
   ant_value_t out = Ant_Array_Create(js);
@@ -1978,10 +1983,12 @@ static ant_value_t js_tls_get_ciphers(ant_params_t) {
 
   for (size_t i = 0; names && i < count; i++)
     names[n++] = strdup(SSL_CIPHER_get_name(sk_SSL_CIPHER_value(ciphers, i)));
-  for (size_t i = 0; names && i < sizeof(tls13_suites) / sizeof(tls13_suites[0]); i++) {
+#ifdef OPENSSL_IS_BORINGSSL
+  for (size_t i = 0; names && i < tls13_count; i++) {
     const SSL_CIPHER *cipher = SSL_get_cipher_by_value(tls13_suites[i]);
     if (cipher) names[n++] = strdup(SSL_CIPHER_standard_name(cipher));
   }
+#endif
 
   for (size_t i = 0; i < n; i++)
     for (char *c = names[i]; c && *c; c++) if (*c >= 'A' && *c <= 'Z') *c = (char)(*c - 'A' + 'a');
