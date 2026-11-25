@@ -8,6 +8,7 @@ import {
   benchmarkFiles,
   buildMetadata,
   createBenchmarkSources,
+  engineFlags,
   executableMetadata,
   geometricMean,
   hostMetadata,
@@ -68,20 +69,20 @@ async function main() {
         name: engine.name,
         mode: engine.mode,
         status: available ? 'pending' : 'unavailable',
-        version: identity.version === 'unknown' && engineState[engine.id]?.resolvedVersion
-          ? engineState[engine.id].resolvedVersion
+        version: identity.version === 'unknown' && engineState[engine.install]?.resolvedVersion
+          ? engineState[engine.install].resolvedVersion
           : identity.version,
         versionError: identity.versionError,
-        channel: engine.id === 'ant' ? 'repository' : engineState[engine.id]?.channel || 'unresolved',
+        channel: engine.id === 'ant' ? 'repository' : engineState[engine.install]?.channel || 'unresolved',
         resolvedVersion: engine.id === 'ant'
           ? identity.version
-          : engineState[engine.id]?.resolvedVersion || identity.version,
+          : engineState[engine.install]?.resolvedVersion || identity.version,
         sourceRevision: engine.id === 'ant'
           ? repository.revision
-          : engineState[engine.id]?.sourceRevision || null,
-        retrievedAt: engine.id === 'ant' ? null : engineState[engine.id]?.retrievedAt || null,
+          : engineState[engine.install]?.sourceRevision || null,
+        retrievedAt: engine.id === 'ant' ? null : engineState[engine.install]?.retrievedAt || null,
         executableSha256: identity.executableSha256,
-        flags: engine.args,
+        flags: engineFlags(engine),
         samples: []
       });
     }

@@ -140,21 +140,21 @@ sync_boa() {
   install_single_binary boa "$version" "$url" boa latest-release "$version" "$revision"
 }
 
-sync_v8_jitless() {
+sync_v8() {
   local version url revision
   version=$(fetch https://storage.googleapis.com/chromium-v8/official/canary/v8-mac-arm64-rel-latest.json \
     | jq -er '.version')
   url="https://storage.googleapis.com/chromium-v8/official/canary/v8-mac-arm64-rel-$version.zip"
   revision=$(git_tag_revision https://chromium.googlesource.com/v8/v8.git "$version")
-  install_zip v8-jitless "$version" "$url" d8 canary "$version" "$revision"
+  install_zip v8 "$version" "$url" d8 canary "$version" "$revision"
 }
 
-sync_sm_jitless() {
+sync_sm_baseline() {
   local version url
   version=$(fetch https://product-details.mozilla.org/1.0/firefox_history_development_releases.json \
     | jq -er 'to_entries | sort_by(.value) | last | .key')
   url="https://archive.mozilla.org/pub/firefox/releases/$version/jsshell/jsshell-mac.zip"
-  install_zip sm-jitless "$version" "$url" js development-release "$version"
+  install_zip sm-baseline "$version" "$url" js development-release "$version"
 }
 
 sync_kiesel() {
@@ -273,7 +273,96 @@ sync_porffor() {
   fi
 }
 
-engine_ids=(boa v8-jitless sm-jitless kiesel libjs duktape quickjs porffor)
+github_release_asset() {
+  local repository=$1 asset=$2 release
+  release=$(github_fetch "https://api.github.com/repos/$repository/releases/latest")
+  jq -er --arg asset "$asset" \
+    '.tag_name, (.assets[] | select(.name == $asset) | .browser_download_url)' <<<"$release"
+}
+
+git_head_revision() {
+  local revision
+  revision=$(git ls-remote "$1" HEAD | awk '{print $1}')
+  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid HEAD revision for $1" >&2; return 1; }
+  printf '%s' "$revision"
+}
+
+checkout_revision() {
+  local repository=$1 source=$2 revision=$3
+  if [[ ! -d "$source/.git" ]]; then
+    git clone --filter=blob:none "$repository" "$source"
+  fi
+  git -C "$source" fetch --depth 1 origin "$revision"
+  git -C "$source" checkout --detach --force "$revision"
+}
+
+sync_bun_jitless() {
+  local version url revision
+  { read -r version; read -r url; } < <(github_release_asset oven-sh/bun bun-darwin-aarch64.zip)
+  revision=$(git_tag_revision https://github.com/oven-sh/bun.git "$version")
+  install_zip bun-jitless "$version" "$url" bun-darwin-aarch64/bun latest-release "$version" "$revision"
+}
+
+sync_quickjs_ng() {
+  local version url revision
+  { read -r version; read -r url; } < <(github_release_asset quickjs-ng/quickjs qjs-darwin-arm64)
+  revision=$(git_tag_revision https://github.com/quickjs-ng/quickjs.git "$version")
+  install_single_binary quickjs-ng "$version" "$url" qjs latest-release "$version" "$revision"
+}
+
+sync_escargot() {
+  local version url revision
+  { read -r version; read -r url; } < <(github_release_asset Samsung/escargot escargot-mac64arm.zip)
+  revision=$(git_tag_revision https://github.com/Samsung/escargot.git "$version")
+  install_zip escargot "$version" "$url" escargot latest-release "$version" "$revision"
+}
+
+sync_hermes() {
+  local repository=https://github.com/facebook/hermes.git release version revision install source
+  release=$(fetch https://registry.npmjs.org/hermes-compiler/latest-v1)
+  version=$(jq -er '.version' <<<"$release")
+  revision=$(jq -er '.gitHead' <<<"$release")
+  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid Hermes release revision" >&2; return 1; }
+  install="$ENGINES_ROOT/hermes/$(safe_key "$version")"
+  if [[ ! -x "$install/bin/hermes" ]]; then
+    source="$SOURCE_ROOT/hermes"
+    checkout_revision "$repository" "$source" "$revision"
+    : > "$work_dir/compiled"
+    cmake --fresh -S "$source" -B "$source/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++
+    ninja -C "$source/build" hermes
+    mkdir -p "$work_dir/hermes/bin" "$ENGINES_ROOT/hermes"
+    cp "$source/build/bin/hermes" "$work_dir/hermes/bin/hermes"
+    rm -rf "$install"
+    mv "$work_dir/hermes" "$install"
+  fi
+  activate hermes "$install" bin/hermes latest-v1-release "$version" "$revision"
+}
+
+sync_goja() {
+  local revision host_hash install build
+  revision=$(git_head_revision https://github.com/dop251/goja.git)
+  host_hash=$(shasum -a 256 "$SCRIPT_DIR/goja/main.go" | cut -c1-12)
+  install="$ENGINES_ROOT/goja/$revision-$host_hash"
+  if [[ ! -x "$install/goja" ]]; then
+    command -v go >/dev/null || { echo "missing go for goja" >&2; return 1; }
+    : > "$work_dir/compiled"
+    build="$work_dir/goja-build"
+    mkdir -p "$build" "$work_dir/goja" "$ENGINES_ROOT/goja"
+    cp "$SCRIPT_DIR/goja/main.go" "$build/main.go"
+    (
+      cd "$build"
+      go mod init ant-arm64-bench/goja
+      go get "github.com/dop251/goja@$revision"
+      go build -trimpath -o "$work_dir/goja/goja" .
+    )
+    rm -rf "$install"
+    mv "$work_dir/goja" "$install"
+  fi
+  activate goja "$install" goja main "$revision" "$revision"
+}
+
+engine_ids=(boa v8 sm-baseline bun-jitless kiesel libjs duktape quickjs quickjs-ng porffor hermes escargot goja)
 metadata_files=()
 for id in "${engine_ids[@]}"; do
   metadata="$ENGINES_ROOT/$id/current/metadata.json"

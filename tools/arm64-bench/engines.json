@@ -23,16 +23,35 @@
       "id": "v8-jitless",
       "name": "V8 jitless",
       "mode": "jitless",
-      "executable": "{engineRoot}/engines/v8-jitless/current/d8",
+      "install": "v8",
+      "executable": "{engineRoot}/engines/v8/current/d8",
       "args": ["--jitless"],
       "versionArgs": ["--version"]
     },
     {
-      "id": "sm-jitless",
-      "name": "SpiderMonkey jitless",
+      "id": "v8-sparkplug",
+      "name": "V8 Sparkplug",
+      "mode": "sparkplug",
+      "install": "v8",
+      "executable": "{engineRoot}/engines/v8/current/d8",
+      "args": ["--no-maglev", "--no-turbofan"],
+      "versionArgs": ["--version"]
+    },
+    {
+      "id": "sm-baseline",
+      "name": "SpiderMonkey baseline",
+      "mode": "baseline",
+      "executable": "{engineRoot}/engines/sm-baseline/current/js",
+      "args": ["--no-ion"],
+      "versionArgs": ["--version"]
+    },
+    {
+      "id": "bun-jitless",
+      "name": "Bun jitless",
       "mode": "jitless",
-      "executable": "{engineRoot}/engines/sm-jitless/current/js",
-      "args": ["--no-jit-backend"],
+      "executable": "{engineRoot}/engines/bun-jitless/current/bun-darwin-aarch64/bun",
+      "args": [],
+      "env": { "BUN_JSC_useJIT": "0" },
       "versionArgs": ["--version"]
     },
     {
@@ -68,12 +87,44 @@
       "versionArgs": []
     },
     {
+      "id": "quickjs-ng",
+      "name": "QuickJS-ng",
+      "mode": "default",
+      "executable": "{engineRoot}/engines/quickjs-ng/current/qjs",
+      "args": ["--script"],
+      "versionArgs": ["--version"]
+    },
+    {
       "id": "porffor",
       "name": "Porffor",
       "mode": "default",
       "executable": "{engineRoot}/engines/porffor/current/porf",
       "args": [],
       "versionArgs": ["--version"]
+    },
+    {
+      "id": "hermes",
+      "name": "Hermes",
+      "mode": "default",
+      "executable": "{engineRoot}/engines/hermes/current/bin/hermes",
+      "args": [],
+      "versionArgs": []
+    },
+    {
+      "id": "escargot",
+      "name": "Escargot",
+      "mode": "default",
+      "executable": "{engineRoot}/engines/escargot/current/escargot",
+      "args": [],
+      "versionArgs": ["--version"]
+    },
+    {
+      "id": "goja",
+      "name": "goja",
+      "mode": "default",
+      "executable": "{engineRoot}/engines/goja/current/goja",
+      "args": [],
+      "versionArgs": []
     }
   ]
 }

@@ -1,9 +1,8 @@
-var __antBenchPrint =
-  typeof print === 'function'
-    ? print
-    : function () {
-        console.log(Array.prototype.join.call(arguments, ' '));
-      };
+var __antBenchWrite = typeof print === 'function' ? print : console.log;
+
+function __antBenchPrint() {
+  __antBenchWrite(Array.prototype.join.call(arguments, ' '));
+}
 
 function Run() {
   BenchmarkSuite.RunSuites({

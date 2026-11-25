@@ -82,9 +82,15 @@ export function resolveEngine(engine, context) {
   return {
     ...engine,
     executable: interpolatePath(configured, context),
+    install: engine.install || engine.id,
     args: engine.args || [],
+    env: engine.env || {},
     versionArgs: engine.versionArgs || []
   };
+}
+
+export function engineFlags(engine) {
+  return [...Object.entries(engine.env).map(([name, value]) => `${name}=${value}`), ...engine.args];
 }
 
 export async function executableMetadata(engine, timeoutMs = 30_000) {
@@ -96,7 +102,8 @@ export async function executableMetadata(engine, timeoutMs = 30_000) {
       const result = await execFile(engine.executable, engine.versionArgs, {
         encoding: 'utf8',
         timeout: timeoutMs,
-        maxBuffer: 1024 * 1024
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, ...engine.env }
       });
       version = `${result.stdout}\n${result.stderr}`.trim().split(/\r?\n/u)[0] || version;
     } catch (error) {
@@ -148,7 +155,7 @@ export async function runBenchmarkProcess(engine, sourcePath, expectedName, time
       encoding: 'utf8',
       timeout: timeoutMs,
       maxBuffer: 16 * 1024 * 1024,
-      env: { ...process.env, NO_COLOR: '1' }
+      env: { ...process.env, ...engine.env, NO_COLOR: '1' }
     });
     let parsed;
     try {

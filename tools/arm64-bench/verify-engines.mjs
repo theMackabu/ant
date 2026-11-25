@@ -36,7 +36,7 @@ for (const configured of config.engines) {
   }
 
   const metadata = await executableMetadata(engine);
-  const resolution = state[engine.id];
+  const resolution = state[engine.install];
   if (engine.id !== 'ant' && !resolution) {
     report(engine, `missing resolution in ${statePath}`);
     continue;
