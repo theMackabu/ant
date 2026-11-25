@@ -4,11 +4,9 @@
 
 #include "cfunc.h"
 #include "object.h"
-#include "proto.h"
 #include "protectors.h"
 #include "gc/object_arenas.h"
 #include "silver/engine.h"
-#include "modules/proxy.h"
 
 ant_object_t *js_obj_ptr(ant_value_t v) {
   if (!is_object_type(v)) return NULL;
@@ -777,6 +775,7 @@ void js_set_finalizer(ant_value_t obj, js_finalizer_fn fn) {
   
   Ant_Assert(!ant_array_is_shared(ptr), "shared array elements are released by the array finalizer");
   ptr->finalizer = fn;
+  if (fn) fixed_arena_note_finalizer(ptr);
 }
 
 static bool proto_set_would_cycle(ant_t *js, ant_value_t obj, const ant_object_t *ptr, ant_value_t proto) {

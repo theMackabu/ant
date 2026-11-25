@@ -38,6 +38,7 @@ typedef struct ant_fixed_arena {
   uint32_t chunk_cap;
   _Atomic(uint32_t) *owners;
   _Atomic(uint16_t) *ordinals;
+  _Atomic(uint8_t) *finalizers;
   uintptr_t table_base;
   size_t table_slots;
   uint32_t id;
@@ -187,6 +188,7 @@ static inline int ant_arena_decommit(void *base, size_t old_size, size_t new_siz
 bool fixed_arena_refill(ant_fixed_arena_t *a);
 bool fixed_arena_init(ant_fixed_arena_t *a, size_t elem_size, size_t epoch_offset, size_t max_size);
 
+void fixed_arena_note_finalizer(const void *ptr);
 void fixed_arena_destroy(ant_fixed_arena_t *a);
 void fixed_arena_trim(ant_fixed_arena_t *a, uint32_t chunk, size_t used);
 
@@ -232,6 +234,16 @@ static inline void *fixed_arena_alloc_uninit(ant_fixed_arena_t *a) {
   return p;
 }
 
+static inline void fixed_arena_hide_frontier(ant_fixed_arena_t *a) {
+  a->end = a->cursor;
+}
+
+static inline void fixed_arena_show_frontier(ant_fixed_arena_t *a) {
+  if (!a->chunk_count) return;
+  const ant_arena_chunk_t *chunk = &a->chunks[a->chunk_count - 1];
+  a->end = chunk->base + (chunk->committed < a->chunk_bytes ? chunk->committed : a->chunk_bytes);
+}
+
 static inline void *fixed_arena_alloc(ant_fixed_arena_t *a) {
   void *p = fixed_arena_alloc_uninit(a);
   if (p) memset(p, 0, a->elem_size);
@@ -258,6 +270,16 @@ static inline bool fixed_arena_holds_offset(const ant_fixed_arena_t *a, uint64_t
   uint32_t owner = atomic_load_explicit(&a->owners[offset >> ANT_ARENA_CHUNK_SHIFT], memory_order_relaxed);
   if (__builtin_expect(owner == a->id, 1)) return true;
   return owner == (a->id | ANT_ARENA_PARTIAL_CHUNK) && !fixed_arena_past_cursor(a, ptr);
+}
+
+static inline bool fixed_arena_chunk_has_finalizers(const ant_fixed_arena_t *a, uint32_t index) {
+  size_t slot = ((uintptr_t)a->chunks[index].base - a->table_base) >> ANT_ARENA_CHUNK_SHIFT;
+  return atomic_load_explicit(&a->finalizers[slot], memory_order_relaxed) != 0;
+}
+
+static inline void fixed_arena_chunk_clear_finalizers(const ant_fixed_arena_t *a, uint32_t index) {
+  size_t slot = ((uintptr_t)a->chunks[index].base - a->table_base) >> ANT_ARENA_CHUNK_SHIFT;
+  atomic_store_explicit(&a->finalizers[slot], 0, memory_order_relaxed);
 }
 
 static inline bool fixed_arena_locate(const ant_fixed_arena_t *a, const void *ptr, uint32_t *chunk, size_t *offset) {

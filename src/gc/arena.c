@@ -10,6 +10,7 @@ static constexpr unsigned ARENA_CAGE_KEEP_SHIFT = 5;
 
 static _Atomic(uint32_t) *arena_owners = NULL;
 static _Atomic(uint16_t) *arena_ordinals = NULL;
+static _Atomic(uint8_t) *arena_finalizers = NULL;
 static uintptr_t arena_table_base = 0;
 static size_t arena_table_slots = 0;
 static _Atomic(uint32_t) arena_next_id = 1;
@@ -19,11 +20,13 @@ static _Atomic(uint32_t) arena_next_id = 1;
 static constexpr size_t ARENA_WASM_SLOTS = ((uint64_t)UINT32_MAX + 1) >> ANT_ARENA_CHUNK_SHIFT;
 static _Atomic(uint32_t) wasm_arena_owners[ARENA_WASM_SLOTS];
 static _Atomic(uint16_t) wasm_arena_ordinals[ARENA_WASM_SLOTS];
+static _Atomic(uint8_t) wasm_arena_finalizers[ARENA_WASM_SLOTS];
 
 static bool arena_table_ready(void) {
   if (!arena_table_slots) {
     arena_owners = wasm_arena_owners;
     arena_ordinals = wasm_arena_ordinals;
+    arena_finalizers = wasm_arena_finalizers;
     arena_table_slots = ARENA_WASM_SLOTS;
   }
   return true;
@@ -47,14 +50,17 @@ static bool arena_table_ready(void) {
     size_t slots = (ant_cage_reserved_size + ANT_ARENA_CHUNK_SIZE - 1) >> ANT_ARENA_CHUNK_SHIFT;
     _Atomic(uint32_t) *owners = calloc(slots, sizeof(*owners));
     _Atomic(uint16_t) *ordinals = calloc(slots, sizeof(*ordinals));
-    if (owners && ordinals) {
+    _Atomic(uint8_t) *finalizers = calloc(slots, sizeof(*finalizers));
+    if (owners && ordinals && finalizers) {
       arena_owners = owners;
       arena_ordinals = ordinals;
+      arena_finalizers = finalizers;
       arena_table_base = ant_cage_base_address;
       arena_table_slots = slots;
     } else {
       free(owners);
       free(ordinals);
+      free(finalizers);
     }
   }
   bool ready = arena_table_slots != 0;
@@ -75,6 +81,13 @@ static inline size_t arena_chunk_slot(const uint8_t *base) {
   return (size_t)(((uintptr_t)base - arena_table_base) >> ANT_ARENA_CHUNK_SHIFT);
 }
 
+void fixed_arena_note_finalizer(const void *ptr) {
+  uintptr_t addr = (uintptr_t)ptr;
+  if (!arena_finalizers || addr < arena_table_base) return;
+  size_t slot = (addr - arena_table_base) >> ANT_ARENA_CHUNK_SHIFT;
+  if (slot < arena_table_slots) atomic_store_explicit(&arena_finalizers[slot], 1, memory_order_relaxed);
+}
+
 static void arena_chunk_publish(ant_fixed_arena_t *a, uint32_t index, bool partial) {
   size_t slot = arena_chunk_slot(a->chunks[index].base);
   atomic_store_explicit(&arena_ordinals[slot], (uint16_t)index, memory_order_relaxed);
@@ -84,6 +97,7 @@ static void arena_chunk_publish(ant_fixed_arena_t *a, uint32_t index, bool parti
 static void arena_chunk_release(ant_fixed_arena_t *a, uint32_t index) {
   ant_arena_chunk_t *chunk = &a->chunks[index];
   atomic_store_explicit(&arena_owners[arena_chunk_slot(chunk->base)], 0, memory_order_relaxed);
+  atomic_store_explicit(&arena_finalizers[arena_chunk_slot(chunk->base)], 0, memory_order_relaxed);
   a->committed -= chunk->committed;
   ant_cage_free(chunk->base, ANT_ARENA_CHUNK_SIZE);
   *chunk = (ant_arena_chunk_t){0};
@@ -135,6 +149,7 @@ static bool arena_add_chunk(ant_fixed_arena_t *a, size_t want) {
 
   a->owners = arena_owners;
   a->ordinals = arena_ordinals;
+  a->finalizers = arena_finalizers;
   a->table_base = arena_table_base;
   a->table_slots = arena_table_slots;
 
