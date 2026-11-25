@@ -343,7 +343,8 @@ ant_value_t jit_helper_promote_resume(
   int64_t bc_offset, sv_jit_finally_t *finally
 );
 
-ant_value_t jit_resume_in_interpreter(
+__attribute__((noinline))
+ant_value_t jit_resume_in_interpreter_on_clean_stack(
   sv_vm_t *vm, sv_closure_t *closure,
   ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
   ant_value_t *args, int argc,
@@ -352,6 +353,9 @@ ant_value_t jit_resume_in_interpreter(
   ant_value_t *locals, int64_t n_locals,
   int64_t bc_offset, bool async_direct, sv_jit_finally_t *finally
 );
+
+#define jit_resume_in_interpreter(...) \
+  (gc_scrub_dead_stack(), jit_resume_in_interpreter_on_clean_stack(__VA_ARGS__))
 
 ant_value_t jit_helper_bailout_resume(
   sv_vm_t *vm, sv_closure_t *closure,

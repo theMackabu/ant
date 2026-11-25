@@ -10,7 +10,6 @@
 #include "interrupt.h"
 #include "errors.h"
 #include "gc/roots.h"
-#include "gc/objects.h"
 #include "tokens.h"
 #include "silver/glue.h"
 #include "silver/jit.h"
@@ -1286,7 +1285,8 @@ void jit_helper_adopt_open_upvalues(sv_vm_t *vm, sv_upvalue_t **open_upvalues) {
   }
 }
 
-ant_value_t jit_resume_in_interpreter(
+__attribute__((noinline))
+ant_value_t jit_resume_in_interpreter_on_clean_stack(
   sv_vm_t *vm, sv_closure_t *closure,
   ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
   ant_value_t *args, int argc,
@@ -1308,9 +1308,7 @@ ant_value_t jit_resume_in_interpreter(
   vm->jit.resume.vstack_sp  = (int)vstack_sp;
   vm->jit.resume.finally    = finally;
 
-  gc_scrub_dead_stack();
   ant_value_t final_this = this_val;
-  
   ant_value_t result = sv_execute_closure_entry(
     vm, closure, sv_closure_heap_value(vm->js, closure),
     super_val, new_target, this_val, args, argc, &final_this
