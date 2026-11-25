@@ -566,6 +566,12 @@ void stream_set_attached_state(ant_value_t stream_obj, void *state, stream_final
   if (!priv) return;
   priv->attached_state = state;
   priv->attached_state_finalize = finalize;
+  if (state && finalize) fixed_arena_note_finalizer(js_obj_ptr(stream_obj));
+}
+
+bool stream_object_holds_attached_state(ant_value_t stream_obj) {
+  stream_private_state_t *priv = stream_private_state(stream_obj);
+  return priv && priv->attached_state && priv->attached_state_finalize;
 }
 
 void stream_clear_attached_state(ant_value_t stream_obj) {

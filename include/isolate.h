@@ -500,6 +500,9 @@ struct ant_isolate_t {
       uint64_t last_forced_ns;
       uint8_t *prompt;
       uint32_t prompt_cap;
+      uint32_t *chunk_live;
+      uint32_t chunk_live_len;
+      uint32_t chunk_live_cap;
     } lazy;
     
     ant_object_t **mark_stack;

@@ -133,6 +133,8 @@ void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size);
 void gc_scrub_dead_stack(void);
 void gc_lazy_sweep_step(ant_t *js);
 void gc_lazy_sweep_finish(ant_t *js);
+void gc_lazy_sweep_idle(ant_t *js, int64_t budget_ms);
+
 void gc_closures_destroy(ant_t *js);
 void gc_objects_run_minor(ant_t *js);
 void gc_pin_existing_objects(ant_t *js);

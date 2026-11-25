@@ -60,7 +60,6 @@ static inline void js_clear_native(ant_value_t obj, uint32_t tag) {
 static inline void js_set_native(ant_value_t obj, void *ptr, uint32_t tag) {
   ant_object_t *o = js_obj_ptr(obj);
   if (!o || !tag) return;
-  fixed_arena_note_finalizer(o);
   
   if (o->native_tag == 0 || o->native_tag == tag) {
     o->native_ptr = ptr;

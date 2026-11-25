@@ -647,6 +647,7 @@ static bool gc_idle_major_due(ant_t *js) {
 
 bool gc_idle_wanted(ant_t *js) {
   if (sv_debug_unlikely(SV_DEBUG_GC_DISABLE) || js->gc_running) return false;
+  if (js->gc.lazy.pending) return true;
   if (gc_alloc_marker(js) < js->gc.idle_retry_at) return false;
   return gc_idle_major_due(js) || gc_young_count(js) >= js->gc.nursery_threshold / 4;
 }
@@ -658,6 +659,11 @@ static bool gc_idle_fits(uint64_t cost_ns, bool known, int64_t budget_ms) {
 
 void gc_idle(ant_t *js, int64_t budget_ms) {
   if (!gc_idle_wanted(js)) return;
+  
+  if (js->gc.lazy.pending) {
+    gc_lazy_sweep_idle(js, budget_ms);
+    return;
+  }
 
   js->gc.tick = 0;
   if (gc_idle_major_due(js) && gc_idle_fits(js->gc.major_cost_ns, js->gc.major_cost_ns != 0, budget_ms)) {

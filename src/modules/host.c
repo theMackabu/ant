@@ -23,6 +23,7 @@
 #include "modules/readline.h"
 #include "modules/rpc.h"
 #include "modules/server.h"
+#include "modules/stream.h"
 #include "modules/timer.h"
 #include "modules/tls.h"
 #include "modules/websocket.h"
@@ -113,6 +114,10 @@ void gc_mark_host_natives(ant_t *js, ant_value_t value, gc_mark_fn mark) {
 void gc_finalize_host_natives(ant_t *js, ant_value_t value) {
   gc_finalize_stream_object(js, value);
   gc_finalize_events_object(js, value);
+}
+
+bool gc_host_native_holds_resource(ant_t *js, ant_value_t value) {
+  return arraybuffer_object_holds_storage(js_obj_ptr(value)) || stream_object_holds_attached_state(value);
 }
 
 void gc_clear_host_weak_refs(ant_t *js, gc_weak_key_alive_fn alive) {

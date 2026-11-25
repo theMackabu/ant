@@ -2106,14 +2106,15 @@ static __attribute__((noinline)) void gc_lazy_sweep_slow_free(ant_t *js, ant_obj
   js->gc_objects_running = objects_running;
 }
 
-static inline bool gc_object_needs_prompt_release(const ant_object_t *obj) {
-  return obj->native_tag != 0 || (obj->finalizer && obj->finalizer != gc_shared_elements_finalize);
+static inline bool gc_object_needs_prompt_release(ant_t *js, ant_object_t *obj) {
+  return (obj->native_tag || obj->finalizer) && gc_host_native_holds_resource(js, js_obj_from_ptr(obj));
 }
 
 typedef struct {
   void *free_list;
   ant_object_t *old;
   size_t freed;
+  uint32_t live;
   bool finalizers;
 } gc_lazy_cells_t;
 
@@ -2136,7 +2137,8 @@ static void gc_lazy_sweep_cells(ant_t *js, uint8_t *base, size_t lo, size_t hi, 
     }
 
     if (obj->flags.gc_permanent || mark >= epoch) {
-      if (gc_object_needs_prompt_release(obj)) s->finalizers = true;
+      s->live++;
+      if (gc_object_needs_prompt_release(js, obj)) s->finalizers = true;
       if (obj->flags.gc_permanent) continue;
       if (!obj->flags.generation) obj->flags.generation = 1;
       obj->next = old;
@@ -2163,6 +2165,24 @@ static void gc_lazy_sweep_cells(ant_t *js, uint8_t *base, size_t lo, size_t hi, 
   s->old = old;
 }
 
+static uint32_t *gc_lazy_chunk_live(ant_t *js, uint32_t count) {
+  if (js->gc.lazy.chunk_live_cap < count) {
+    uint32_t *live = realloc(js->gc.lazy.chunk_live, count * sizeof(*live));
+    if (!live) return NULL;
+    js->gc.lazy.chunk_live = live;
+    js->gc.lazy.chunk_live_cap = count;
+  }
+  if (js->gc.lazy.chunk_live_len < count) {
+    memset(js->gc.lazy.chunk_live + js->gc.lazy.chunk_live_len, 0, (count - js->gc.lazy.chunk_live_len) * sizeof(uint32_t));
+    js->gc.lazy.chunk_live_len = count;
+  }
+  return js->gc.lazy.chunk_live;
+}
+
+static inline bool gc_lazy_chunk_was_dense(ant_t *js, uint32_t chunk, size_t cells) {
+  return chunk < js->gc.lazy.chunk_live_len && (size_t)js->gc.lazy.chunk_live[chunk] * 8 >= cells * 7;
+}
+
 static void gc_lazy_sweep_prompt_chunks(ant_t *js) {
   ant_fixed_arena_t *oa = &js->obj_arena;
   uint32_t end = js->gc.lazy.end_chunk;
@@ -2178,14 +2198,20 @@ static void gc_lazy_sweep_prompt_chunks(ant_t *js) {
   }
   memset(js->gc.lazy.prompt, 0, end + 1);
 
+  if (js->gc.lazy.chunk_live_len > oa->chunk_count) js->gc.lazy.chunk_live_len = oa->chunk_count;
+  uint32_t *live = gc_lazy_chunk_live(js, end + 1);
+
   js->gc.lazy.sweeping = true;
   gc_lazy_cells_t s = { .free_list = oa->free_list, .old = js->objects_old };
   for (uint32_t chunk = 0; chunk <= end; chunk++) {
-    if (!fixed_arena_chunk_has_finalizers(oa, chunk)) continue;
     size_t limit = chunk == end ? js->gc.lazy.end_off : fixed_arena_chunk_used(oa, chunk);
+    bool finalizers = fixed_arena_chunk_has_finalizers(oa, chunk);
+    if (!finalizers && !gc_lazy_chunk_was_dense(js, chunk, limit / oa->elem_size)) continue;
     s.finalizers = false;
+    s.live = 0;
     gc_lazy_sweep_cells(js, oa->chunks[chunk].base, 0, limit, &s);
-    if (!s.finalizers) fixed_arena_chunk_clear_finalizers(oa, chunk);
+    if (finalizers && !s.finalizers) fixed_arena_chunk_clear_finalizers(oa, chunk);
+    if (live) live[chunk] = s.live;
     js->gc.lazy.prompt[chunk] = 1;
   }
 
@@ -2195,7 +2221,7 @@ static void gc_lazy_sweep_prompt_chunks(ant_t *js) {
   js->gc.lazy.sweeping = false;
 }
 
-static void gc_lazy_sweep_run(ant_t *js, bool all) {
+static void gc_lazy_sweep_run(ant_t *js, bool all, uint64_t deadline_ns) {
   ant_fixed_arena_t *oa = &js->obj_arena;
   size_t elem = oa->elem_size;
   size_t batch = GC_LAZY_BATCH_CELLS * elem;
@@ -2209,7 +2235,7 @@ static void gc_lazy_sweep_run(ant_t *js, bool all) {
   gc_lazy_cells_t s = { .free_list = oa->free_list, .old = js->objects_old };
   size_t visited = 0;
 
-  while (all || !s.free_list) {
+  while (all || !s.free_list || (deadline_ns && gc_now_ns() < deadline_ns)) {
     uint32_t chunk = js->gc.lazy.chunk;
     size_t limit = chunk == js->gc.lazy.end_chunk ? js->gc.lazy.end_off : fixed_arena_chunk_used(oa, chunk);
     size_t lo = js->gc.lazy.off;
@@ -2238,7 +2264,9 @@ static void gc_lazy_sweep_run(ant_t *js, bool all) {
     size_t hi = limit - lo > batch ? lo + batch : limit;
     visited += (hi - lo) / elem;
     s.finalizers = false;
+    s.live = 0;
     gc_lazy_sweep_cells(js, oa->chunks[chunk].base, lo, hi, &s);
+    if (chunk < js->gc.lazy.chunk_live_len) js->gc.lazy.chunk_live[chunk] = (lo ? js->gc.lazy.chunk_live[chunk] : 0) + s.live;
     js->gc.lazy.off = hi;
   }
 
@@ -2247,7 +2275,7 @@ static void gc_lazy_sweep_run(ant_t *js, bool all) {
   js->gc.lazy.freed += s.freed;
   
   uint64_t spent_ns = timed ? gc_now_ns() - start_ns : 0;
-  if (all) {
+  if (all || deadline_ns) {
     js->gc.lazy.stat_forced += visited;
     js->gc.lazy.stat_forced_ns += spent_ns;
   } else {
@@ -2259,11 +2287,18 @@ static void gc_lazy_sweep_run(ant_t *js, bool all) {
 }
 
 __attribute__((noinline)) void gc_lazy_sweep_step(ant_t *js) {
-  if (js->gc.lazy.pending) gc_lazy_sweep_run(js, false);
+  if (js->gc.lazy.pending) gc_lazy_sweep_run(js, false, 0);
 }
 
 void gc_lazy_sweep_finish(ant_t *js) {
-  if (js && js->gc.lazy.pending) gc_lazy_sweep_run(js, true);
+  if (js && js->gc.lazy.pending) gc_lazy_sweep_run(js, true, 0);
+}
+
+void gc_lazy_sweep_idle(ant_t *js, int64_t budget_ms) {
+  if (!js->gc.lazy.pending) return;
+  if (budget_ms < 0) gc_lazy_sweep_run(js, true, 0);
+  else gc_lazy_sweep_run(js, false, gc_now_ns() + (uint64_t)budget_ms * 500000u);
+  gc_scrub_dead_stack();
 }
 
 static void gc_sweep(ant_t *js) {

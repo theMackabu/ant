@@ -775,7 +775,6 @@ void js_set_finalizer(ant_value_t obj, js_finalizer_fn fn) {
   
   Ant_Assert(!ant_array_is_shared(ptr), "shared array elements are released by the array finalizer");
   ptr->finalizer = fn;
-  if (fn) fixed_arena_note_finalizer(ptr);
 }
 
 static bool proto_set_would_cycle(ant_t *js, ant_value_t obj, const ant_object_t *ptr, ant_value_t proto) {

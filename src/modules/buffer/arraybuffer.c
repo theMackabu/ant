@@ -113,6 +113,15 @@ static void arraybuffer_finalize(ant_t *js, ant_object_t *obj) {
   free_array_buffer_data(js, data);
 }
 
+static void arraybuffer_set_finalizer(ant_value_t obj) {
+  js_set_finalizer(obj, arraybuffer_finalize);
+  fixed_arena_note_finalizer(js_obj_ptr(obj));
+}
+
+bool arraybuffer_object_holds_storage(const ant_object_t *obj) {
+  return obj->finalizer == arraybuffer_finalize;
+}
+
 bool buffer_is_binary_source(ant_value_t value) {
   if (buffer_get_typedarray_data(value)) return true;
   if (!is_object_type(value)) return false;
@@ -325,7 +334,7 @@ static ant_value_t js_arraybuffer_constructor(ant_params_t) {
 
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  js_set_finalizer(obj, arraybuffer_finalize);
+  arraybuffer_set_finalizer(obj);
 
   return obj;
 }
@@ -358,7 +367,7 @@ static ant_value_t js_arraybuffer_slice(ant_params_t) {
 
   if (is_special_object(proto)) js_set_proto_init(new_obj, proto);
   js_set_native(new_obj, new_data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  js_set_finalizer(new_obj, arraybuffer_finalize);
+  arraybuffer_set_finalizer(new_obj);
   
   return new_obj;
 }
@@ -514,7 +523,7 @@ ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer) {
   ant_value_t ab_obj = is_special_object(ab_proto) ? js_mkobj_with_proto(js, ab_proto) : Ant_Object_CreateBare(js);
   
   js_set_native(ab_obj, buffer, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  js_set_finalizer(ab_obj, arraybuffer_finalize);
+  arraybuffer_set_finalizer(ab_obj);
   buffer->ref_count++;
   
   return ab_obj;
@@ -527,7 +536,7 @@ ant_value_t create_shared_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer) {
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   
   js_set_native(obj, buffer, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  js_set_finalizer(obj, arraybuffer_finalize);
+  arraybuffer_set_finalizer(obj);
   buffer->ref_count++;
   
   return obj;
@@ -602,7 +611,7 @@ static ant_value_t js_sharedarraybuffer_constructor(ant_params_t) {
 
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  js_set_finalizer(obj, arraybuffer_finalize);
+  arraybuffer_set_finalizer(obj);
   
   return obj;
 }

@@ -61,7 +61,6 @@ bool regexp_literal_init_fast(
     obj->native_ptr = compiled;
     obj->native_tag = REGEXP_NATIVE_TAG;
     obj->finalizer = regexp_object_finalize;
-    fixed_arena_note_finalizer(obj);
     state->live_object_data++;
   }
 

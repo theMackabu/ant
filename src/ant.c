@@ -257,6 +257,7 @@ void Ant_Destroy(ant_t *js) {
 
   gc_lazy_sweep_finish(js);
   free(js->gc.lazy.prompt);
+  free(js->gc.lazy.chunk_live);
   
   js->gc.lazy.prompt = NULL;
   js->gc.lazy.prompt_cap = 0;

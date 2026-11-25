@@ -50,3 +50,4 @@ bool stream_is_closed(ant_value_t stream_obj);
 bool stream_get_auto_destroy(ant_value_t stream_obj);
 void stream_set_readable(ant_t *js, ant_value_t stream_obj, bool readable);
 void stream_set_attached_state(ant_value_t stream_obj, void *state, stream_finalize_fn finalize);
+bool stream_object_holds_attached_state(ant_value_t stream_obj);
