@@ -474,6 +474,29 @@ struct ant_isolate_t {
     bool realm_reach;
     bool parallel_mark;
     uint64_t parallel_cpu_ns;
+
+    gc_major_tally_t marked;
+    size_t shared_array_bytes;
+
+    struct {
+      bool pending;
+      bool sweeping;
+      uint8_t epoch;
+      uint32_t chunk;
+      uint32_t end_chunk;
+      size_t off;
+      size_t end_off;
+      size_t expected;
+      size_t freed;
+      size_t array_debt;
+      size_t overflow_debt;
+      size_t stat_demand;
+      size_t stat_forced;
+      size_t last_demand;
+      size_t last_forced;
+      uint8_t *prompt;
+      uint32_t prompt_cap;
+    } lazy;
     
     ant_object_t **mark_stack;
     size_t mark_sp;

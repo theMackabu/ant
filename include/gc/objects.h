@@ -34,6 +34,12 @@ typedef struct gc_func_mark_profile {
   uint64_t time_ns;
 } gc_func_mark_profile_t;
 
+typedef struct {
+  size_t objects;
+  size_t array_bytes;
+  size_t overflow_bytes;
+} gc_major_tally_t;
+
 static inline uint64_t gc_now_ns(void) {
 #ifdef ANT_WASM_EMBED
   return (uint64_t)(ant_wasm_now_ms() * 1000000.0);
@@ -113,6 +119,7 @@ struct ant_promise_state *gc_promise_state_alloc(ant_t *js);
 bool gc_obj_is_marked(ant_t *js, const ant_object_t *obj);
 bool gc_value_is_weak(ant_value_t value);
 bool gc_value_is_marked(ant_t *js, ant_value_t value);
+bool gc_object_is_dead(ant_t *js, const ant_object_t *obj);
 
 void gc_mark_str(ant_t *js, ant_value_t v);
 void gc_mark_value(ant_t *js, ant_value_t v);
@@ -123,12 +130,15 @@ void gc_mark_func_ref(ant_t *js, sv_func_t *func);
 void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count);
 void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size);
 
+void gc_scrub_dead_stack(void);
+void gc_lazy_sweep_step(ant_t *js);
+void gc_lazy_sweep_finish(ant_t *js);
 void gc_closures_destroy(ant_t *js);
 void gc_objects_run_minor(ant_t *js);
 void gc_pin_existing_objects(ant_t *js);
 void gc_object_free(ant_t *js, ant_object_t *obj);
 void gc_stack_live_ranges(ant_t *js, gc_stack_range_fn fn, void *ctx);
-void gc_scrub_dead_stack(void);
+void gc_shared_elements_finalize(ant_t *js, ant_object_t *obj);
 
 ant_value_t *gc_array_storage_alloc(ant_t *js, uint32_t cap);
 ant_value_t *gc_array_storage_grow(ant_t *js, ant_value_t *data, uint32_t old_cap, uint32_t new_cap);
@@ -139,7 +149,6 @@ size_t gc_array_storage_cached_bytes(ant_t *js);
 void gc_array_storage_trim(ant_t *js);
 void gc_array_storage_cache_destroy(ant_t *js);
 void gc_shared_elements_mark(ant_t *js, const gc_shared_elements_t *block);
-void gc_shared_elements_finalize(ant_t *js, ant_object_t *obj);
 void gc_root_pending_promise(ant_t *js, ant_object_t *obj);
 void gc_unroot_pending_promise(ant_t *js, ant_object_t *obj);
 
@@ -152,4 +161,22 @@ static inline void gc_shared_elements_retain(gc_shared_elements_t *block) {
 
 static inline gc_shared_elements_t *gc_shared_elements_of(ant_value_t *data) {
   return (gc_shared_elements_t *)(void *)((char *)data - offsetof(gc_shared_elements_t, values));
+}
+
+static inline __attribute__((always_inline)) 
+void gc_major_note_marked(ant_object_t *obj, gc_major_tally_t *tally) {
+  tally->objects++;
+  obj->flags.generation = 1;
+  
+  if (obj->type_tag == kTypeArray && obj->u.array.data && obj->finalizer != gc_shared_elements_finalize)
+    tally->array_bytes += sizeof(ant_value_t) * (size_t)obj->u.array.cap;
+  
+  if (__builtin_expect(obj->overflow_prop != NULL, 0) && obj->shape)
+    tally->overflow_bytes += sizeof(ant_value_t) * (size_t)ant_object_overflow_cap(obj);
+}
+
+static inline void gc_major_tally_add(gc_major_tally_t *into, const gc_major_tally_t *from) {
+  into->objects += from->objects;
+  into->array_bytes += from->array_bytes;
+  into->overflow_bytes += from->overflow_bytes;
 }

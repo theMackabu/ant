@@ -43,6 +43,7 @@ typedef struct {
   size_t values_len, values_cap;
   uint64_t waited_ns;
   uint64_t busy_ns;
+  gc_major_tally_t tally;
 } gc_par_worker_t;
 
 typedef struct {
@@ -214,15 +215,21 @@ static bool gc_par_take(gc_par_worker_t *w) {
 static void gc_par_work(gc_par_worker_t *w) {
   ant_t *js = gc_par.js;
   uint64_t start = gc_now_ns();
+  
   w->waited_ns = 0;
+  gc_major_tally_t tally = {0};
+  
   do {
     while (w->stack.len > w->stack.base) {
       ant_object_t *obj = w->stack.items[--w->stack.len];
+      gc_major_note_marked(obj, &tally);
       if (!gc_par_scan_plain(js, w, obj)) gc_par_defer_object(w, obj);
       if (w->stack.len - w->stack.base >= GC_PAR_DONATE_MIN && __atomic_load_n(&gc_par.idle_hint, __ATOMIC_RELAXED)) gc_par_donate(w);
     }
     w->stack.len = w->stack.base = 0;
   } while (gc_par_take(w));
+  
+  w->tally = tally;
   uint64_t elapsed = gc_now_ns() - start;
   w->busy_ns = elapsed > w->waited_ns ? elapsed - w->waited_ns : 0;
 }
@@ -300,7 +307,11 @@ bool gc_parallel_drain(ant_t *js, uint32_t other_refs, gc_parallel_scan_fn scan)
   gc_par.joined = 0;
   gc_par.exited = 0;
   
-  for (uint32_t i = 1; i <= gc_par.helpers; i++) gc_par.workers[i].busy_ns = 0;
+  for (uint32_t i = 1; i <= gc_par.helpers; i++) {
+    gc_par.workers[i].busy_ns = 0;
+    gc_par.workers[i].tally = (gc_major_tally_t){0};
+  }
+  
   gc_par.finished = false;
   gc_par.job++;
   
@@ -318,6 +329,7 @@ bool gc_parallel_drain(ant_t *js, uint32_t other_refs, gc_parallel_scan_fn scan)
   
   for (uint32_t i = 0; i <= gc_par.helpers; i++) {
     gc_par_worker_t *w = &gc_par.workers[i];
+    gc_major_tally_add(&js->gc.marked, &w->tally);
     for (size_t j = 0; j < w->objects_len; j++) scan(js, w->objects[j]);
     for (size_t j = 0; j < w->values_len; j++) gc_mark_value(js, w->values[j]);
     w->objects_len = 0;
