@@ -61,13 +61,16 @@ bool regexp_literal_init_fast(
     obj->native_ptr = compiled;
     obj->native_tag = REGEXP_NATIVE_TAG;
     obj->finalizer = regexp_object_finalize;
+    fixed_arena_note_finalizer(obj);
     state->live_object_data++;
   }
 
   ant_shape_transition_existing(&obj->shape, state->instance_shape.shape);
   obj->prop_count = 1;
+  
   ant_object_prop_set_unchecked(obj, REGEXP_LAST_INDEX_SLOT, Ant_Value_FromNumber(0));
   obj->flags.regexp_brand = 1;
+  
   return true;
 }
 

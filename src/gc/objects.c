@@ -2104,8 +2104,8 @@ static __attribute__((noinline)) void gc_lazy_sweep_slow_free(ant_t *js, ant_obj
   js->gc_objects_running = objects_running;
 }
 
-static inline bool gc_finalizer_is_prompt(js_finalizer_fn fn) {
-  return fn && fn != gc_shared_elements_finalize;
+static inline bool gc_object_needs_prompt_release(const ant_object_t *obj) {
+  return obj->native_tag != 0 || (obj->finalizer && obj->finalizer != gc_shared_elements_finalize);
 }
 
 typedef struct {
@@ -2134,7 +2134,7 @@ static void gc_lazy_sweep_cells(ant_t *js, uint8_t *base, size_t lo, size_t hi, 
     }
 
     if (obj->flags.gc_permanent || mark >= epoch) {
-      if (gc_finalizer_is_prompt(obj->finalizer)) s->finalizers = true;
+      if (gc_object_needs_prompt_release(obj)) s->finalizers = true;
       if (obj->flags.gc_permanent) continue;
       if (!obj->flags.generation) obj->flags.generation = 1;
       obj->next = old;
@@ -2168,6 +2168,7 @@ static void gc_lazy_sweep_prompt_chunks(ant_t *js) {
     uint8_t *prompt = realloc(js->gc.lazy.prompt, end + 1);
     if (!prompt) {
       if (js->gc.lazy.prompt) memset(js->gc.lazy.prompt, 0, js->gc.lazy.prompt_cap);
+      gc_lazy_sweep_finish(js);
       return;
     }
     js->gc.lazy.prompt = prompt;
@@ -2200,6 +2201,9 @@ static void gc_lazy_sweep_run(ant_t *js, bool all) {
   if (js->gc.lazy.sweeping) return;
   js->gc.lazy.sweeping = true;
 
+  bool timed = sv_debug_unlikely(SV_DEBUG_GC_TRACE);
+  uint64_t start_ns = timed ? gc_now_ns() : 0;
+  
   gc_lazy_cells_t s = { .free_list = oa->free_list, .old = js->objects_old };
   size_t visited = 0;
 
@@ -2240,8 +2244,15 @@ static void gc_lazy_sweep_run(ant_t *js, bool all) {
   js->objects_old = s.old;
   js->gc.lazy.freed += s.freed;
   
-  if (all) js->gc.lazy.stat_forced += visited;
-  else js->gc.lazy.stat_demand += visited;
+  uint64_t spent_ns = timed ? gc_now_ns() - start_ns : 0;
+  if (all) {
+    js->gc.lazy.stat_forced += visited;
+    js->gc.lazy.stat_forced_ns += spent_ns;
+  } else {
+    js->gc.lazy.stat_demand += visited;
+    js->gc.lazy.stat_demand_ns += spent_ns;
+  }
+  
   js->gc.lazy.sweeping = false;
 }
 
@@ -2325,13 +2336,19 @@ void gc_pin_existing_objects(ant_t *js) {
 
 uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   if (!js) return 0;
-  uint64_t mark_start_ns = gc_now_ns();
   
+  uint64_t mark_start_ns = gc_now_ns();
   gc_lazy_sweep_finish(js);
+  
   js->gc.lazy.last_demand = js->gc.lazy.stat_demand;
   js->gc.lazy.last_forced = js->gc.lazy.stat_forced;
+  js->gc.lazy.last_demand_ns = js->gc.lazy.stat_demand_ns;
+  js->gc.lazy.last_forced_ns = js->gc.lazy.stat_forced_ns;
+  
   js->gc.lazy.stat_demand = 0;
   js->gc.lazy.stat_forced = 0;
+  js->gc.lazy.stat_demand_ns = 0;
+  js->gc.lazy.stat_forced_ns = 0;
   js->gc.marked = (gc_major_tally_t){0};
 
   js->gc_objects_running = true;
@@ -2469,9 +2486,14 @@ uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
 
 void gc_objects_run_minor(ant_t *js) {
   if (!js) return;
-
   uint8_t next_epoch = (uint8_t)(js->gc.obj_epoch + 1u);
-  if (next_epoch == 0 || next_epoch == ANT_GC_DEAD) gc_lazy_sweep_finish(js);
+  
+  bool weak_fallback =
+    js->weak_gc.registry_overflow   || 
+    js->weak_gc.minor_edge_overflow || 
+    js->weak_gc.kept_alive_overflow;
+    
+  if (next_epoch == 0 || next_epoch == ANT_GC_DEAD || weak_fallback) gc_lazy_sweep_finish(js);
   
   js->gc_objects_running = true;
   js->gc.epoch++;

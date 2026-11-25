@@ -39,12 +39,13 @@ __attribute__((noinline, cold)) void gc_trace_major_print(ant_t *js, const gc_tr
   fprintf(stderr,
     "gc: major n=%" PRIu64 " at=%.1fms ms=%.2f"
     " mark=%.2f sweep=%.2f strings=%.2f ropes=%.2f trim=%.2f"
-    " live=%zu->%zu arrays=%.1f->%.1fMB lazy=%zu+%zu"
+    " live=%zu->%zu arrays=%.1f->%.1fMB lazy=%zu+%zu lazy_ms=%.2f+%.2f"
     " growth=%u time_share=%u work_share=%u every_n=%u next=%zu units=%u\n",
     n, at, total,
     mark, sweep, strings, ropes, trim,
     trace->live_before, js->obj_arena.live_count, gc_trace_mb(trace->arrays_before), gc_trace_mb(js->alloc_bytes.arrays),
     js->gc.lazy.last_demand, js->gc.lazy.last_forced,
+    (double)js->gc.lazy.last_demand_ns / 1e6, (double)js->gc.lazy.last_forced_ns / 1e6,
     js->gc.major_live_growth_x256, js->gc.major_time_share_ewma, js->gc.major_work_share_ewma,
     js->gc.major_every_n, gc_live_major_threshold(js), js->code_units.unit_count);
 }

@@ -494,6 +494,10 @@ struct ant_isolate_t {
       size_t stat_forced;
       size_t last_demand;
       size_t last_forced;
+      uint64_t stat_demand_ns;
+      uint64_t stat_forced_ns;
+      uint64_t last_demand_ns;
+      uint64_t last_forced_ns;
       uint8_t *prompt;
       uint32_t prompt_cap;
     } lazy;

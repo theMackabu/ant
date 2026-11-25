@@ -389,6 +389,7 @@ void gc_run(ant_t *js) {
 void gc_run_complete(ant_t *js) {
   gc_run(js);
   gc_lazy_sweep_finish(js);
+  gc_scrub_dead_stack();
 }
 
 void gc_run_minor(ant_t *js) {
