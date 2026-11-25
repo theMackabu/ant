@@ -2043,8 +2043,10 @@ __attribute__((noinline, cold)) void sv_gf_poly_keep(
   *e = *keep;
 }
 
+__attribute__((noinline))
 void sv_gf_ic_fill(
-  ant_t *js, sv_ic_entry_t *ic, ant_object_t *receiver, ant_object_t *holder, uint32_t prop_idx, bool accessor
+  ant_t *js, sv_ic_entry_t *ic, ant_object_t *receiver, 
+  ant_object_t *holder, uint32_t prop_idx, bool accessor
 ) {
   sv_ic_set_cached_shape(js, ic, receiver->shape);
   
@@ -2060,7 +2062,8 @@ void sv_gf_ic_fill(
 }
 
 bool sv_try_symbol_description_ic(
-  ant_t *js, ant_value_t obj, sv_atom_t *a, sv_ic_entry_t *ic, ant_value_t *out
+  ant_t *js, ant_value_t obj, sv_atom_t *a, 
+  sv_ic_entry_t *ic, ant_value_t *out
 ) {
   if (!ic) return false;
   ant_value_t symbol = obj;

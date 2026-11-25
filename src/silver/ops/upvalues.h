@@ -240,7 +240,8 @@ static inline void sv_closure_link_arguments(ant_t *js, sv_frame_t *frame, sv_cl
       js_arguments_link_upvalue(js, frame, closure->upvalues[i]);
 }
 
-static inline ant_value_t sv_op_closure(
+__attribute__((noinline))
+static ant_value_t sv_op_closure(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
   sv_func_t *func, uint8_t *ip
 ) {

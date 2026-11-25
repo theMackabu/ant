@@ -25,6 +25,7 @@ libant_tests = [
   'gc-rope-table-oom',
   'jit-entry-stub',
   'gc-jit-entry-saves',
+  'gc-jit-resume',
   'gc-code-stack-segments',
   'gc-uv-segments',
   'gc-stack-residue',

@@ -344,6 +344,7 @@ void js_arguments_detach(ant_t *js, ant_value_t obj) {
   GC_ROOT_RESTORE(js, root_mark);
 }
 
+__attribute__((noinline))
 void js_arguments_sync_slot(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value) {
   ant_arguments_state_t *state = js_arguments_state(obj);
   if (!state || state->frame_index < 0 ||

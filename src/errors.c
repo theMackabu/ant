@@ -4,23 +4,25 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-#include "modules/proxy.h"
 #include "errors.h"
 #include "utf8.h"
+#include "output.h"
+#include "props.h"
 #include "cfunc.h"
 #include "realm.h"
-#include "error_render.h"
-#include "internal.h"
-#include "descriptors.h"
-#include "output.h"
 #include "gc/roots.h"
+#include "internal.h"
+#include "error_render.h"
+#include "descriptors.h"
+
+#include "modules/io.h"
+#include "modules/proxy.h"
+#include "modules/iterator.h"
+#include "modules/bigint.h"
+
+#include "silver/vm.h"
 #include "silver/engine.h"
 #include "silver/stack_trace.h"
-#include "modules/io.h"
-#include "modules/bigint.h"
-#include "silver/call.h"
-#include "modules/iterator.h"
-#include "props.h"
 
 void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack, const char *prefix) {
   if (is_err(value)) {
@@ -403,6 +405,7 @@ ant_value_t Ant_Error_CreateFormatted(ant_t *js, js_err_type_t err_type, const c
   return value;
 }
 
+__attribute__((noinline))
 ant_value_t js_throw_unless(ant_t *js, ant_value_t value, js_throw_caught_fn caught) {
   if (is_err(value)) {
     Ant_Exception_Set(js, value);
