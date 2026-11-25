@@ -299,6 +299,7 @@ export function targets() {
     'test_gc_compiled_code.cjs',
     'test_error_cause_proxy_options.cjs',
     'test_gc_import_job_roots.mjs',
+    'test_gc_lazy_sweep.cjs',
     'test_gc_minor_backlog_cost.cjs',
     'test_gc_native_buffers.cjs',
     'test_gc_osr_locals_copy.cjs',

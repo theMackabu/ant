@@ -1,6 +1,7 @@
 #pragma once
 
 #include "isolate.h"
+#include "gc/objects.h"
 
 static inline ant_fixed_arena_t *ant_object_arena_for(ant_t *js, uint32_t inobj_limit) {
   if (inobj_limit <= ANT_INOBJ_BASE_SLOTS) return &js->obj_arena;
@@ -8,9 +9,14 @@ static inline ant_fixed_arena_t *ant_object_arena_for(ant_t *js, uint32_t inobj_
 }
 
 static inline ant_object_t *ant_object_cell_alloc(ant_t *js, uint32_t inobj_limit) {
-  if (inobj_limit <= ANT_INOBJ_BASE_SLOTS) return fixed_arena_alloc_uninit(&js->obj_arena);
+  if (inobj_limit <= ANT_INOBJ_BASE_SLOTS) {
+    if (__builtin_expect(!js->obj_arena.free_list && js->gc.lazy.pending, 0)) gc_lazy_sweep_step(js);
+    return fixed_arena_alloc_uninit(&js->obj_arena);
+  }
+  
   ant_object_t *obj = fixed_arena_alloc_uninit(ant_object_arena_for(js, inobj_limit));
   if (obj) js->obj_arena.live_count++;
+  
   return obj;
 }
 

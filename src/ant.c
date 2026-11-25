@@ -255,8 +255,19 @@ void Ant_Destroy(ant_t *js) {
     free(entry);
   }
 
+  gc_lazy_sweep_finish(js);
+  free(js->gc.lazy.prompt);
+  
+  js->gc.lazy.prompt = NULL;
+  js->gc.lazy.prompt_cap = 0;
+  
   while (js->objects || js->objects_old || js->permanent_objects) {
-    ant_object_t *lists[] = { js->objects, js->objects_old, js->permanent_objects };
+    ant_object_t *lists[] = { 
+      js->objects, 
+      js->objects_old, 
+      js->permanent_objects 
+    };
+    
     js->objects = NULL;
     js->objects_old = NULL;
     js->permanent_objects = NULL;

@@ -245,6 +245,8 @@ static ant_value_t js_stats_fn(ant_params_t) {
   size_t proxy_bytes    = 0;
   size_t exotic_bytes   = 0;
 
+  gc_lazy_sweep_finish(js);
+  
   for (int pass = 0; pass < 3; pass++) {
     ant_object_t *head = pass == 0 
       ? js->objects : pass == 1 
