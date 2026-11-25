@@ -48,7 +48,7 @@ static void route_debugger_enable(inspector_client_t *client, int id, yyjson_val
 }
 
 static void route_collect_garbage(inspector_client_t *client, int id, yyjson_val *params) {
-  gc_run(client->js);
+  gc_run_complete(client->js);
   inspector_send_empty_result(client, id);
 }
 

@@ -1995,7 +1995,7 @@ static void opt_field_case_add(opt_field_case_t *cases, uint32_t *count, const o
 
 static ant_object_t *opt_live_object(ant_t *js, ant_value_t value) {
   ant_object_t *object = js_obj_ptr(js_as_obj(value));
-  return object && ant_object_arena_contains(js, object) && object->mark_epoch != ANT_GC_DEAD ? object : NULL;
+  return object && ant_object_arena_contains(js, object) && !gc_object_is_dead(js, object) ? object : NULL;
 }
 
 static ant_object_t *opt_prototype_object(ant_t *js, ant_value_t value) {

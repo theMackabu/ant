@@ -96,6 +96,11 @@ static size_t gc_offheap_live(ant_t *js) {
   return js->gc.overflow_live + ant_shape_total_bytes(js) + js->buffers.bytes;
 }
 
+void gc_offheap_settled(ant_t *js) {
+  size_t live = gc_offheap_live(js);
+  if (live < js->gc.offheap_last_live) js->gc.offheap_last_live = live;
+}
+
 static size_t gc_offheap_major_threshold(ant_t *js) {
   size_t last = js->gc.offheap_last_live;
   return last + (last > GC_OFFHEAP_MAJOR_FLOOR ? last : GC_OFFHEAP_MAJOR_FLOOR);
@@ -381,6 +386,11 @@ void gc_run(ant_t *js) {
   gc_scrub_dead_stack();
 }
 
+void gc_run_complete(ant_t *js) {
+  gc_run(js);
+  gc_lazy_sweep_finish(js);
+}
+
 void gc_run_minor(ant_t *js) {
   if (sv_debug_unlikely(SV_DEBUG_GC_DISABLE)) return;
   js->gc_running = true;
@@ -598,7 +608,7 @@ bool gc_alloc_due(ant_t *js) {
 
 __attribute__((noinline)) bool gc_reclaim_arena(ant_t *js, const ant_fixed_arena_t *arena) {
   if (sv_debug_unlikely(SV_DEBUG_GC_DISABLE) || js->gc_running) return false;
-  gc_run(js);
+  gc_run_complete(js);
   size_t capacity = arena->limit / arena->elem_size;
   return arena->live_count + capacity / GC_RECLAIM_MIN_FREE_DIVISOR < capacity;
 }
@@ -651,7 +661,7 @@ void gc_idle(ant_t *js, int64_t budget_ms) {
   js->gc.tick = 0;
   if (gc_idle_major_due(js) && gc_idle_fits(js->gc.major_cost_ns, js->gc.major_cost_ns != 0, budget_ms)) {
     js->minor_gc_count = 0;
-    gc_run(js);
+    gc_run_complete(js);
   }
   
   else if (

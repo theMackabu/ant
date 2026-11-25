@@ -34,6 +34,8 @@ static constexpr size_t GC_OFFHEAP_MAJOR_FLOOR = 32u * 1024u * 1024u;
 
 void gc_state_init(ant_t *js);
 void gc_run(ant_t *js);
+void gc_run_complete(ant_t *js);
+void gc_offheap_settled(ant_t *js);
 void gc_run_minor(ant_t *js);
 bool gc_safepoint(ant_t *js);
 void gc_refresh_alloc_limit(ant_t *js);

@@ -7159,7 +7159,7 @@ static ant_value_t builtin_fs_opendirSync(ant_params_t) {
 
   if (rc == UV_EMFILE || rc == UV_ENFILE) {
     uv_fs_req_cleanup(&req);
-    gc_run(js);
+    gc_run_complete(js);
     rc = uv_fs_opendir(NULL, &req, opts.path, NULL);
   }
 
@@ -7186,7 +7186,7 @@ static void on_opendir_complete(uv_fs_t *uv_req) {
 
   if ((rc == UV_EMFILE || rc == UV_ENFILE) && !req->retried) {
     req->retried = true;
-    gc_run(js);
+    gc_run_complete(js);
     if (uv_fs_opendir(js->loop, &req->uv_req, req->path, on_opendir_complete) == 0) return;
   }
 
