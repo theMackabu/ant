@@ -67,6 +67,32 @@ static void stale_permanent_mark(ant_t *js) {
   GC_ROOT_RESTORE(js, roots);
 }
 
+static void stale_pinned_root_mark(ant_t *js) {
+  GC_ROOT_SAVE(roots, js);
+  ant_value_t pinned = Ant_Object_CreateBare(js);
+  assert(gc_pin_permanent(js, pinned));
+  gc_run(js);
+  gc_run(js);
+
+  ant_object_t *obj = js_obj_ptr(pinned);
+  uint8_t stale = obj->mark_epoch;
+  bool wrapped = false;
+  for (uint8_t prev = js->gc.obj_epoch; !wrapped || next_epoch(js->gc.obj_epoch) != stale; prev = js->gc.obj_epoch) {
+    gc_run_minor(js);
+    if (js->gc.obj_epoch < prev) {
+      wrapped = true;
+      assert(obj->mark_epoch != stale);
+    }
+  }
+
+  ant_value_t child = Ant_Object_CreateBare(js);
+  js_set(js, pinned, "child", child);
+  gc_run(js);
+  assert(js->gc.obj_epoch == stale);
+  assert(alive(js, child) && gc_obj_is_marked(js, js_obj_ptr(child)));
+  GC_ROOT_RESTORE(js, roots);
+}
+
 int main(void) {
   ant_t *js = Ant_Create(nullptr);
   assert(js);
@@ -75,6 +101,7 @@ int main(void) {
   for (unsigned gap = 248; gap <= 262; gap++) minors_between_majors(js, gap);
 
   stale_permanent_mark(js);
+  stale_pinned_root_mark(js);
 
   Ant_Destroy(js);
   puts("PASS mark epochs never collide with live objects across 8-bit wraps");

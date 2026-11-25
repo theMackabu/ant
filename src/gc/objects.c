@@ -100,6 +100,8 @@ bool gc_obj_is_marked(ant_t *js, const ant_object_t *obj) {
 
 static void gc_obj_epoch_wrapped(ant_t *js) {
   if (!js) return;
+  for (size_t i = 0; i < js->permanent_root_len; i++)
+    js->permanent_roots[i]->mark_epoch = 0;
   for (ant_object_t *o = js->objects; o; o = o->next)
     if (o->mark_epoch != ANT_GC_DEAD) o->mark_epoch = 0;
   for (ant_object_t *o = js->objects_old; o; o = o->next)
