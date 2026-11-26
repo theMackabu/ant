@@ -15,6 +15,9 @@ typedef void (*gc_mark_fn)(ant_t *js, ant_value_t v);
 #define GC_CORE_MARK(name) void gc_mark_##name(ant_t *js, gc_mark_fn mark);
 #include "gc/module_hooks.h"
 
+#define GC_CORE_WEAK(name) void gc_clear_##name##_weak_refs(ant_t *js, gc_weak_key_alive_fn alive);
+#include "gc/module_hooks.h"
+
 #define GC_NATIVE_MARK(name) void gc_mark_##name(ant_t *js, ant_value_t value, gc_mark_fn mark);
 #include "gc/module_hooks.h"
 

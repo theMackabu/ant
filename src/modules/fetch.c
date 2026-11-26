@@ -38,6 +38,7 @@ struct fetch_request_s {
   ant_value_t request_obj;
   ant_value_t response_obj;
   ant_value_t abort_listener;
+  ant_value_t body_cancel;
   ant_value_t upload_reader;
   ant_value_t upload_read_promise;
   ant_http_request_t *http_req;
@@ -65,6 +66,9 @@ static void destroy_fetch_request(fetch_request_t *req) {
 
   if (abort_signal_is_signal(signal) && is_callable(req->abort_listener))
     abort_signal_remove_listener(req->js, signal, req->abort_listener);
+  
+  if (is_object_type(req->body_cancel)) 
+    js_clear_native(req->body_cancel, FETCH_REQUEST_NATIVE_TAG);
 
   Ant_List_Remove(req);
   free(req);
@@ -493,10 +497,8 @@ static void fetch_http_on_response(ant_http_request_t *http_req, const ant_http_
     return;
   }
 
-  stream = rs_create_stream(
-    js, Ant_Value_Undefined, 
-    js_heavy_mkfun_native(js, fetch_response_body_cancel, req, FETCH_REQUEST_NATIVE_TAG), 1.0
-  );
+  req->body_cancel = js_heavy_mkfun_native(js, fetch_response_body_cancel, req, FETCH_REQUEST_NATIVE_TAG);
+  stream = rs_create_stream(js, Ant_Value_Undefined, req->body_cancel, 1.0);
   
   if (is_err(stream)) {
     fetch_reject(req, stream);
@@ -988,6 +990,7 @@ ant_value_t ant_fetch(ant_params_t) {
   req->request_obj = request_obj;
   req->response_obj = Ant_Value_Undefined;
   req->abort_listener = Ant_Value_Undefined;
+  req->body_cancel = Ant_Value_Undefined;
   req->upload_reader = Ant_Value_Undefined;
   req->upload_read_promise = Ant_Value_Undefined;
   req->refs = 1;
@@ -1031,6 +1034,7 @@ void gc_mark_fetch(ant_t *js, gc_mark_fn mark) {
     mark(js, req->request_obj);
     mark(js, req->response_obj);
     mark(js, req->abort_listener);
+    mark(js, req->body_cancel);
     mark(js, req->upload_reader);
     mark(js, req->upload_read_promise);
   }

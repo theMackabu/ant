@@ -2436,6 +2436,8 @@ uint64_t gc_objects_run(ant_t *js, gc_extra_roots_fn extra_roots) {
   
   opt_tier_gc_weak(js);
   gc_clear_host_weak_refs(js, gc_weak_key_alive);
+  #define GC_CORE_WEAK(name) gc_clear_##name##_weak_refs(js, gc_weak_key_alive);
+  #include "gc/module_hooks.h"
   gc_age_regex_cache(js, false);
   ant_realm_collect(js);
   
@@ -2567,6 +2569,8 @@ void gc_objects_run_minor(ant_t *js) {
   );
   
   gc_clear_host_weak_refs(js, gc_weak_key_alive);
+  #define GC_CORE_WEAK(name) gc_clear_##name##_weak_refs(js, gc_weak_key_alive);
+  #include "gc/module_hooks.h"
   js->gc.minor = false;
 
   gc_age_regex_cache(js, true);

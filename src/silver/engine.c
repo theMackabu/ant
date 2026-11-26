@@ -14,36 +14,38 @@
 #include <sys/mman.h>
 #endif
 
-#include "silver/call.h"
 #include "silver/feedback.h"
 #include "silver/jit.h"
-#include "modules/promise.h"
-#include "modules/regex.h"
-#include "silver/glue.h"
+#include "silver/call.h" // IWYU pragma: keep
+#include "silver/glue.h" // IWYU pragma: keep
+
+#include "modules/promise.h" // IWYU pragma: keep
+#include "modules/regex.h"   // IWYU pragma: keep
+
 #define SV_OPS_IMPLEMENTATION
-#include "ops/literals.h"
-#include "ops/stack.h"
-#include "ops/locals.h"
 #include "ops/upvalues.h"
-#include "ops/globals.h"
-#include "ops/property.h"
-#include "ops/optional.h"
-#include "ops/private.h"
-#include "ops/super.h"
 #include "ops/arithmetic.h"
 #include "ops/comparison.h"
-#include "ops/bitwise.h"
-#include "ops/unary.h"
-#include "ops/control.h"
-#include "ops/calls.h"
-#include "ops/returns.h"
 #include "ops/exceptions.h"
 #include "ops/async.h"
-#include "ops/iteration.h"
-#include "ops/generators.h"
-#include "ops/using.h"
-#include "ops/objects.h"
-#include "ops/coercion.h"
+#include "ops/literals.h"   // IWYU pragma: keep
+#include "ops/stack.h"      // IWYU pragma: keep
+#include "ops/locals.h"     // IWYU pragma: keep
+#include "ops/globals.h"    // IWYU pragma: keep
+#include "ops/property.h"   // IWYU pragma: keep
+#include "ops/optional.h"   // IWYU pragma: keep
+#include "ops/private.h"    // IWYU pragma: keep
+#include "ops/super.h"      // IWYU pragma: keep
+#include "ops/bitwise.h"    // IWYU pragma: keep
+#include "ops/unary.h"      // IWYU pragma: keep
+#include "ops/control.h"    // IWYU pragma: keep
+#include "ops/calls.h"      // IWYU pragma: keep
+#include "ops/returns.h"    // IWYU pragma: keep
+#include "ops/iteration.h"  // IWYU pragma: keep
+#include "ops/generators.h" // IWYU pragma: keep
+#include "ops/using.h"      // IWYU pragma: keep
+#include "ops/objects.h"    // IWYU pragma: keep
+#include "ops/coercion.h"   // IWYU pragma: keep
 #undef SV_OPS_IMPLEMENTATION
 
 #ifdef ANT_WASM_EMBED
@@ -696,7 +698,7 @@ void sv_activation_seal(ant_t *js, sv_activation_t *act) {
   for (int i = 0; i < act->frame_count; i++) {
     ant_value_t args_obj = act->frames[i].arguments_obj;
     if (vtype(args_obj) == kTypeUndefined) continue;
-    if (js_obj_ptr(args_obj)->mark_epoch == ANT_GC_DEAD) continue;
+    if (gc_object_is_dead(js, js_obj_ptr(args_obj))) continue;
     js_arguments_detach(js, args_obj);
   }
 }

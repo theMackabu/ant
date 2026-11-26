@@ -27,6 +27,7 @@ GC_MODULE_MARK(abort)
 GC_MODULE_MARK(wasm)
 GC_MODULE_MARK(napi)
 GC_MODULE_MARK(rpc)
+GC_MODULE_MARK(inspector)
 #undef GC_MODULE_MARK
 #endif
 
@@ -40,7 +41,13 @@ GC_MODULE_WEAK(wasm)
 #ifdef GC_CORE_MARK
 GC_CORE_MARK(symbols)
 GC_CORE_MARK(iterators)
+GC_CORE_MARK(descriptors)
 #undef GC_CORE_MARK
+#endif
+
+#ifdef GC_CORE_WEAK
+GC_CORE_WEAK(descriptors)
+#undef GC_CORE_WEAK
 #endif
 
 #ifdef GC_NATIVE_MARK

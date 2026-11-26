@@ -1,6 +1,13 @@
 #include "wasm_internal.h"
 
 void gc_clear_wasm_weak_refs(ant_t *js, gc_weak_key_alive_fn alive) {
+  for (wasm_extern_handle_t *handle = js->wasm_memory_views, *next; handle; handle = next) {
+    next = handle->next;
+    if (is_object_type(handle->memory_buffer) && alive(js, handle->memory_buffer)) continue;
+    handle->memory_buffer = Ant_Value_Undefined;
+    Ant_List_Remove(handle);
+  }
+
   ant_ptr_pair_map_t *owners = &js->wasm_instance_owners;
   if (!owners->entries) return;
   for (uint32_t i = 0; i <= owners->mask; i++) {

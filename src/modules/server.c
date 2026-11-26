@@ -738,9 +738,18 @@ static ant_value_t server_event_source(ant_params_t) {
   js_set(js, obj, "response", response);
   js_set(js, obj, "_stream", stream);
   js_set(js, obj, "_controller", controller);
-  js_set(js, obj, "send", js_heavy_mkfun_native(js, server_sse_send, state, SERVER_SSE_NATIVE_TAG));
-  js_set(js, obj, "comment", js_heavy_mkfun_native(js, server_sse_comment, state, SERVER_SSE_NATIVE_TAG));
-  js_set(js, obj, "close", js_heavy_mkfun_native(js, server_sse_close, state, SERVER_SSE_NATIVE_TAG));
+  
+  ant_value_t send_fn = js_heavy_mkfun_native(js, server_sse_send, state, SERVER_SSE_NATIVE_TAG);
+  ant_value_t comment_fn = js_heavy_mkfun_native(js, server_sse_comment, state, SERVER_SSE_NATIVE_TAG);
+  ant_value_t close_fn = js_heavy_mkfun_native(js, server_sse_close, state, SERVER_SSE_NATIVE_TAG);
+  
+  js_set_slot_wb(js, send_fn, SLOT_ENTRIES, obj);
+  js_set_slot_wb(js, comment_fn, SLOT_ENTRIES, obj);
+  js_set_slot_wb(js, close_fn, SLOT_ENTRIES, obj);
+  
+  js_set(js, obj, "send", send_fn);
+  js_set(js, obj, "comment", comment_fn);
+  js_set(js, obj, "close", close_fn);
   
   return obj;
 }

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "gc.h"
+#include "gc/modules.h"
 #include "hash.h"
 #include "shapes.h"
 #include "stringify.h"
@@ -585,6 +586,23 @@ void js_set_sym_setter_desc(ant_t *js, ant_value_t obj, ant_value_t sym, ant_val
     false, false, Ant_Value_Undefined,
     true, true, setter
   );
+}
+
+void gc_mark_descriptors(ant_t *js, gc_mark_fn mark) {
+  descriptor_entry_t *entry, *tmp;
+  HASH_ITER(hh, js->desc_registry, entry, tmp) {
+    if (entry->has_getter) mark(js, entry->getter);
+    if (entry->has_setter) mark(js, entry->setter);
+  }
+}
+
+void gc_clear_descriptors_weak_refs(ant_t *js, gc_weak_key_alive_fn alive) {
+  descriptor_entry_t *entry, *tmp;
+  HASH_ITER(hh, js->desc_registry, entry, tmp) {
+    if (alive(js, mkval(kTypeObject, entry->obj_off))) continue;
+    HASH_DEL(js->desc_registry, entry);
+    free(entry);
+  }
 }
 
 void js_descriptor_registry_cleanup(ant_t *js) {

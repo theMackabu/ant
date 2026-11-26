@@ -24,7 +24,7 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
-#include "silver/call.h"
+#include "silver/vm.h"
 
 #include "modules/buffer.h"
 #include "modules/ffi.h"
@@ -744,6 +744,7 @@ static void ffi_callback_trampoline(ffi_cif *cif, void *ret, void **args, void *
   ant_t *js = callback->js;
   const ffi_signature_t *signature = &callback->signature;
   memset(ret, 0, ffi_type_table[signature->returns].size);
+  if (gc_object_is_dead(js, js_obj_ptr(callback->owner_obj))) return;
 
   if (!pthread_equal(pthread_self(), callback->owner_thread))
     FFI_CALLBACK_BAIL(Ant_Value_Undefined, "invoked off the JS thread");

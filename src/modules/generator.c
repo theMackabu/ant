@@ -208,6 +208,10 @@ static void generator_clear_coro(ant_value_t gen, coroutine_t *coro) {
   }
 }
 
+bool generator_object_holds_coroutine(ant_value_t gen) {
+  return generator_coro(gen) != NULL;
+}
+
 // TODO: collapse
 coroutine_t *generator_get_coro_for_gc(ant_value_t gen) {
   return generator_coro(gen);
@@ -692,6 +696,7 @@ ant_value_t sv_call_generator_closure_dispatch(
 
   js_set_native(gen, data, GENERATOR_NATIVE_TAG);
   js_set_finalizer(gen, generator_finalize);
+  fixed_arena_note_finalizer(js_obj_ptr(gen));
 
   ant_value_t prototype_target = js_resolve_bound_target(callee_func);
   ant_value_t instance_proto = js_get(js, prototype_target, "prototype");

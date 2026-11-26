@@ -2173,6 +2173,11 @@ ant_value_t tls_library(ant_t *js) {
 }
 
 void gc_mark_tls(ant_t *js, gc_mark_fn mark) {
+  for (ant_tls_server_t *server = js->tls_servers; server; server = server->next) {
+    mark(js, server->obj);
+    if (vtype(server->secure_context) != kTypeUndefined) mark(js, server->secure_context);
+  }
+
   ant_tls_socket_t *socket = NULL;
   for (socket = js->tls_sockets; socket; socket = socket->next) {
     mark(js, socket->obj);

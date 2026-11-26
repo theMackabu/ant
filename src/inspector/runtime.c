@@ -7,6 +7,7 @@
 #include "internal.h"
 
 #include "gc/roots.h"
+#include "gc/modules.h"
 #include "gc/object_arenas.h"
 #include "silver/engine.h"
 #include "silver/eval_env.h"
@@ -29,15 +30,15 @@ static uint32_t inspector_object_handle_id(ant_t *js, ant_value_t value) {
   if (h->id == 0) h->id = ++g_inspector.next_object_id;
   
   h->value = value;
-  if (!gc_push_root(js, &h->value)) {
-    free(h);
-    return 0;
-  }
-  
   h->next = g_inspector.object_handles;
   g_inspector.object_handles = h;
   
   return h->id;
+}
+
+void gc_mark_inspector(ant_t *js, gc_mark_fn mark) {
+  if (g_inspector.js != js) return;
+  for (inspector_object_handle_t *h = g_inspector.object_handles; h; h = h->next) mark(js, h->value);
 }
 
 static bool inspector_parse_object_id(const char *object_id, uint32_t *id) {

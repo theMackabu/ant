@@ -61,7 +61,7 @@ void js_arguments_link_upvalue(ant_t *js, sv_frame_t *frame, sv_upvalue_t *uv) {
 void js_arguments_upvalue_written(ant_t *js, sv_upvalue_t *uv, ant_value_t value) {
   ant_object_t *owner = fixed_arena_slot_at(&js->obj_arena, uv->args_owner);
   
-  if (!owner || owner->mark_epoch == ANT_GC_DEAD) return;
+  if (!owner || gc_object_is_dead(js, owner)) return;
   if (!ant_object_is_arguments(owner)) return;
 
   ant_value_t obj = js_obj_from_ptr(owner);
