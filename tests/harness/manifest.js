@@ -201,6 +201,7 @@ export function targets() {
     'test_class_keyed_field_names.cjs',
     'test_typed_array_own_keys.cjs',
     'test_intl_locale_lists.cjs',
+    'test_intl_listformat.cjs',
     'test_assert_error_types.cjs',
     'test_array_push_length_limit.cjs',
     'test_for_let_bindings.cjs',
