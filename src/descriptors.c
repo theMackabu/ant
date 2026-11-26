@@ -1364,14 +1364,14 @@ static inline __attribute__((always_inline)) bool define_set_accessor(
 }
 
 static ant_value_t define_update_attrs(
-  ant_t *js, const define_target_t *t, const define_desc_t *d, const define_existing_t *e
+  ant_t *js, const define_target_t *t, const define_desc_t *d, 
+  const define_existing_t *e, define_desc_fields_t *fields
 ) {
   int desc_flags = define_desc_flags(d, true);
   const prop_meta_t *m = &e->meta;
 
   if (e->has_meta && (m->has_getter || m->has_setter)) {
-    if (!define_set_accessor(js, t, m->has_getter, m->getter, m->has_setter, m->setter, desc_flags))
-      return Ant_Error_CreateOutOfMemory(js);
+    if (!define_set_accessor(js, t, m->has_getter, m->getter, m->has_setter, m->setter, desc_flags)) goto oom;
   } else if (!t->sym_key)
     js_set_descriptor(js, t->as_obj, t->str, t->len, desc_flags);
   else if (e->loc.obj) {
@@ -1380,6 +1380,9 @@ static ant_value_t define_update_attrs(
   }
 
   return define_done(js, t);
+
+oom:
+  return define_abrupt(fields, Ant_Error_CreateOutOfMemory(js));
 }
 
 static ant_value_t define_data(
@@ -1497,15 +1500,17 @@ static ant_value_t object_define_property_keyed(
   }
 
   if (e.found && !d.has_value && !d.has_writable && !d.has_get && !d.has_set)
-    return define_update_attrs(js, &t, &d, &e);
+    return define_update_attrs(js, &t, &d, &e, fields);
 
   if (d.has_get || d.has_set) {
-    if (!define_set_accessor(js, &t, d.has_get, d.getter, d.has_set, d.setter, define_desc_flags(&d, false)))
-      return Ant_Error_CreateOutOfMemory(js);
+    if (!define_set_accessor(js, &t, d.has_get, d.getter, d.has_set, d.setter, define_desc_flags(&d, false))) goto oom;
     return define_done(js, &t);
   }
 
   return define_data(js, &t, &d, &e);
+
+oom:
+  return define_abrupt(fields, Ant_Error_CreateOutOfMemory(js));
 }
 
 ant_value_t object_define_property_reporting(
