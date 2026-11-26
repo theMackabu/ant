@@ -34,4 +34,15 @@ result = parseArgs({
 assert(result.values.prompt === 'hello', 'expected attached short string value');
 assert(result.values.format === 'json', 'expected inline long string value');
 
+result = parseArgs({ args: ['--a', 'pos'], options: { a: { type: 'boolean' } }, strict: false });
+assert(result.positionals.length === 1 && result.positionals[0] === 'pos', 'strict:false allows positionals by default');
+let threw = false;
+try { parseArgs({ args: ['pos'], options: {}, strict: false, allowPositionals: false }); } catch { threw = true; }
+assert(threw, 'explicit allowPositionals:false wins');
+threw = false;
+try { parseArgs({ args: ['pos'], options: {}, strict: null }); } catch { threw = true; }
+assert(threw, 'strict:null means the default (strict)');
+result = parseArgs({ args: ['pos'], options: {}, strict: false, allowPositionals: null });
+assert(result.positionals[0] === 'pos', 'allowPositionals:null means the default (!strict)');
+
 console.log('PASS');

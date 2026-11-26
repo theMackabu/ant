@@ -753,6 +753,8 @@ export function targets() {
     'test_utf16_random_access.cjs',
     'test_utf8_decode_replacement.cjs',
     'test_util_error_boundaries.cjs',
+    'test_util_parse_args.cjs',
+    'test_util_parse_args_process_argv.cjs',
     'test_uv_nested_poll.mjs',
     'test_v8_serialize_format.cjs',
     'test_version_check_cache.cjs',
