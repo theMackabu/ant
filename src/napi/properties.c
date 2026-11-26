@@ -1,6 +1,4 @@
-#include "ptr.h"
 #include "descriptors.h"
-#include "silver/vm.h"
 #include "silver/engine.h"
 #include "napi_internal.h"
 
@@ -141,15 +139,17 @@ static napi_status Property_DefineAccessor(
     setter = Napi_Decode(fn);
   }
 
+  bool defined = true;
   if (vtype(key) == kTypeSymbol) {
-    if (property->getter) js_set_sym_getter_desc(js, target, key, getter, flags);
-    if (property->setter) js_set_sym_setter_desc(js, target, key, setter, flags);
+    if (property->getter) defined = js_set_sym_getter_desc(js, target, key, getter, flags);
+    if (defined && property->setter) defined = js_set_sym_setter_desc(js, target, key, setter, flags);
   } else {
     size_t len = 0;
     const char *name = js_getstr(js, key, &len);
-    js_set_accessor_desc(js, target, name, len, getter, setter, flags);
+    defined = js_set_accessor_desc(js, target, name, len, getter, setter, flags);
   }
 
+  if (!defined) return Ant_Napi_SetLastError(env, napi_generic_failure, "failed to define accessor property");
   return Ant_Napi_CheckPending(env);
 }
 

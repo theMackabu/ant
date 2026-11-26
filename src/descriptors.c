@@ -205,6 +205,7 @@ static bool ensure_string_shape_slot(ant_t *js, ant_value_t obj, const char *key
   int32_t slot = ant_shape_lookup_interned(ptr->shape, interned);
   if (slot < 0) {
     uint32_t added_slot = 0;
+    if (!js_obj_ensure_prop_capacity(js, ptr, ant_shape_count(ptr->shape) + 1)) return false;
     if (!ant_shape_add_interned_tr(js, &ptr->shape, interned, ANT_PROP_ATTR_DEFAULT, &added_slot)) return false;
     ant_object_invalidate_guarded_absence(js, ptr);
     if (!ensure_added_shape_slot_storage(js, ptr, added_slot)) return false;
@@ -469,12 +470,11 @@ bool js_define_accessor_desc(ant_t *js, ant_value_t obj, const char *key, size_t
   const char *interned = ptr && ptr->shape && !ptr->flags.is_exotic ? intern_string(js, key, klen) : NULL;
   
   uint32_t slot = 0;
-  if (
-    !interned || ant_shape_lookup_interned(ptr->shape, interned) >= 0 ||
-    !ant_shape_add_accessor_tr(js, &ptr->shape, interned, attrs_from_flags(flags, false), getter, setter, &slot)
-  ) {
+  bool fresh = interned && ant_shape_lookup_interned(ptr->shape, interned) < 0;
+  if (fresh && !js_obj_ensure_prop_capacity(js, ptr, ant_shape_count(ptr->shape) + 1)) return false;
+  
+  if (!fresh || !ant_shape_add_accessor_tr(js, &ptr->shape, interned, attrs_from_flags(flags, false), getter, setter, &slot))
     return js_set_accessor_desc(js, obj, key, klen, getter, setter, flags);
-  }
 
   ant_object_invalidate_guarded_absence(js, ptr);
   if (!ensure_added_shape_slot_storage(js, ptr, slot)) return false;

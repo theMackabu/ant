@@ -105,4 +105,27 @@ if (proxy.legacyProxy !== 7) {
   pass = false;
 }
 
+const sealed = {};
+Object.defineProperty(sealed, 'fixed', { value: 1, configurable: false });
+
+for (const method of ['__defineGetter__', '__defineSetter__']) {
+  let threw = null;
+  try {
+    sealed[method]('fixed', function () {});
+  } catch (err) {
+    threw = err;
+  }
+
+  if (!(threw instanceof TypeError)) {
+    console.log(`FAIL: ${method} should throw TypeError on a non-configurable property`);
+    pass = false;
+  }
+}
+
+const fixed = Object.getOwnPropertyDescriptor(sealed, 'fixed');
+if (fixed.value !== 1 || fixed.configurable || fixed.writable || fixed.enumerable) {
+  console.log('FAIL: a rejected legacy accessor definition should leave the property unchanged');
+  pass = false;
+}
+
 if (pass) console.log('PASS');

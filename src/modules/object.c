@@ -257,6 +257,17 @@ static bool legacy_accessor_key(
   return true;
 }
 
+static ant_value_t legacy_define_accessor(ant_t *js, ant_value_t obj, ant_value_t key, int field, ant_value_t fn) {
+  define_desc_raw_t raw = {0};
+  
+  raw.has[field] = raw.has[DESC_ENUMERABLE] = raw.has[DESC_CONFIGURABLE] = true;
+  raw.val[field] = fn;
+  raw.val[DESC_ENUMERABLE] = raw.val[DESC_CONFIGURABLE] = Ant_Value_True;
+  
+  ant_value_t result = object_define_property_reporting(js, obj, key, Ant_Value_Undefined, &raw, NULL);
+  return is_err(result) ? result : Ant_Value_Undefined;
+}
+
 static ant_value_t builtin_object___defineGetter__(ant_params_t) {
   ant_value_t obj = legacy_accessor_this_obj(js, call_this);
   if (is_err(obj)) return obj;
@@ -278,35 +289,7 @@ static ant_value_t builtin_object___defineGetter__(ant_params_t) {
     return key_val;
   }
 
-  if (is_proxy(js_as_obj(obj))) {
-    GC_ROOT_SAVE(root_mark, js);
-    GC_ROOT_PIN(js, obj);
-    GC_ROOT_PIN(js, key_val);
-    GC_ROOT_PIN(js, getter);
-    
-    ant_value_t desc = Ant_Object_CreateBare(js);
-    if (is_err(desc)) {
-      GC_ROOT_RESTORE(js, root_mark);
-      return desc;
-    }
-    
-    GC_ROOT_PIN(js, desc);
-    js_setprop(js, desc, js_mkstr(js, "get", 3), getter);
-    js_setprop(js, desc, js_mkstr(js, "enumerable", 10), Ant_Value_True);
-    js_setprop(js, desc, js_mkstr(js, "configurable", 12), Ant_Value_True);
-    
-    ant_value_t result = object_define_property(js, obj, key_val, desc);
-    GC_ROOT_RESTORE(js, root_mark);
-    if (is_err(result)) return result;
-    
-    return Ant_Value_Undefined;
-  }
-
-  bool defined = vtype(key_val) == kTypeSymbol
-    ? js_set_sym_getter_desc(js, js_as_obj(obj), key_val, getter, JS_DESC_E | JS_DESC_C)
-    : js_set_getter_desc(js, js_as_obj(obj), key_str, (size_t)key_len, getter, JS_DESC_E | JS_DESC_C);
-  
-  return defined ? Ant_Value_Undefined : Ant_Error_CreateOutOfMemory(js);
+  return legacy_define_accessor(js, obj, key_val, DESC_GET, getter);
 }
 
 static ant_value_t builtin_object___defineSetter__(ant_params_t) {
@@ -330,35 +313,7 @@ static ant_value_t builtin_object___defineSetter__(ant_params_t) {
     return key_val;
   }
 
-  if (is_proxy(js_as_obj(obj))) {
-    GC_ROOT_SAVE(root_mark, js);
-    GC_ROOT_PIN(js, obj);
-    GC_ROOT_PIN(js, key_val);
-    GC_ROOT_PIN(js, setter);
-    
-    ant_value_t desc = Ant_Object_CreateBare(js);
-    if (is_err(desc)) {
-      GC_ROOT_RESTORE(js, root_mark);
-      return desc;
-    }
-    
-    GC_ROOT_PIN(js, desc);
-    js_setprop(js, desc, js_mkstr(js, "set", 3), setter);
-    js_setprop(js, desc, js_mkstr(js, "enumerable", 10), Ant_Value_True);
-    js_setprop(js, desc, js_mkstr(js, "configurable", 12), Ant_Value_True);
-    
-    ant_value_t result = object_define_property(js, obj, key_val, desc);
-    GC_ROOT_RESTORE(js, root_mark);
-    if (is_err(result)) return result;
-    
-    return Ant_Value_Undefined;
-  }
-
-  bool defined = vtype(key_val) == kTypeSymbol
-    ? js_set_sym_setter_desc(js, js_as_obj(obj), key_val, setter, JS_DESC_E | JS_DESC_C)
-    : js_set_setter_desc(js, js_as_obj(obj), key_str, (size_t)key_len, setter, JS_DESC_E | JS_DESC_C);
-  
-  return defined ? Ant_Value_Undefined : Ant_Error_CreateOutOfMemory(js);
+  return legacy_define_accessor(js, obj, key_val, DESC_SET, setter);
 }
 
 static ant_value_t legacy_lookup_accessor_from_descriptor(ant_t *js, ant_value_t desc, bool want_getter) {

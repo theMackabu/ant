@@ -1,12 +1,8 @@
 #pragma once
 
-#include "utf8.h"
-#include "property.h"
-#include "iteration.h"
-#include "descriptors.h"
 #include "props.h"
-#include "arrays.h"
-#include "gc/roots.h"
+#include "property.h"
+#include "descriptors.h"
 
 ant_value_t sv_define_field(
   ant_t *js, uint8_t flags,
@@ -48,11 +44,12 @@ static inline ant_value_t sv_define_method_comp(
     if (is_err(named)) return named;
   }
   
+  bool defined = true;
   if (vtype(key) == kTypeSymbol) {
-    if (is_getter) js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc);
-    else if (is_setter) js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc);
+    if (is_getter) defined = js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc);
+    else if (is_setter) defined = js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc);
     else mkprop_symbol_attrs_impl(js, obj, key, fn, data_attrs, MKPROP_USE_DEFAULT_ATTRS);
-    return Ant_Value_Undefined;
+    return defined ? Ant_Value_Undefined : Ant_Error_CreateOutOfMemory(js);
   }
   
   ant_offset_t klen = 0;
@@ -63,11 +60,11 @@ static inline ant_value_t sv_define_method_comp(
     klen == 9 && memcmp(kptr, "prototype", 9) == 0
   ) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot redefine property: prototype");
   
-  if (is_getter) js_set_getter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
-  else if (is_setter) js_set_setter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
+  if (is_getter) defined = js_set_getter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
+  else if (is_setter) defined = js_set_setter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
   else mkprop(js, obj, key, fn, data_attrs);
   
-  return Ant_Value_Undefined;
+  return defined ? Ant_Value_Undefined : Ant_Error_CreateOutOfMemory(js);
 }
 
 static inline ant_value_t sv_op_define_method_comp(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
