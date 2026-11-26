@@ -128,4 +128,40 @@ if (fixed.value !== 1 || fixed.configurable || fixed.writable || fixed.enumerabl
   pass = false;
 }
 
+const symKey = Symbol('k');
+const keyed = {};
+keyed.__defineGetter__({ [Symbol.toPrimitive]: () => symKey }, () => 'by-symbol');
+if (keyed[symKey] !== 'by-symbol' || Object.prototype.hasOwnProperty.call(keyed, 'Symbol(k)')) {
+  console.log('FAIL: a key that converts to a symbol should define the accessor under that symbol');
+  pass = false;
+}
+
+for (const method of ['__defineGetter__', '__defineSetter__']) {
+  let threw = null;
+  try {
+    ({})[method]('missing');
+  } catch (err) {
+    threw = err;
+  }
+
+  if (!(threw instanceof TypeError)) {
+    console.log(`FAIL: ${method} without a function should throw TypeError`);
+    pass = false;
+  }
+}
+
+const boxed = Symbol('receiver');
+let boxedError = null;
+try {
+  Object.prototype.__defineGetter__.call(boxed, 'tag', () => 1);
+} catch (err) {
+  boxedError = err;
+}
+
+if (boxedError) {
+  console.log('FAIL: a symbol receiver should be boxed like other primitives');
+  pass = false;
+}
+
 if (pass) console.log('PASS');
+else process.exitCode = 1;

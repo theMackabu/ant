@@ -1,11 +1,14 @@
 #pragma once
 
 #include "types.h"
+#include "shapes.h"
 #include <uthash.h>
 
-static constexpr int JS_DESC_W = 1 << 0;
-static constexpr int JS_DESC_E = 1 << 1;
-static constexpr int JS_DESC_C = 1 << 2;
+enum: int {
+  JS_DESC_W = 1 << 0,
+  JS_DESC_E = 1 << 1,
+  JS_DESC_C = 1 << 2,
+};
 
 enum: int {
   DESC_ENUMERABLE,
@@ -65,3 +68,11 @@ ant_value_t define_desc_object(ant_t *js, const define_desc_raw_t *raw);
 ant_value_t reflect_define_property_raw(ant_t *js, ant_value_t obj, ant_value_t key_val, const define_desc_raw_t *raw);
 ant_value_t js_from_data_descriptor(ant_t *js, ant_value_t value, bool writable, bool enumerable, bool configurable);
 ant_value_t js_from_accessor_descriptor(ant_t *js, ant_value_t getter, ant_value_t setter, bool enumerable, bool configurable);
+
+static inline uint8_t desc_attrs_from_flags(int flags, bool include_writable) {
+  uint8_t attrs = 0;
+  if (include_writable && (flags & JS_DESC_W)) attrs |= ANT_PROP_ATTR_WRITABLE;
+  if (flags & JS_DESC_E) attrs |= ANT_PROP_ATTR_ENUMERABLE;
+  if (flags & JS_DESC_C) attrs |= ANT_PROP_ATTR_CONFIGURABLE;
+  return attrs;
+}

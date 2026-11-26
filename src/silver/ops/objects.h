@@ -4,6 +4,10 @@
 #include "property.h"
 #include "descriptors.h"
 
+#include "arrays.h"    // IWYU pragma: keep
+#include "gc/roots.h"  // IWYU pragma: keep
+#include "iteration.h" // IWYU pragma: keep
+
 ant_value_t sv_define_field(
   ant_t *js, uint8_t flags,
   ant_value_t obj, ant_value_t key, ant_value_t value
