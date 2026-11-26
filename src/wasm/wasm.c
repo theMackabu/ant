@@ -1,5 +1,14 @@
 #include "wasm_internal.h"
 
+void gc_clear_wasm_weak_refs(ant_t *js, gc_weak_key_alive_fn alive) {
+  ant_ptr_pair_map_t *owners = &js->wasm_instance_owners;
+  if (!owners->entries) return;
+  for (uint32_t i = 0; i <= owners->mask; i++) {
+    ant_ptr_pair_entry_t *entry = &owners->entries[i];
+    if (entry->key_a && is_object_type(entry->value) && !alive(js, entry->value)) entry->value = Ant_Value_Undefined;
+  }
+}
+
 void gc_mark_wasm(ant_t *js, gc_mark_fn mark) {
   for (wasm_import_func_env_t *env = js->wasm_import_envs; env; env = env->next) {
     mark(js, env->fn);

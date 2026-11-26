@@ -1564,8 +1564,8 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_code_units(js);
   gc_mark_microtasks(js, gc_mark_value);
   gc_mark_host_modules(js, gc_mark_value);
-  gc_mark_symbols(js, gc_mark_value);
-  gc_mark_iterators(js, gc_mark_value);
+  #define GC_CORE_MARK(name) gc_mark_##name(js, gc_mark_value);
+  #include "gc/module_hooks.h"
 
   gc_grey_pending_promises(js, js->pending_promises_young);
   if (!js->gc.minor) gc_grey_pending_promises(js, js->pending_promises_old);

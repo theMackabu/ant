@@ -6,39 +6,20 @@
 struct ant_iterator_registry;
 typedef void (*gc_mark_fn)(ant_t *js, ant_value_t v);
 
-void gc_mark_timers(ant_t *js, gc_mark_fn mark);
-void gc_mark_cron(ant_t *js, gc_mark_fn mark);
-void gc_mark_atomics(ant_t *js, gc_mark_fn mark);
-void gc_mark_fetch(ant_t *js, gc_mark_fn mark);
-void gc_mark_fs(ant_t *js, gc_mark_fn mark);
-void gc_mark_crypto(ant_t *js, gc_mark_fn mark);
-void gc_mark_child_process(ant_t *js, gc_mark_fn mark);
-void gc_mark_dns(ant_t *js, gc_mark_fn mark);
-void gc_mark_readline(ant_t *js, gc_mark_fn mark);
-void gc_mark_process(ant_t *js, gc_mark_fn mark);
-void gc_mark_navigator(ant_t *js, gc_mark_fn mark);
-void gc_mark_message_ports(ant_t *js, gc_mark_fn mark);
-void gc_mark_net(ant_t *js, gc_mark_fn mark);
-void gc_mark_tls(ant_t *js, gc_mark_fn mark);
-void gc_mark_server(ant_t *js, gc_mark_fn mark);
-void gc_mark_websocket(ant_t *js, gc_mark_fn mark);
-void gc_mark_eventsource(ant_t *js, gc_mark_fn mark);
-void gc_mark_events(ant_t *js, gc_mark_fn mark);
-void gc_mark_eventemitter_object(ant_t *js, ant_value_t obj, gc_mark_fn mark);
-void gc_finalize_events_object(ant_t *js, ant_value_t obj);
-void gc_mark_iterators(ant_t *js, gc_mark_fn mark);
-void gc_mark_iterator_registry(ant_t *js, const struct ant_iterator_registry *registry, gc_mark_fn mark);
-void gc_mark_symbols(ant_t *js, gc_mark_fn mark);
-void gc_mark_esm(ant_t *js, gc_mark_fn mark);
-void gc_mark_worker_threads(ant_t *js, gc_mark_fn mark);
-void gc_mark_isolates(ant_t *js, gc_mark_fn mark);
-void gc_mark_abort(ant_t *js, gc_mark_fn mark);
-void gc_mark_wasm(ant_t *js, gc_mark_fn mark);
-void gc_mark_napi(ant_t *js, gc_mark_fn mark);
-void gc_mark_rpc(ant_t *js, gc_mark_fn mark);
-void gc_mark_sandbox(ant_t *js, gc_mark_fn mark);
-void gc_clear_napi_weak_refs(ant_t *js, gc_weak_key_alive_fn alive);
-void gc_mark_abort_signal_object(ant_t *js, ant_value_t signal, gc_mark_fn mark);
+#define GC_MODULE_MARK(name) void gc_mark_##name(ant_t *js, gc_mark_fn mark);
+#include "gc/module_hooks.h"
+
+#define GC_MODULE_WEAK(name) void gc_clear_##name##_weak_refs(ant_t *js, gc_weak_key_alive_fn alive);
+#include "gc/module_hooks.h"
+
+#define GC_CORE_MARK(name) void gc_mark_##name(ant_t *js, gc_mark_fn mark);
+#include "gc/module_hooks.h"
+
+#define GC_NATIVE_MARK(name) void gc_mark_##name(ant_t *js, ant_value_t value, gc_mark_fn mark);
+#include "gc/module_hooks.h"
+
+#define GC_NATIVE_FINALIZE(name) void gc_finalize_##name(ant_t *js, ant_value_t value);
+#include "gc/module_hooks.h"
+
 void gc_mark_error_record(ant_t *js, ant_value_t value, gc_mark_fn mark);
-void gc_mark_stream_object(ant_t *js, ant_value_t value, gc_mark_fn mark);
-void gc_finalize_stream_object(ant_t *js, ant_value_t value);
+void gc_mark_iterator_registry(ant_t *js, const struct ant_iterator_registry *registry, gc_mark_fn mark);

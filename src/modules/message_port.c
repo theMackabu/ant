@@ -11,13 +11,13 @@
 #include "errors.h"
 #include "internal.h"
 #include "descriptors.h"
-#include "silver/call.h"
-
+#include "silver/vm.h"
 #include "gc/modules.h"
-#include "modules/domexception.h"
+
 #include "modules/events.h"
-#include "modules/message_port.h"
 #include "modules/wire.h"
+#include "modules/domexception.h"
+#include "modules/message_port.h"
 
 typedef struct ant_port_message {
   struct ant_port_message *next;
@@ -975,6 +975,11 @@ void cleanup_message_port_module(ant_t *js) {
     m->obj_alive = false;
     broadcast_close(m);
   }
+}
+
+void gc_clear_message_port_weak_refs(ant_t *js, gc_weak_key_alive_fn alive) {
+  for (ant_port_binding_t *b = js->port_bindings; b; b = b->next)
+    if (is_object_type(b->target) && !alive(js, b->target)) b->target = Ant_Value_Undefined;
 }
 
 void gc_mark_message_ports(ant_t *js, gc_mark_fn mark) {

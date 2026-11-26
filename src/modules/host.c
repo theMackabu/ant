@@ -21,7 +21,6 @@
 #include "modules/performance.h"
 #include "modules/process.h"
 #include "modules/readline.h"
-#include "modules/rpc.h"
 #include "modules/server.h"
 #include "modules/stream.h"
 #include "modules/timer.h"
@@ -75,45 +74,18 @@ void Ant_Host_Free(ant_t *js) {
 }
 
 void gc_mark_host_modules(ant_t *js, gc_mark_fn mark) {
-  gc_mark_timers(js, mark);
-  gc_mark_cron(js, mark);
-  gc_mark_atomics(js, mark);
-  gc_mark_fetch(js, mark);
-  gc_mark_fs(js, mark);
-  gc_mark_crypto(js, mark);
-  gc_mark_child_process(js, mark);
-  gc_mark_dns(js, mark);
-  gc_mark_readline(js, mark);
-  gc_mark_process(js, mark);
-  gc_mark_navigator(js, mark);
-  gc_mark_message_ports(js, mark);
-  gc_mark_net(js, mark);
-  gc_mark_tls(js, mark);
-  gc_mark_server(js, mark);
-  gc_mark_websocket(js, mark);
-  gc_mark_eventsource(js, mark);
-  gc_mark_events(js, mark);
-  gc_mark_esm(js, mark);
-  gc_mark_worker_threads(js, mark);
-  gc_mark_isolates(js, mark);
-#ifdef ANT_HAVE_SANDBOX
-  gc_mark_sandbox(js, mark);
-#endif
-  gc_mark_abort(js, mark);
-  gc_mark_wasm(js, mark);
-  gc_mark_napi(js, mark);
-  gc_mark_rpc(js, mark);
+  #define GC_MODULE_MARK(name) gc_mark_##name(js, mark);
+  #include "gc/module_hooks.h"
 }
 
 void gc_mark_host_natives(ant_t *js, ant_value_t value, gc_mark_fn mark) {
-  gc_mark_abort_signal_object(js, value, mark);
-  gc_mark_eventemitter_object(js, value, mark);
-  gc_mark_stream_object(js, value, mark);
+  #define GC_NATIVE_MARK(name) gc_mark_##name(js, value, mark);
+  #include "gc/module_hooks.h"
 }
 
 void gc_finalize_host_natives(ant_t *js, ant_value_t value) {
-  gc_finalize_stream_object(js, value);
-  gc_finalize_events_object(js, value);
+  #define GC_NATIVE_FINALIZE(name) gc_finalize_##name(js, value);
+  #include "gc/module_hooks.h"
 }
 
 bool gc_host_native_holds_resource(ant_t *js, ant_value_t value) {
@@ -121,5 +93,6 @@ bool gc_host_native_holds_resource(ant_t *js, ant_value_t value) {
 }
 
 void gc_clear_host_weak_refs(ant_t *js, gc_weak_key_alive_fn alive) {
-  gc_clear_napi_weak_refs(js, alive);
+  #define GC_MODULE_WEAK(name) gc_clear_##name##_weak_refs(js, alive);
+  #include "gc/module_hooks.h"
 }
