@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 #include "arrays.h"
 
 size_t literal_num_key(double num, char *buf, size_t cap) {

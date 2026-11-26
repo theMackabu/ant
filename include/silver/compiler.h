@@ -278,10 +278,13 @@ typedef struct sv_compiler {
   int map_template_cap;
 
   int ic_count;
+  bool alloc_failed;
+  bool oom_raised;
 
   sv_local_t *locals;
   int local_count;
   int local_cap;
+  sv_local_t local_sink;
   int *local_lookup_heads;
   int local_lookup_cap;
   int max_local_count;
@@ -310,6 +313,8 @@ typedef struct sv_compiler {
   sv_loop_t *loops;
   int loop_count;
   int loop_cap;
+  int loop_lost;
+  sv_loop_t loop_sink;
 
   struct sv_compiler *enclosing;
   struct sv_compiler *derived_field_owner;
@@ -389,6 +394,7 @@ typedef struct sv_compiler {
   sv_unwind_mark_t *unwind_marks;
   int unwind_count;
   int unwind_cap;
+  int unwind_lost;
   int handler_close_floor;
   
   sv_with_scope_t *with_scopes;
@@ -427,6 +433,7 @@ typedef struct sv_compiler {
   int using_stack_local;
   int using_cleanup_count;
   int using_cleanup_cap;
+  int using_lost;
   
   bool using_stack_async;
   sv_using_cleanup_t *using_cleanups;

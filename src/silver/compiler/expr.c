@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 static inline bool is_invalid_cooked_string(const sv_ast_t *node) {
   return is_template_segment(node) && (node->flags & FN_INVALID_COOKED);
@@ -799,7 +799,7 @@ static void compile_delete_optional(sv_compiler_t *c, sv_ast_t *arg) {
   compile_chain_base(c, arg->left, &skipped);
   if (arg->type == N_OPTIONAL) {
     int ok_jump = emit_jump(c, OP_JMP_NOT_NULLISH);
-    patch_list_add(&skipped, emit_jump(c, OP_JMP));
+    patch_list_add(c, &skipped, emit_jump(c, OP_JMP));
     patch_jump(c, ok_jump);
   }
   if (arg->flags & 1) {

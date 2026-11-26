@@ -1,4 +1,5 @@
-#include "compiler_internal.h"
+#include "utf8.h"
+#include "private/codegen.h"
 
 const char *copy_source_text(ant_t *js, const char *source, ant_offset_t source_len) {
   if (!source || source_len <= 0) return source;
@@ -7,10 +8,43 @@ const char *copy_source_text(ant_t *js, const char *source, ant_offset_t source_
   return copy;
 }
 
+__attribute__((cold, noinline)) void Silver_Compiler_RaiseOutOfMemory(sv_compiler_t *c) {
+  c->alloc_failed = true;
+  if (Ant_Exception_Pending(c->js)) return;
+  Ant_Error_CreateOutOfMemory(c->js);
+  while (c->enclosing) c = c->enclosing;
+  c->oom_raised = true;
+}
+
+__attribute__((noinline)) void *Silver_Compiler_Grow(
+  sv_compiler_t *c, void *items, int *cap, int need, int initial, size_t size
+) {
+  if (c->alloc_failed) return NULL;
+  int64_t next = *cap ? (int64_t)*cap * 2 : initial;
+  while (next < need) next *= 2;
+
+  void *grown = next <= INT_MAX && (uint64_t)next <= SIZE_MAX / size
+    ? realloc(items, (size_t)next * size) : NULL;
+  if (!grown) {
+    Silver_Compiler_RaiseOutOfMemory(c);
+    return NULL;
+  }
+
+  *cap = (int)next;
+  return grown;
+}
+
+__attribute__((cold, noinline)) static void emit_grow(sv_compiler_t *c, uint8_t byte) {
+  uint8_t *code = Silver_Compiler_Grow(c, c->code, &c->code_cap, c->code_len + 1, 256, 1);
+  if (!code) return;
+  c->code = code;
+  c->code[c->code_len++] = byte;
+}
+
 void emit(sv_compiler_t *c, uint8_t byte) {
   if (c->code_len >= c->code_cap) {
-    c->code_cap = c->code_cap ? c->code_cap * 2 : 256;
-    c->code = realloc(c->code, (size_t)c->code_cap);
+    emit_grow(c, byte);
+    return;
   }
   c->code[c->code_len++] = byte;
 }
@@ -87,8 +121,9 @@ void emit_srcpos(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   if (c->srcpos_count >= c->srcpos_cap) {
-    c->srcpos_cap = c->srcpos_cap ? c->srcpos_cap * 2 : 32;
-    c->srcpos = realloc(c->srcpos, (size_t)c->srcpos_cap * sizeof(sv_srcpos_t));
+    sv_srcpos_t *srcpos = Silver_Compiler_Grow(c, c->srcpos, &c->srcpos_cap, c->srcpos_count + 1, 32, sizeof(sv_srcpos_t));
+    if (!srcpos) return;
+    c->srcpos = srcpos;
   }
   c->srcpos[c->srcpos_count++] = (sv_srcpos_t){
     .bc_offset = (uint32_t)c->code_len,
@@ -102,10 +137,19 @@ void emit_srcpos(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 static void patch_u32(sv_compiler_t *c, int offset, uint32_t val) {
+  if ((size_t)(uint32_t)offset + 4 > (size_t)c->code_len) return;
   c->code[offset]     = (uint8_t)(val & 0xFF);
   c->code[offset + 1] = (uint8_t)((val >> 8) & 0xFF);
   c->code[offset + 2] = (uint8_t)((val >> 16) & 0xFF);
   c->code[offset + 3] = (uint8_t)((val >> 24) & 0xFF);
+}
+
+static bool reserve_constant(sv_compiler_t *c, int count) {
+  if (c->const_count + count <= c->const_cap) return true;
+  ant_value_t *grown = Silver_Compiler_Grow(c, c->constants, &c->const_cap, c->const_count + count, 16, sizeof(ant_value_t));
+  if (!grown) return false;
+  c->constants = grown;
+  return true;
 }
 
 int add_constant(sv_compiler_t *c, ant_value_t val) {
@@ -118,11 +162,8 @@ int add_constant(sv_compiler_t *c, ant_value_t val) {
     HASH_FIND(hh, c->const_dedup, sptr, (size_t)slen, found);
     if (found) return found->index;
 
+    if (!reserve_constant(c, 1)) return -1;
     int idx = c->const_count;
-    if (c->const_count >= c->const_cap) {
-      c->const_cap = c->const_cap ? c->const_cap * 2 : 16;
-      c->constants = realloc(c->constants, (size_t)c->const_cap * sizeof(ant_value_t));
-    }
     c->constants[c->const_count++] = val;
 
     const_dedup_entry_t *entry = malloc(sizeof(const_dedup_entry_t));
@@ -135,25 +176,13 @@ int add_constant(sv_compiler_t *c, ant_value_t val) {
     return idx;
   }
 
-  if (c->const_count >= c->const_cap) {
-    c->const_cap = c->const_cap ? c->const_cap * 2 : 16;
-    c->constants = realloc(c->constants, (size_t)c->const_cap * sizeof(ant_value_t));
-  }
+  if (!reserve_constant(c, 1)) return -1;
   c->constants[c->const_count] = val;
   return c->const_count++;
 }
 
 int add_constant_run(sv_compiler_t *c, const ant_value_t *vals, int count) {
-  if (c->const_count + count > c->const_cap) {
-    int cap = c->const_cap ? c->const_cap : 16;
-    while (cap < c->const_count + count) cap *= 2;
-    
-    ant_value_t *grown = realloc(c->constants, (size_t)cap * sizeof(ant_value_t));
-    if (!grown) return -1;
-    
-    c->constants = grown;
-    c->const_cap = cap;
-  }
+  if (!reserve_constant(c, count)) return -1;
   
   int start = c->const_count;
   memcpy(c->constants + start, vals, (size_t)count * sizeof(ant_value_t));
@@ -361,8 +390,9 @@ int add_atom(sv_compiler_t *c, const char *str, uint32_t len) {
   }
 
   if (c->atom_count >= c->atom_cap) {
-    c->atom_cap = c->atom_cap ? c->atom_cap * 2 : 16;
-    c->atoms = realloc(c->atoms, (size_t)c->atom_cap * sizeof(sv_atom_t));
+    sv_atom_t *atoms = Silver_Compiler_Grow(c, c->atoms, &c->atom_cap, c->atom_count + 1, 16, sizeof(sv_atom_t));
+    if (!atoms) return -1;
+    c->atoms = atoms;
   }
   
   c->atoms[c->atom_count] = (sv_atom_t){ 
@@ -381,10 +411,10 @@ uint32_t add_map_template_desc(
   const sv_ast_t *tpl, uint8_t substitution_count
 ) {
   if (c->map_template_count >= c->map_template_cap) {
-    c->map_template_cap = c->map_template_cap ? c->map_template_cap * 2 : 8;
-    c->map_templates = realloc(
-    c->map_templates,
-    (size_t)c->map_template_cap * sizeof(sv_map_template_desc_t));
+    sv_map_template_desc_t *templates = Silver_Compiler_Grow(
+      c, c->map_templates, &c->map_template_cap, c->map_template_count + 1, 8, sizeof(sv_map_template_desc_t));
+    if (!templates) return UINT32_MAX;
+    c->map_templates = templates;
   }
 
   uint32_t index = (uint32_t)c->map_template_count++;
@@ -398,7 +428,7 @@ uint32_t add_map_template_desc(
     const sv_ast_t *segment = tpl->args.items[i * 2];
     int atom_idx = add_atom(
       c, segment->str ? segment->str : "", segment->len);
-    desc->segments[i] = c->atoms[atom_idx];
+    if (atom_idx >= 0) desc->segments[i] = c->atoms[atom_idx];
   }
   
   return index;
@@ -488,10 +518,11 @@ void emit_loop(sv_compiler_t *c, int loop_start) {
   emit_i32(c, delta);
 }
 
-void patch_list_add(sv_patch_list_t *pl, int offset) {
+void patch_list_add(sv_compiler_t *c, sv_patch_list_t *pl, int offset) {
   if (pl->count >= pl->cap) {
-    pl->cap = pl->cap ? pl->cap * 2 : 4;
-    pl->offsets = realloc(pl->offsets, (size_t)pl->cap * sizeof(int));
+    int *offsets = Silver_Compiler_Grow(c, pl->offsets, &pl->cap, pl->count + 1, 4, sizeof(int));
+    if (!offsets) return;
+    pl->offsets = offsets;
   }
   pl->offsets[pl->count++] = offset;
 }

@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 void compile_do_while(sv_compiler_t *c, sv_ast_t *node) {
   emit_set_completion_undefined(c);
@@ -7,7 +7,7 @@ void compile_do_while(sv_compiler_t *c, sv_ast_t *node) {
   push_loop(c, loop_start, NULL, 0, SV_LOOP_ITERATION);
   compile_stmt_region(c, node->body);
 
-  sv_loop_t *loop = &c->loops[c->loop_count - 1];
+  sv_loop_t *loop = loop_top(c);
   for (int i = 0; i < loop->continues.count; i++)
     patch_jump(c, loop->continues.offsets[i]);
 
@@ -18,17 +18,15 @@ void compile_do_while(sv_compiler_t *c, sv_ast_t *node) {
   pop_loop(c);
 }
 
-static void for_add_slot_unique(int **slots, int *count, int *cap, int slot) {
+static void for_add_slot_unique(sv_compiler_t *c, int **slots, int *count, int *cap, int slot) {
   if (slot < 0) return;
   for (int i = 0; i < *count; i++) {
     if ((*slots)[i] == slot) return;
   }
   if (*count >= *cap) {
-    int new_cap = (*cap > 0) ? (*cap * 2) : 8;
-    int *new_slots = realloc(*slots, (size_t)new_cap * sizeof(int));
+    int *new_slots = Silver_Compiler_Grow(c, *slots, cap, *count + 1, 8, sizeof(int));
     if (!new_slots) return;
     *slots = new_slots;
-    *cap = new_cap;
   }
   (*slots)[(*count)++] = slot;
 }
@@ -38,7 +36,7 @@ static void for_collect_pattern_slots(sv_compiler_t *c, sv_ast_t *pat, int **slo
   switch (pat->type) {
     case N_IDENT: {
       int slot = resolve_local(c, pat->str, pat->len);
-      for_add_slot_unique(slots, count, cap, slot);
+      for_add_slot_unique(c, slots, count, cap, slot);
       break;
     }
     case N_ASSIGN_PAT:
@@ -186,7 +184,7 @@ void compile_for(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   compile_stmt_region(c, node->body);
-  sv_loop_t *loop = &c->loops[c->loop_count - 1];
+  sv_loop_t *loop = loop_top(c);
   for (int i = 0; i < loop->continues.count; i++)
     patch_jump(c, loop->continues.offsets[i]);
 
@@ -358,9 +356,10 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   push_loop(c, loop_start, NULL, 0, SV_LOOP_ITERATION);
   
   if (is_for_of) {
-    c->loops[c->loop_count - 1].iter_unwind_index = c->unwind_count - 1;
-    c->loops[c->loop_count - 1].iter_completion_local = iter_err_local;
-    c->loops[c->loop_count - 1].iter_async = is_for_await;
+    sv_loop_t *loop = loop_top(c);
+    loop->iter_unwind_index = c->unwind_count - 1;
+    loop->iter_completion_local = iter_err_local;
+    loop->iter_async = is_for_await;
   }
 
   if (is_using_loop) {
@@ -412,7 +411,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   }
 
   compile_stmt_region(c, node->body);
-  sv_loop_t *loop = &c->loops[c->loop_count - 1];
+  sv_loop_t *loop = loop_top(c);
   for (int i = 0; i < loop->continues.count; i++)
     patch_jump(c, loop->continues.offsets[i]);
 
@@ -428,6 +427,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   if (iter_count > 0) {
     for (int i = 0; i < iter_count; i++) {
       int inner_idx = iter_inner_start + i;
+      if (inner_idx >= c->local_count) break;
       if (!c->locals[inner_idx].captured) continue;
       int slot = local_to_frame_slot(c, inner_idx);
       if (break_close_slot < 0 || slot < break_close_slot)
@@ -516,6 +516,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
 }
 
 void emit_break_to_loop(sv_compiler_t *c, int target) {
+  if (target >= c->loop_count) return;
   emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].breaks);
 }
 

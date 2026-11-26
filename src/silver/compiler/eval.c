@@ -1,6 +1,6 @@
 #include <compat.h> // IWYU pragma: keep
 
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 typedef struct {
   uint32_t *slots;
@@ -489,6 +489,7 @@ void add_eval_var(sv_compiler_t *c, const char *name, uint32_t len, bool annex_b
     c->eval_var_cap = cap;
   }
   int atom = add_atom(c, name, len);
+  if (atom < 0) return;
   c->eval_vars[c->eval_var_count++] = (sv_eval_decl_t){ .str = c->atoms[atom].str, .len = len, .annex_b = annex_b };
   if (c->eval_var_count < 16) return;
   if (c->eval_var_index_cap && c->eval_var_count * 2 < c->eval_var_index_cap) eval_var_index_insert(c, c->eval_var_count - 1);

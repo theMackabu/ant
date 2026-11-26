@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/scope.h"
 
 typedef struct sv_write_scan sv_write_scan_t;
 
@@ -241,7 +241,10 @@ void type_dep_add(sv_compiler_t *c, int local) {
     int cap = c->types->dep_cap ? c->types->dep_cap * 2 : 16;
     sv_type_dep_t *next = sv_compile_ctx_grow_types(
       c->types, c->types->deps, (size_t)c->types->dep_count * sizeof(*next), (size_t)cap * sizeof(*next));
-    if (!next) return;
+    if (!next) {
+      Silver_Compiler_RaiseOutOfMemory(c);
+      return;
+    }
     c->types->deps = next;
     c->types->dep_cap = cap;
   }
@@ -260,7 +263,10 @@ static sv_type_use_t *type_use_push(sv_compiler_t *c, const sv_type_dep_t *dep) 
     int cap = c->types->use_cap ? c->types->use_cap * 2 : 32;
     sv_type_use_t *next = sv_compile_ctx_grow_types(
       c->types, c->types->uses, (size_t)c->types->use_count * sizeof(*next), (size_t)cap * sizeof(*next));
-    if (!next) return NULL;
+    if (!next) {
+      Silver_Compiler_RaiseOutOfMemory(c);
+      return NULL;
+    }
     c->types->uses = next;
     c->types->use_cap = cap;
   }
@@ -298,6 +304,7 @@ static bool type_use_derived(sv_compiler_t *c, int base, int local) {
 }
 
 static void type_use_patch(sv_compiler_t *c, int pc) {
+  if (pc < 0 || pc >= c->code_len) return;
   switch (c->code[pc]) {
     case OP_ADD_NUM: c->code[pc] = OP_ADD; break;
     case OP_SUB_NUM: c->code[pc] = OP_SUB; break;
@@ -340,7 +347,10 @@ static void type_kill(sv_compiler_t *c, sv_type_kill_t first) {
       }
       if (count >= cap) {
         sv_type_kill_t *next = malloc((size_t)cap * 2 * sizeof(*next));
-        if (!next) continue;
+        if (!next) {
+          Silver_Compiler_RaiseOutOfMemory(c);
+          continue;
+        }
         memcpy(next, work, (size_t)count * sizeof(*next));
         if (work != inline_work) free(work);
         work = next;

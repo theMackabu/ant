@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 static bool has_global_lexical(const sv_compiler_t *c, const char *name, uint32_t len) {
   for (uint32_t i = 0; i < c->global_lexical_count; i++)
@@ -17,6 +17,7 @@ static void add_global_lexical(sv_compiler_t *c, const char *name, uint32_t len,
   if (!decls) { js_mkerr(c->js, "out of memory while declaring global lexicals"); return; }
   c->global_lexicals = decls;
   int atom = add_atom(c, name, len);
+  if (atom < 0) return;
   c->global_lexicals[c->global_lexical_count++] =
     (sv_eval_decl_t){ .str = c->atoms[atom].str, .len = len, .is_const = is_const };
 }
@@ -707,6 +708,7 @@ void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
 }
 
 void emit_closure(sv_compiler_t *c, int index) {
+  if (index < 0) return;
   sv_func_t *child = (sv_func_t *)vptr(c->constants[index]);
   uint32_t scope = 0;
   if (child->needs_eval_env && !capture_dynamic_eval_scope(c, &scope)) return;

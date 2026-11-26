@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 void mark_char_code_at_binding(sv_compiler_t *c, sv_ast_t *prop) {
   if (!prop || prop->type != N_PROPERTY || (prop->flags & FN_COMPUTED)) return;
@@ -82,7 +82,7 @@ static bool compile_with_identifier_call(
   sv_patch_list_t found_implicit = {0};
   for (int i = 0; i < shadows.count; i++) {
     int jump = emit_with_try(c, OP_WITH_TRY_CALL, &shadows.refs[i], name, len);
-    patch_list_add(shadows.refs[i].implicit ? &found_implicit : &found, jump);
+    patch_list_add(c, shadows.refs[i].implicit ? &found_implicit : &found, jump);
     emit_op(c, OP_POP);
     emit_op(c, OP_POP);
   }
@@ -647,7 +647,7 @@ static void compile_optional_call_after_setup(
   if (sv_call_kind_has_receiver(kind))
     emit_op(c, OP_POP);
   emit_op(c, OP_UNDEF);
-  patch_list_add(chain, emit_jump(c, OP_JMP));
+  patch_list_add(c, chain, emit_jump(c, OP_JMP));
   patch_jump(c, j_do_call);
   compile_call_emit_invoke(c, call_node, kind, has_spread);
 }

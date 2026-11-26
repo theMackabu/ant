@@ -2,6 +2,7 @@
 #include "silver/compile_ctx.h"
 #include "utf8.h"
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -134,7 +135,7 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   ctx_free(ctx->atoms);
   ctx_free(ctx->atom_index);
   ctx_free(ctx->map_templates);
-  ctx_free(ctx->locals);
+  if (ctx->locals != &ctx->local_sink) ctx_free(ctx->locals);
   ctx_free(ctx->local_lookup_heads);
   ctx_free(ctx->upval_descs);
   ctx_free(ctx->upval_bindings);
@@ -189,6 +190,10 @@ sv_line_table_t *sv_compile_ctx_build_line_table(const char *source, ant_offset_
 
   int cap = (int)(source_len / 32) + 64;
   lt->offsets = malloc((size_t)cap * sizeof(uint32_t));
+  if (!lt->offsets) {
+    free(lt);
+    return NULL;
+  }
   lt->source = source;
   lt->count = 0;
   lt->hint = 0;
@@ -209,8 +214,13 @@ sv_line_table_t *sv_compile_ctx_build_line_table(const char *source, ant_offset_
   const char *end = source + len;
   for (const char *nl = source; (nl = memchr(nl, '\n', (size_t)(end - nl))); nl++) {
     if (lt->count >= cap) {
+      uint32_t *offsets = cap <= INT_MAX / 2 ? realloc(lt->offsets, (size_t)cap * 2 * sizeof(uint32_t)) : NULL;
+      if (!offsets) {
+        sv_compile_ctx_free_line_table(lt);
+        return NULL;
+      }
+      lt->offsets = offsets;
       cap *= 2;
-      lt->offsets = realloc(lt->offsets, (size_t)cap * sizeof(uint32_t));
     }
     lt->offsets[lt->count++] = (uint32_t)(nl + 1 - source);
   }

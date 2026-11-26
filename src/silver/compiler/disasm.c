@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/scope.h"
 
 #pragma clang attribute push(__attribute__((minsize)), apply_to = function)
 

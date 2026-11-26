@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/scope.h"
 
 static bool eval_source_may_mention(const char *source, size_t len, const char *word, size_t word_len) {
   if (len > 64) return true;
@@ -57,6 +57,12 @@ uint16_t sv_eval_shadow_bits(ant_t *js, const js_eval_scope_t *scope, const char
   }
     
   return bits & (uint16_t)~SV_EVAL_SCOPE_PRIVATE;
+}
+
+static void report_out_of_memory(ant_t *js, const sv_compiler_t *root) {
+  if (!root->oom_raised) return;
+  Ant_Exception_Clear(js);
+  Ant_Error_CreateOutOfMemory(js);
 }
 
 static bool program_uses_new_target(const sv_ast_t *program) {
@@ -164,6 +170,7 @@ sv_func_t *sv_compile(
   
   root.line_table = sv_compile_ctx_build_line_table(root.source, source_len);
   sv_func_t *func = compile_function_body(&root, &top_fn, mode);
+  report_out_of_memory(js, &root);
   if (func && unit) {
     sv_func_metadata_t *metadata = sv_func_metadata(func);
     unit->eval_arguments = (uint8_t)(
@@ -220,6 +227,7 @@ sv_func_t *sv_compile_function(ant_t *js, const sv_function_parts_t *parts) {
   root.function_ctor_root = true;
   root.line_table = sv_compile_ctx_build_line_table(root.source, parts->len);
   sv_func_t *func = compile_function_body(&root, func_node, SV_COMPILE_SCRIPT);
+  report_out_of_memory(js, &root);
   
   sv_compile_ctx_free_line_table(root.line_table);
   sv_code_unit_finish(unit);
@@ -330,6 +338,7 @@ sv_func_t *sv_compile_function_with_params(
   root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)body_len);
   if ((top_fn.flags & FN_DIRECT_EVAL) && ast_literal_eval_mentions_arguments(&root, top_fn.body)) top_fn.flags |= FN_USES_ARGS;
   sv_func_t *func = compile_function_body(&root, &top_fn, SV_COMPILE_SCRIPT);
+  report_out_of_memory(js, &root);
   
   sv_compile_ctx_free_line_table(root.line_table);
   parse_arena_rewind(js, parse_mark);

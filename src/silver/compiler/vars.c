@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 static void reject_super(sv_compiler_t *c) {
   js_mkerr_typed(c->js, JS_ERR_SYNTAX, "'super' keyword unexpected here");

@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 enum {
   IMPORT_BIND_DEFAULT   = 1 << 0,
@@ -103,9 +103,11 @@ void compile_export_emit(sv_compiler_t *c, const char *name, uint32_t len) {
 
 static void defer_export(sv_compiler_t *c, const char *name, uint32_t len) {
   if (c->deferred_export_count >= c->deferred_export_cap) {
-    int cap = c->deferred_export_cap ? c->deferred_export_cap * 2 : 8;
-    c->deferred_exports = realloc(c->deferred_exports, cap * sizeof(sv_deferred_export_t));
-    c->deferred_export_cap = cap;
+    sv_deferred_export_t *exports = Silver_Compiler_Grow(
+      c, c->deferred_exports, &c->deferred_export_cap, 
+      c->deferred_export_count + 1, 8, sizeof(sv_deferred_export_t));
+    if (!exports) return;
+    c->deferred_exports = exports;
   }
   c->deferred_exports[c->deferred_export_count++] =
     (sv_deferred_export_t){ .name = name, .len = len };

@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 static bool ast_contains_await_expr(const sv_ast_t *node) {
   if (!node) return false;
@@ -478,17 +478,16 @@ sv_func_t *compile_function_body(
       }
 
       if (param_bind_count >= param_bind_cap) {
-        param_bind_cap = param_bind_cap ? param_bind_cap * 2 : 8;
-        param_bind_locals = realloc(
-          param_bind_locals,
-          (size_t)param_bind_cap * sizeof(int));
+        int *grown = Silver_Compiler_Grow(&comp, param_bind_locals, &param_bind_cap, param_bind_count + 1, 8, sizeof(int));
+        if (!grown) continue;
+        param_bind_locals = grown;
       }
       param_bind_locals[param_bind_count++] = lb;
     }
 
     for (int i = 0; i < node->args.count; i++) {
       sv_ast_t *p = node->args.items[i];
-      int bind_lb = param_bind_locals[i];
+      int bind_lb = i < param_bind_count ? param_bind_locals[i] : comp.local_count;
 
       if (p->type == N_IDENT) {
         if (bind_lb < comp.local_count) {

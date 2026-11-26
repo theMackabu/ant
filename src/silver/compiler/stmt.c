@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 static bool is_tail_callable(sv_compiler_t *c, sv_ast_t *node) {
   if (c->try_depth > 0) return false;
@@ -115,7 +115,7 @@ void emit_loop_exit_jump(sv_compiler_t *c, sv_loop_t *loop, sv_patch_list_t *pl)
 
   emit_loop_exit_unwind(c, loop->unwind_depth, (int)(loop - c->loops), &cur, floor);
   emit_exit_cleanups(c, &cur, floor.locals, floor.usings);
-  patch_list_add(pl, emit_jump(c, OP_JMP));
+  patch_list_add(c, pl, emit_jump(c, OP_JMP));
 }
 
 static bool unwinding_runs_finally(const sv_compiler_t *c) {
@@ -270,7 +270,8 @@ void emit_using_push(sv_compiler_t *c, bool is_async) {
 }
 
 void pop_using_cleanup(sv_compiler_t *c) {
-  if (c->using_cleanup_count > 0) c->using_cleanup_count--;
+  if (c->using_lost) c->using_lost--;
+  else if (c->using_cleanup_count > 0) c->using_cleanup_count--;
 }
 
 void emit_dispose_resource(sv_compiler_t *c, bool is_async) {
@@ -286,9 +287,13 @@ void push_using_cleanup(
   bool is_async
 ) {
   if (c->using_cleanup_count >= c->using_cleanup_cap) {
-    int cap = c->using_cleanup_cap ? c->using_cleanup_cap * 2 : 4;
-    c->using_cleanups = realloc(c->using_cleanups, (size_t)cap * sizeof(sv_using_cleanup_t));
-    c->using_cleanup_cap = cap;
+    sv_using_cleanup_t *cleanups = Silver_Compiler_Grow(
+      c, c->using_cleanups, &c->using_cleanup_cap, c->using_cleanup_count + 1, 4, sizeof(sv_using_cleanup_t));
+    if (!cleanups) {
+      c->using_lost++;
+      return;
+    }
+    c->using_cleanups = cleanups;
   }
 
   c->using_cleanups[c->using_cleanup_count++] = (sv_using_cleanup_t){
@@ -482,14 +487,10 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       int local = add_hidden_local(c);
       emit_put_local(c, local);
       
-      if (c->with_depth >= c->with_cap) {
-        c->with_cap = c->with_cap ? c->with_cap * 2 : 4;
-        c->with_scopes = realloc(c->with_scopes, (size_t)c->with_cap * sizeof(*c->with_scopes));
-      }
-      c->with_scopes[c->with_depth++] = (sv_with_scope_t){ .local = local, .depth = c->scope_depth, .block_depth = c->scope_depth };
+      bool pushed = push_with_scope(c, (sv_with_scope_t){ .local = local, .depth = c->scope_depth, .block_depth = c->scope_depth });
       
       compile_stmt(c, node->body);
-      c->with_depth--;
+      if (pushed) c->with_depth--;
       c->eval_scope_shareable = false;
       end_scope(c);
       break;
@@ -661,7 +662,7 @@ void compile_while(sv_compiler_t *c, sv_ast_t *node) {
   int exit_jump = emit_jump(c, OP_JMP_FALSE);
   compile_stmt_region(c, node->body);
 
-  sv_loop_t *loop = &c->loops[c->loop_count - 1];
+  sv_loop_t *loop = loop_top(c);
   for (int i = 0; i < loop->continues.count; i++)
     patch_jump(c, loop->continues.offsets[i]);
 
@@ -836,6 +837,10 @@ void compile_switch(sv_compiler_t *c, sv_ast_t *node) {
   if (case_count > 0) {
     match_to_stub = calloc((size_t)case_count, sizeof(int));
     stub_to_body = calloc((size_t)case_count, sizeof(int));
+    if (!match_to_stub || !stub_to_body) {
+      Silver_Compiler_RaiseOutOfMemory(c);
+      case_count = 0;
+    }
     for (int i = 0; i < case_count; i++) {
       match_to_stub[i] = -1;
       stub_to_body[i] = -1;

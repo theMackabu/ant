@@ -23,6 +23,7 @@ libant_tests = [
   'gc-untrusted-string-words',
   'gc-pin-permanent-oom',
   'gc-rope-table-oom',
+  'compiler-grow-oom',
   'jit-entry-stub',
   'gc-jit-entry-saves',
   'gc-jit-resume',

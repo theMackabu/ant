@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 static sv_private_name_t *private_scope_find_current(
   sv_private_scope_t *scope, const char *name, uint32_t len
@@ -85,11 +85,9 @@ static bool private_scope_add(
   }
 
   if (scope->count >= scope->cap) {
-    int new_cap = scope->cap ? scope->cap * 2 : 8;
-    sv_private_name_t *new_names = realloc(scope->names, (size_t)new_cap * sizeof(*scope->names));
+    sv_private_name_t *new_names = Silver_Compiler_Grow(c, scope->names, &scope->cap, scope->count + 1, 8, sizeof(*scope->names));
     if (!new_names) return false;
     scope->names = new_names;
-    scope->cap = new_cap;
   }
 
   sv_private_name_t *p = &scope->names[scope->count++];
@@ -158,7 +156,10 @@ static int resolve_private_upvalue(sv_compiler_t *c, sv_compiler_t *owner, int l
 
 static const char *private_method_binding_name(sv_compiler_t *c, const char *name, uint32_t len) {
   char *buf = malloc((size_t)len + 2);
-  if (!buf) return NULL;
+  if (!buf) {
+    Silver_Compiler_RaiseOutOfMemory(c);
+    return NULL;
+  }
   memcpy(buf, name, len);
   memcpy(buf + len, "()", 2);
   const char *interned = intern_string(c->js, buf, (size_t)len + 2);
@@ -450,7 +451,8 @@ void emit_private_get(sv_compiler_t *c, sv_ast_t *name, sv_op_t op) {
   emit_op(c, OP_POP);
   if (eval_method) {
     const char *binding = private_method_binding_name(c, name->str, name->len);
-    emit_atom_op(c, OP_GET_EVAL_GLOBAL, binding, name->len + 2);
+    if (binding) emit_atom_op(c, OP_GET_EVAL_GLOBAL, binding, name->len + 2);
+    else emit_op(c, OP_UNDEF);
   } else emit_private_method_value(c, p);
   if (done >= 0) patch_jump(c, done);
 }
@@ -796,8 +798,18 @@ static void compile_class_strict(
   if (static_init_count > 0)
     static_init_items = malloc(sizeof(sv_class_emit_item_t) * static_init_count);
 
+  int member_count = node->args.count;
+  if (
+    (field_count > 0 && (!field_inits || !field_locals)) ||
+    (method_emit_count > 0 && !method_emit_items) ||
+    (static_init_count > 0 && !static_init_items)
+  ) {
+    Silver_Compiler_RaiseOutOfMemory(c);
+    field_count = method_emit_count = static_init_count = member_count = 0;
+  }
+
   int fi = 0, mi = 0, si = 0;
-  for (int i = 0; i < node->args.count; i++) {
+  for (int i = 0; i < member_count; i++) {
     sv_ast_t *m = node->args.items[i];
     if (m->type == N_STATIC_BLOCK) {
       static_init_items[si++] = (sv_class_emit_item_t){ m, -1 };

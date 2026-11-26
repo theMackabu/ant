@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 typedef enum {
   SELF_APPEND_EXPR,

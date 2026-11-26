@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 void emit_import_binding_resolve(
   sv_compiler_t *c,
@@ -60,15 +60,13 @@ static void ensure_slot_type_cap(sv_compiler_t *c, int slot) {
   if (slot < 0) return;
   if (slot < c->slot_type_cap) return;
   
-  int new_cap = c->slot_type_cap ? c->slot_type_cap : 16;
-  while (new_cap <= slot) new_cap *= 2;
-  
-  sv_type_info_t *next = realloc(c->slot_types, (size_t)new_cap * sizeof(sv_type_info_t));
+  int old_cap = c->slot_type_cap;
+  sv_type_info_t *next = Silver_Compiler_Grow(
+    c, c->slot_types, &c->slot_type_cap, slot + 1, 16, sizeof(sv_type_info_t));
   if (!next) return;
   
-  memset(next + c->slot_type_cap, 0, (size_t)(new_cap - c->slot_type_cap) * sizeof(sv_type_info_t));
+  memset(next + old_cap, 0, (size_t)(c->slot_type_cap - old_cap) * sizeof(sv_type_info_t));
   c->slot_types = next;
-  c->slot_type_cap = new_cap;
 }
 
 static void mark_slot_bound(sv_compiler_t *c, int slot) {
@@ -88,8 +86,13 @@ int add_local(
   sv_compile_ctx_ensure_local_lookup_capacity(c, c->local_count + 1);
   
   if (c->local_count >= c->local_cap) {
-    c->local_cap = c->local_cap ? c->local_cap * 2 : 16;
-    c->locals = realloc(c->locals, (size_t)c->local_cap * sizeof(sv_local_t));
+    sv_local_t *locals = Silver_Compiler_Grow(c, c->locals, &c->local_cap, c->local_count + 1, 16, sizeof(sv_local_t));
+    if (!locals) {
+      if (c->local_count > 0) return c->local_count - 1;
+      c->locals = &c->local_sink;
+      return 0;
+    }
+    c->locals = locals;
   }
   
   int idx = c->local_count++;
@@ -115,8 +118,8 @@ int add_local(
 }
 
 int reserve_hidden_locals(sv_compiler_t *c, int count) {
-  int base = c->local_count;
-  for (int i = 0; i < count; i++)
+  int base = add_local(c, "", 0, false, c->scope_depth);
+  for (int i = 1; i < count; i++)
     add_local(c, "", 0, false, c->scope_depth);
   return base;
 }
@@ -251,26 +254,26 @@ static void merge_binding_meta(sv_binding_meta_t *dst, const sv_binding_meta_t *
   dst->may_tdz |= src->may_tdz;
 }
 
-static void ensure_upvalue_capacity(sv_compiler_t *c) {
-  if (c->upvalue_count < c->upvalue_cap) return;
+static bool ensure_upvalue_capacity(sv_compiler_t *c) {
+  if (c->upvalue_count < c->upvalue_cap) return true;
 
   int old_cap = c->upvalue_cap;
-  c->upvalue_cap = c->upvalue_cap ? c->upvalue_cap * 2 : 8;
+  int desc_cap = old_cap;
+  int binding_cap = old_cap;
   
-  c->upval_descs = realloc(
-    c->upval_descs,
-    (size_t)c->upvalue_cap * sizeof(sv_upval_desc_t)
-  );
+  sv_upval_desc_t *descs = Silver_Compiler_Grow(
+    c, c->upval_descs, &desc_cap, c->upvalue_count + 1, 8, sizeof(sv_upval_desc_t));
+  if (!descs) return false;
+  c->upval_descs = descs;
   
-  c->upval_bindings = realloc(
-    c->upval_bindings,
-    (size_t)c->upvalue_cap * sizeof(sv_binding_meta_t)
-  );
+  sv_binding_meta_t *bindings = Silver_Compiler_Grow(
+    c, c->upval_bindings, &binding_cap, c->upvalue_count + 1, 8, sizeof(sv_binding_meta_t));
+  if (!bindings) return false;
+  c->upval_bindings = bindings;
 
-  if (c->upval_bindings) memset(
-    c->upval_bindings + old_cap, 0,
-    (size_t)(c->upvalue_cap - old_cap) * sizeof(sv_binding_meta_t)
-  );
+  memset(bindings + old_cap, 0, (size_t)(binding_cap - old_cap) * sizeof(sv_binding_meta_t));
+  c->upvalue_cap = binding_cap;
+  return true;
 }
 
 int add_upvalue_binding(
@@ -291,7 +294,7 @@ int add_upvalue_binding(
     return existing;
   }
 
-  ensure_upvalue_capacity(c);
+  if (!ensure_upvalue_capacity(c)) return -1;
   int idx = c->upvalue_count++;
   
   if (idx > UINT16_MAX && !Ant_Exception_Pending(c->js)) js_mkerr_typed(
@@ -423,11 +426,27 @@ bool global_this_shadowed(sv_compiler_t *c) {
   return !root || root->eval_shadows_global_this;
 }
 
+static bool unwind_reserve(sv_compiler_t *c) {
+  int kind_cap = c->unwind_cap;
+  int mark_cap = c->unwind_cap;
+  
+  uint8_t *kinds = Silver_Compiler_Grow(c, c->unwind_kinds, &kind_cap, c->unwind_count + 1, 8, 1);
+  if (!kinds) return false;
+  c->unwind_kinds = kinds;
+  
+  sv_unwind_mark_t *marks = Silver_Compiler_Grow(
+    c, c->unwind_marks, &mark_cap, c->unwind_count + 1, 8, sizeof(sv_unwind_mark_t));
+  if (!marks) return false;
+  c->unwind_marks = marks;
+  
+  c->unwind_cap = mark_cap;
+  return true;
+}
+
 void unwind_push(sv_compiler_t *c, uint8_t kind) {
-  if (c->unwind_count >= c->unwind_cap) {
-    c->unwind_cap = c->unwind_cap ? c->unwind_cap * 2 : 8;
-    c->unwind_kinds = realloc(c->unwind_kinds, (size_t)c->unwind_cap);
-    c->unwind_marks = realloc(c->unwind_marks, (size_t)c->unwind_cap * sizeof(sv_unwind_mark_t));
+  if (c->unwind_count >= c->unwind_cap && !unwind_reserve(c)) {
+    c->unwind_lost++;
+    return;
   }
   c->unwind_marks[c->unwind_count] = (sv_unwind_mark_t){
     .local_count = c->local_count,
@@ -437,7 +456,8 @@ void unwind_push(sv_compiler_t *c, uint8_t kind) {
 }
 
 void unwind_pop(sv_compiler_t *c) {
-  if (c->unwind_count > 0) c->unwind_count--;
+  if (c->unwind_lost) c->unwind_lost--;
+  else if (c->unwind_count > 0) c->unwind_count--;
 }
 
 void push_loop(
@@ -445,15 +465,21 @@ void push_loop(
   const char *label, uint32_t label_len,
   sv_loop_kind_t kind
 ) {
+  bool lost = false;
   if (c->loop_count >= c->loop_cap) {
-    c->loop_cap = c->loop_cap ? c->loop_cap * 2 : 4;
-    c->loops = realloc(c->loops, (size_t)c->loop_cap * sizeof(sv_loop_t));
+    sv_loop_t *loops = Silver_Compiler_Grow(c, c->loops, &c->loop_cap, c->loop_count + 1, 4, sizeof(sv_loop_t));
+    if (loops) c->loops = loops;
+    else lost = true;
   }
   if (!label && c->pending_label) {
     label = c->pending_label;
     label_len = c->pending_label_len;
     c->pending_label = NULL;
     c->pending_label_len = 0;
+  }
+  if (lost) {
+    if (c->loop_lost++ == 0) c->loop_sink = (sv_loop_t){ .loop_start = loop_start, .iter_unwind_index = -1, .iter_completion_local = -1 };
+    return;
   }
   c->loops[c->loop_count++] = (sv_loop_t){
     .loop_start = loop_start,
@@ -483,6 +509,13 @@ int find_loop_label(const sv_compiler_t *c, const char *label, uint32_t label_le
 }
 
 void pop_loop(sv_compiler_t *c) {
+  if (c->loop_lost) {
+    if (--c->loop_lost) return;
+    patch_list_resolve(c, &c->loop_sink.breaks);
+    free(c->loop_sink.continues.offsets);
+    c->loop_sink = (sv_loop_t){0};
+    return;
+  }
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
   if (loop->iterates) {
     if (loop->type_child_mark != c->type_child_count) type_loop_leave(c);
@@ -527,32 +560,31 @@ static int spill_scope_for(sv_compiler_t *c) {
   emit_op(c, OP_SET_PROTO);
   emit_put_local(c, local);
 
-  if (c->with_depth >= c->with_cap) {
-    c->with_cap = c->with_cap ? c->with_cap * 2 : 4;
-    c->with_scopes = realloc(c->with_scopes, (size_t)c->with_cap * sizeof(*c->with_scopes));
-  }
-  c->with_scopes[c->with_depth] = (sv_with_scope_t){
+  if (!push_with_scope(c, (sv_with_scope_t){
     .local = local, .depth = block_depth == 0 ? -1 : block_depth,
     .block_depth = block_depth, .implicit = true,
-  };
-  return c->with_depth++;
+  })) return -1;
+  return c->with_depth - 1;
 }
 
-static void spill_table_grow(sv_compiler_t *c) {
+static bool spill_table_grow(sv_compiler_t *c) {
   if (c->spill_count >= c->spill_cap) {
-    c->spill_cap = c->spill_cap ? c->spill_cap * 2 : 1024;
-    c->spills = realloc(c->spills, (size_t)c->spill_cap * sizeof(*c->spills));
+    sv_spill_binding_t *spills = Silver_Compiler_Grow(c, c->spills, &c->spill_cap, c->spill_count + 1, 1024, sizeof(*c->spills));
+    if (!spills) return false;
+    c->spills = spills;
   }
-  if (c->spill_count * 2 < c->spill_head_cap) return;
+  if (c->spill_count * 2 < c->spill_head_cap) return true;
 
-  c->spill_head_cap = c->spill_head_cap ? c->spill_head_cap * 2 : 2048;
-  c->spill_heads = realloc(c->spill_heads, (size_t)c->spill_head_cap * sizeof(*c->spill_heads));
+  int *heads = Silver_Compiler_Grow(c, c->spill_heads, &c->spill_head_cap, c->spill_count * 2 + 1, 2048, sizeof(*c->spill_heads));
+  if (!heads) return false;
+  c->spill_heads = heads;
   memset(c->spill_heads, 0xff, (size_t)c->spill_head_cap * sizeof(*c->spill_heads));
   for (int i = 0; i < c->spill_count; i++) {
     int bucket = (int)(c->spills[i].hash & (uint32_t)(c->spill_head_cap - 1));
     c->spills[i].next = c->spill_heads[bucket];
     c->spill_heads[bucket] = i;
   }
+  return true;
 }
 
 void emit_spill_define(sv_compiler_t *c, int spill) {
@@ -567,8 +599,9 @@ bool declare_spilled_slow(sv_compiler_t *c, const char *name, uint32_t len, bool
   if (existing >= 0 && c->spills[existing].depth == c->scope_depth) return true;
   if (!spill_allowed(c)) return false;
 
+  if (!spill_table_grow(c)) return false;
   int scope = spill_scope_for(c);
-  spill_table_grow(c);
+  if (scope < 0) return false;
   uint32_t hash = sv_compile_ctx_hash_local_name(name, len);
   int bucket = (int)(hash & (uint32_t)(c->spill_head_cap - 1));
   int index = c->spill_count++;
@@ -649,16 +682,33 @@ void emit_close_upvals(sv_compiler_t *c) {
   }}
 }
 
-static void with_refs_push(sv_with_refs_t *out, sv_with_ref_t ref) {
+bool push_with_scope(sv_compiler_t *c, sv_with_scope_t scope) {
+  if (c->with_depth >= c->with_cap) {
+    sv_with_scope_t *scopes = Silver_Compiler_Grow(c, c->with_scopes, &c->with_cap, c->with_depth + 1, 4, sizeof(*scopes));
+    if (!scopes) return false;
+    c->with_scopes = scopes;
+  }
+  c->with_scopes[c->with_depth++] = scope;
+  return true;
+}
+
+typedef struct {
+  sv_compiler_t *c;
+  sv_with_refs_t *out;
+} with_refs_sink_t;
+
+static void with_refs_push(sv_compiler_t *c, sv_with_refs_t *out, sv_with_ref_t ref) {
   if (out->count >= out->cap) {
-    out->cap = out->cap ? out->cap * 2 : 4;
-    out->refs = realloc(out->refs, (size_t)out->cap * sizeof(*out->refs));
+    sv_with_ref_t *refs = Silver_Compiler_Grow(c, out->refs, &out->cap, out->count + 1, 4, sizeof(*out->refs));
+    if (!refs) return;
+    out->refs = refs;
   }
   out->refs[out->count++] = ref;
 }
 
 static void with_refs_push_marker(void *ctx, const char *marker, uint32_t len) {
-  with_refs_push(ctx, (sv_with_ref_t){
+  with_refs_sink_t *sink = ctx;
+  with_refs_push(sink->c, sink->out, (sv_with_ref_t){
     .kind = SV_WITH_REF_ENV, .implicit = len > 1 && marker[1] == 's',
     .marker = marker, .marker_len = len,
   });
@@ -685,14 +735,15 @@ void with_shadows(sv_compiler_t *c, const char *name, uint32_t len, sv_with_refs
       int slot = cur == c
         ? local_to_frame_slot(c, scope->local) - c->param_count
         : resolve_upvalue_to(c, cur, scope->local);
-      if (slot >= 0) with_refs_push(out, (sv_with_ref_t){
+      if (slot >= 0) with_refs_push(c, out, (sv_with_ref_t){
         .kind = cur == c ? SV_WITH_REF_LOCAL : SV_WITH_REF_UPVALUE,
         .implicit = scope->implicit, .idx = (uint16_t)slot,
       });
     }
     if (local >= 0 || cur->owns_eval_env) break;
     if (cur->eval_with) sv_eval_env_each_with(
-      c->js, cur->eval_env, name, len, eval_declares_var(inner, name, len), with_refs_push_marker, out);
+      c->js, cur->eval_env, name, len, eval_declares_var(inner, name, len), with_refs_push_marker,
+      &(with_refs_sink_t){ .c = c, .out = out });
   }
 }
 
@@ -743,7 +794,7 @@ void emit_with_tries(
   const char *name, uint32_t len, int pops, sv_patch_list_t *out
 ) {
   for (int i = 0; i < shadows->count; i++) {
-    patch_list_add(out, emit_with_try(c, op, &shadows->refs[i], name, len));
+    patch_list_add(c, out, emit_with_try(c, op, &shadows->refs[i], name, len));
     for (int p = 0; p < pops; p++) emit_op(c, OP_POP);
   }
   

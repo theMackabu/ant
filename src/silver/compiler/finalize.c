@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/scope.h"
 
 static bool sv_func_compute_has_try(const sv_func_t *func) {
   for (const uint8_t *ip = func->code, *end = func->code + func->code_len; ip < end;) {
@@ -15,35 +15,40 @@ static int sv_func_compute_max_stack(const sv_func_t *func);
 void sv_func_init_code_and_map_templates(
   const sv_compiler_t *c, sv_func_t *func
 ) {
+  static const uint8_t failed_code[] = { OP_RETURN_UNDEF };
   Ant_Assert(c != NULL && func != NULL, "function code requires compiler state");
-  Ant_Assert(c->code_len > 0, "function bytecode cannot be empty");
+
+  const uint8_t *code = c->alloc_failed ? failed_code : c->code;
+  int code_len = c->alloc_failed ? (int)sizeof(failed_code) : c->code_len;
+  int template_count = c->alloc_failed ? 0 : c->map_template_count;
+  Ant_Assert(code_len > 0, "function bytecode cannot be empty");
 
   size_t table_size =
-    (size_t)c->map_template_count * sizeof(sv_map_template_desc_t);
+    (size_t)template_count * sizeof(sv_map_template_desc_t);
   
-  size_t prefix_size = c->map_template_count > 0
+  size_t prefix_size = template_count > 0
     ? table_size + sizeof(sv_map_template_table_header_t) : 0;
   
   Ant_Assert(
-    prefix_size <= SIZE_MAX - (size_t)c->code_len,
+    prefix_size <= SIZE_MAX - (size_t)code_len,
     "function bytecode sidecar size overflow"
   );
 
-  uint8_t *storage = sv_code_bump(c->js, prefix_size + (size_t)c->code_len);
+  uint8_t *storage = sv_code_bump(c->js, prefix_size + (size_t)code_len);
   Ant_Assert(storage != NULL, "failed to allocate function bytecode");
   
-  if (c->map_template_count > 0) {
+  if (template_count > 0) {
     memcpy(storage, c->map_templates, table_size);
     sv_map_template_table_header_t *header =
     (sv_map_template_table_header_t *)(void *)(storage + table_size);
-    header->count = (uint32_t)c->map_template_count;
+    header->count = (uint32_t)template_count;
     header->magic = SV_MAP_TEMPLATE_TABLE_MAGIC;
     func->code = (uint8_t *)(void *)(header + 1);
     func->has_map_templates = true;
   } else func->code = storage;
   
-  memcpy(func->code, c->code, (size_t)c->code_len);
-  func->code_len = c->code_len;
+  memcpy(func->code, code, (size_t)code_len);
+  func->code_len = code_len;
   func->has_try = sv_func_compute_has_try(func);
   func->jit_osr_threshold = sv_jit_osr_threshold_for(func->code_len);
 

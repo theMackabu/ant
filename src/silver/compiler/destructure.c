@@ -1,4 +1,4 @@
-#include "compiler_internal.h"
+#include "private/codegen.h"
 
 static void emit_build_object_rest(sv_compiler_t *c, sv_ast_t *pat, int rest_idx, const int *key_locals) {
   emit_op(c, OP_DUP);
