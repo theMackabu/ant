@@ -13,6 +13,7 @@
 #include "jit/entry_stub.h"
 #include "modules/regex.h"
 #include "modules/generator.h"
+#include "modules/buffer.h"
 #include "modules/collections.h"
 
 #include "gc.h"
@@ -820,6 +821,9 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   if (gc_scan_plain_obj(js, obj)) return;
   ant_gc_shapes_mark(js, obj->shape);
   gc_mark_value_fast(js, ant_object_proto(obj));
+  
+  if (__builtin_expect(!obj->shape && js->desc_registry != NULL, 0)) 
+    gc_mark_descriptor_accessors(js, obj, gc_mark_value);
 
   if (obj->type_tag == kTypeError) {
     gc_mark_value_fast(js, obj->u.exception.value);
@@ -2107,7 +2111,10 @@ static __attribute__((noinline)) void gc_lazy_sweep_slow_free(ant_t *js, ant_obj
 }
 
 static inline bool gc_object_needs_prompt_release(ant_t *js, ant_object_t *obj) {
-  return (obj->native_tag || obj->finalizer) && gc_host_native_holds_resource(js, js_obj_from_ptr(obj));
+  if (!obj->native_tag && !obj->finalizer) return false;
+  if (buffer_object_holds_storage(obj)) return true;
+  ant_value_t value = js_obj_from_ptr(obj);
+  return generator_object_holds_coroutine(value) || gc_host_native_holds_resource(js, value);
 }
 
 typedef struct {
@@ -2235,7 +2242,7 @@ static void gc_lazy_sweep_run(ant_t *js, bool all, uint64_t deadline_ns) {
   gc_lazy_cells_t s = { .free_list = oa->free_list, .old = js->objects_old };
   size_t visited = 0;
 
-  while (all || !s.free_list || (deadline_ns && gc_now_ns() < deadline_ns)) {
+  while (all || (deadline_ns ? gc_now_ns() < deadline_ns : !s.free_list)) {
     uint32_t chunk = js->gc.lazy.chunk;
     size_t limit = chunk == js->gc.lazy.end_chunk ? js->gc.lazy.end_off : fixed_arena_chunk_used(oa, chunk);
     size_t lo = js->gc.lazy.off;

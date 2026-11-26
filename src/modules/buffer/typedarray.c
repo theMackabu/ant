@@ -13,13 +13,16 @@
 #include "numbers.h"
 #include "gc/roots.h"
 #include "descriptors.h"
-#include "silver/call.h"
+#include "buffer_internal.h"
+
+#include "silver/vm.h"
+#include "silver/engine.h"
+
 #include "modules/bigint.h"
 #include "modules/buffer.h"
 #include "native_getter.h"
 #include "modules/symbol.h"
 #include "modules/iterator.h"
-#include "buffer_internal.h"
 
 static __attribute__((noinline)) TypedArrayData *buffer_get_typedarray_data_slow(ant_value_t value) {
   if (vtype(value) == kTypeTypedArray)
@@ -60,6 +63,10 @@ static void typedarray_finalize(ant_t *js, ant_object_t *obj) {
 
   buffer_view_release(js, ta_data->backing, ta_data);
   ta_meta_free(js, ta_data, sizeof(*ta_data));
+}
+
+bool typedarray_object_holds_storage(const ant_object_t *obj) {
+  return obj->finalizer == typedarray_finalize;
 }
 
 bool buffer_typedarray_data_read_index(ant_t *js, const TypedArrayData *ta_data, size_t index, ant_value_t *out) {
@@ -430,6 +437,7 @@ static inline __attribute__((always_inline)) ant_value_t create_typed_array_view
   
   js_set_exotic_ops(obj, &typedarray_exotic_ops);
   js_set_finalizer(obj, typedarray_finalize);
+  fixed_arena_note_finalizer(js_obj_ptr(obj));
 
   return obj;
 }

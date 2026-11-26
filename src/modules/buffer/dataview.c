@@ -25,6 +25,10 @@ static void dataview_finalize(ant_t *js, ant_object_t *obj) {
   ta_meta_free(js, dv_data, sizeof(*dv_data));
 }
 
+bool dataview_object_holds_storage(const ant_object_t *obj) {
+  return obj->finalizer == dataview_finalize;
+}
+
 bool buffer_is_dataview(ant_value_t obj) {
   return js_check_brand(obj, BRAND_DATAVIEW);
 }
@@ -77,6 +81,7 @@ ant_value_t create_dataview_with_buffer(
   js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_DATAVIEW));
   js_set_slot_wb(js, obj, SLOT_DATA, arraybuffer_obj);
   js_set_finalizer(obj, dataview_finalize);
+  fixed_arena_note_finalizer(js_obj_ptr(obj));
 
   return obj;
 }
@@ -129,6 +134,7 @@ static ant_value_t js_dataview_constructor(ant_params_t) {
   js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_DATAVIEW));
   js_set_slot_wb(js, obj, SLOT_DATA, args[0]);
   js_set_finalizer(obj, dataview_finalize);
+  fixed_arena_note_finalizer(js_obj_ptr(obj));
   
   return obj;
 }

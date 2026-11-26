@@ -25,4 +25,5 @@ typedef void (*gc_mark_fn)(ant_t *js, ant_value_t v);
 #include "gc/module_hooks.h"
 
 void gc_mark_error_record(ant_t *js, ant_value_t value, gc_mark_fn mark);
+void gc_mark_descriptor_accessors(ant_t *js, ant_object_t *owner, gc_mark_fn mark);
 void gc_mark_iterator_registry(ant_t *js, const struct ant_iterator_registry *registry, gc_mark_fn mark);

@@ -41,7 +41,6 @@ GC_MODULE_WEAK(wasm)
 #ifdef GC_CORE_MARK
 GC_CORE_MARK(symbols)
 GC_CORE_MARK(iterators)
-GC_CORE_MARK(descriptors)
 #undef GC_CORE_MARK
 #endif
 

@@ -1,4 +1,6 @@
 #include "gc.h"
+#include "gc/object_arenas.h"
+
 #include "realm.h"
 #include "errors.h"
 #include "interrupt.h"
@@ -697,8 +699,11 @@ void sv_activation_seal(ant_t *js, sv_activation_t *act) {
 
   for (int i = 0; i < act->frame_count; i++) {
     ant_value_t args_obj = act->frames[i].arguments_obj;
+    
     if (vtype(args_obj) == kTypeUndefined) continue;
-    if (gc_object_is_dead(js, js_obj_ptr(args_obj))) continue;
+    ant_object_t *args_ptr = js_obj_ptr(args_obj);
+    
+    if (!ant_object_arena_contains(js, args_ptr) || gc_object_is_dead(js, args_ptr)) continue;
     js_arguments_detach(js, args_obj);
   }
 }
@@ -707,9 +712,11 @@ __attribute__((noinline, cold))
 static void sv_pin_entry_values(ant_t *js, sv_vm_t *vm, ant_value_t *args, int argc) {
   if (args) for (int i = 0; i < argc; i++) GC_ROOT_PIN(js, args[i]);
   if (!vm->jit.resume.active) return;
+  
   for (int64_t i = 0; i < vm->jit.resume.n_params; i++) GC_ROOT_PIN(js, vm->jit.resume.params[i]);
   for (int64_t i = 0; i < vm->jit.resume.n_locals; i++) GC_ROOT_PIN(js, vm->jit.resume.locals[i]);
   for (int64_t i = 0; i < vm->jit.resume.vstack_sp; i++) GC_ROOT_PIN(js, vm->jit.resume.vstack[i]);
+  
   GC_ROOT_PIN(js, vm->jit.resume.arguments_obj);
 }
 

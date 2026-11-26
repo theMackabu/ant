@@ -118,8 +118,8 @@ static void arraybuffer_set_finalizer(ant_value_t obj) {
   fixed_arena_note_finalizer(js_obj_ptr(obj));
 }
 
-bool arraybuffer_object_holds_storage(const ant_object_t *obj) {
-  return obj->finalizer == arraybuffer_finalize;
+bool buffer_object_holds_storage(const ant_object_t *obj) {
+  return obj->finalizer == arraybuffer_finalize || typedarray_object_holds_storage(obj) || dataview_object_holds_storage(obj);
 }
 
 bool buffer_is_binary_source(ant_value_t value) {

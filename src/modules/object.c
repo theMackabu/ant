@@ -302,11 +302,11 @@ static ant_value_t builtin_object___defineGetter__(ant_params_t) {
     return Ant_Value_Undefined;
   }
 
-  if (vtype(key_val) == kTypeSymbol) {
-    js_set_sym_getter_desc(js, js_as_obj(obj), key_val, getter, JS_DESC_E | JS_DESC_C);
-  } else js_set_getter_desc(js, js_as_obj(obj), key_str, (size_t)key_len, getter, JS_DESC_E | JS_DESC_C);
+  bool defined = vtype(key_val) == kTypeSymbol
+    ? js_set_sym_getter_desc(js, js_as_obj(obj), key_val, getter, JS_DESC_E | JS_DESC_C)
+    : js_set_getter_desc(js, js_as_obj(obj), key_str, (size_t)key_len, getter, JS_DESC_E | JS_DESC_C);
   
-  return Ant_Value_Undefined;
+  return defined ? Ant_Value_Undefined : Ant_Error_CreateOutOfMemory(js);
 }
 
 static ant_value_t builtin_object___defineSetter__(ant_params_t) {
@@ -354,11 +354,11 @@ static ant_value_t builtin_object___defineSetter__(ant_params_t) {
     return Ant_Value_Undefined;
   }
 
-  if (vtype(key_val) == kTypeSymbol) {
-    js_set_sym_setter_desc(js, js_as_obj(obj), key_val, setter, JS_DESC_E | JS_DESC_C);
-  } else js_set_setter_desc(js, js_as_obj(obj), key_str, (size_t)key_len, setter, JS_DESC_E | JS_DESC_C);
+  bool defined = vtype(key_val) == kTypeSymbol
+    ? js_set_sym_setter_desc(js, js_as_obj(obj), key_val, setter, JS_DESC_E | JS_DESC_C)
+    : js_set_setter_desc(js, js_as_obj(obj), key_str, (size_t)key_len, setter, JS_DESC_E | JS_DESC_C);
   
-  return Ant_Value_Undefined;
+  return defined ? Ant_Value_Undefined : Ant_Error_CreateOutOfMemory(js);
 }
 
 static ant_value_t legacy_lookup_accessor_from_descriptor(ant_t *js, ant_value_t desc, bool want_getter) {

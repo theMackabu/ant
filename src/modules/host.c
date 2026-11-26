@@ -12,7 +12,6 @@
 #include "modules/eventsource.h"
 #include "modules/fetch.h"
 #include "modules/fs.h"
-#include "modules/generator.h"
 #include "modules/http.h"
 #include "modules/isolate.h"
 #include "modules/message_port.h"
@@ -90,9 +89,7 @@ void gc_finalize_host_natives(ant_t *js, ant_value_t value) {
 }
 
 bool gc_host_native_holds_resource(ant_t *js, ant_value_t value) {
-  return arraybuffer_object_holds_storage(js_obj_ptr(value)) 
-    || stream_object_holds_attached_state(value) 
-    || generator_object_holds_coroutine(value);
+  return stream_object_holds_attached_state(value);
 }
 
 void gc_clear_host_weak_refs(ant_t *js, gc_weak_key_alive_fn alive) {

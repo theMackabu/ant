@@ -118,7 +118,7 @@ ArrayBufferData *buffer_storage_holder_new(void);
 
 bool buffer_is_dataview(ant_value_t obj);
 bool buffer_is_binary_source(ant_value_t value);
-bool arraybuffer_object_holds_storage(const ant_object_t *obj);
+bool buffer_object_holds_storage(const ant_object_t *obj);
 bool buffer_can_transfer(const ArrayBufferData *data);
 bool Ant_Buffer_IsEncoding(ant_t *js, ant_value_t value);
 bool buffer_fast_length_getter(ant_value_t getter, ant_value_t obj, double *out);

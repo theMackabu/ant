@@ -7,8 +7,16 @@ function child() {
     yield () => ++x + pad.length - 3;
   }
 
+  function* withArguments(start) {
+    let x = arguments[0];
+    yield () => ++x;
+  }
+
   const closures = [];
-  for (let i = 0; i < 20000; i++) closures.push({ base: i * 10, calls: 0, f: counter(i * 10).next().value });
+  for (let i = 0; i < 20000; i++) {
+    const make = i & 1 ? withArguments : counter;
+    closures.push({ base: i * 10, calls: 0, f: make(i * 10).next().value });
+  }
 
   let junk = null;
   for (let round = 0; round < 30; round++) {

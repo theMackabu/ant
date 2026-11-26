@@ -90,6 +90,9 @@ static inline TypedArrayData *typedarray_live(ant_value_t value) {
   return typedarray_view_live(buffer_get_typedarray_data(value));
 }
 
+bool typedarray_object_holds_storage(const ant_object_t *obj);
+bool dataview_object_holds_storage(const ant_object_t *obj);
+
 static inline void buffer_view_release(ant_t *js, ArrayBufferData *backing, void *view) {
   if (!backing) return;
   if (__builtin_expect(backing->resizable, 0)) buffer_views_remove(js, backing, view);
