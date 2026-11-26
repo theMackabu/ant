@@ -8,17 +8,16 @@ static inline size_t decode_hex_escape(const uint8_t *in, size_t pos, uint8_t *o
   return 2;
 }
 
-static size_t decode_octal_escape(const uint8_t *in, size_t pos, uint8_t *out, size_t *out_pos) {
-  uint8_t c = in[pos + 1];
+static inline int octal_digit_at(const uint8_t *in, size_t i, size_t end) {
+  return i < end && in[i] >= '0' && in[i] <= '7' ? in[i] - '0' : -1;
+}
+
+static size_t decode_octal_escape(const uint8_t *in, size_t pos, size_t end, uint8_t *out, size_t *out_pos) {
+  int val = in[pos + 1] - '0';
   size_t extra = 0;
-  int val = c - '0';
   
-  if (in[pos + 2] >= '0' && in[pos + 2] <= '7') {
-    val = val * 8 + (in[pos + 2] - '0'); extra++;
-    if (in[pos + 3] >= '0' && in[pos + 3] <= '7' && val * 8 + (in[pos + 3] - '0') <= 255) {
-      val = val * 8 + (in[pos + 3] - '0'); extra++;
-    }
-  }
+  for (int digit; extra < 2 && (digit = octal_digit_at(in, pos + 2 + extra, end)) >= 0 && val * 8 + digit <= 255; extra++)
+    val = val * 8 + digit;
   
   *out_pos += utf8_encode((uint32_t)val, (char *)&out[*out_pos]);
   return extra;
@@ -103,11 +102,11 @@ size_t decode_escape(const uint8_t *in, size_t pos, size_t end, uint8_t *out, si
       break;
     case '0':
       if (pos + 2 < end && in[pos + 2] >= '8' && in[pos + 2] <= '9') escape_flag(flags, ESCAPE_LEGACY);
-      if (!(in[pos + 2] >= '0' && in[pos + 2] <= '7')) { out[(*out_pos)++] = '\0'; break; }
+      if (octal_digit_at(in, pos + 2, end) < 0) { out[(*out_pos)++] = '\0'; break; }
       [[fallthrough]];
     case '1': case '2': case '3': case '4': case '5': case '6': case '7':
       escape_flag(flags, ESCAPE_LEGACY);
-      advance = decode_octal_escape(in, pos, out, out_pos);
+      advance = decode_octal_escape(in, pos, end, out, out_pos);
       break;
     case '8': case '9':
       escape_flag(flags, ESCAPE_LEGACY);

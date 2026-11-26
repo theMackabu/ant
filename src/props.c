@@ -428,8 +428,7 @@ ant_value_t call_proto_accessor(
   ant_t *js, ant_value_t prim, ant_value_t accessor, bool has_accessor,
   ant_value_t *arg, int arg_count, bool is_setter
 ) {
-  if (!has_accessor || (vtype(accessor) != kTypeFunction && vtype(accessor) != kTypeBuiltin))
-    return Ant_Value_Undefined;
+  if (!has_accessor || !is_callable(accessor)) return Ant_Value_Undefined;
   
   if (!is_setter && js_is_symbol_description_getter(accessor)) {
     ant_value_t symbol = prim;

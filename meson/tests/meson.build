@@ -46,6 +46,7 @@ libant_tests = [
   'upvalue-close-order',
   'arguments-storage',
   'regexp-brand-storage',
+  'escape-octal-bounds',
   'rope-mark',
   'jit-inline-eligibility',
   'jit-property-ic',
