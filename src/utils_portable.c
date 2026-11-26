@@ -97,6 +97,7 @@ typedef struct {
   const char *str;
   size_t str_len;
   size_t position;
+  size_t tail;
   const repl_capture_t *caps;
   int ncaptures;
   const repl_named_t *named;
@@ -141,10 +142,9 @@ static bool rt_prefix(rt_ctx_t *c) {
 }
 
 static bool rt_suffix(rt_ctx_t *c) {
-  size_t after = c->position + c->matched_len;
   bool ok = true;
-  if (after < c->str_len)
-    ok = rt_append(c, c->str + after, c->str_len - after);
+  if (c->tail < c->str_len)
+    ok = rt_append(c, c->str + c->tail, c->str_len - c->tail);
   *c->ri += 2;
   return ok;
 }
@@ -200,7 +200,7 @@ static const rt_handler_t rt_dispatch[128] = {
 bool repl_template(
   const char *repl, size_t repl_len,
   const char *matched, size_t matched_len,
-  const char *str, size_t str_len, size_t position,
+  const char *str, size_t str_len, size_t position, size_t tail,
   const repl_capture_t *caps, int ncaptures,
   const repl_named_t *named,
   char **buf, size_t *buf_len, size_t *buf_cap
@@ -208,7 +208,7 @@ bool repl_template(
   rt_ctx_t c = {
     repl, repl_len, NULL,
     matched, matched_len,
-    str, str_len, position,
+    str, str_len, position, tail,
     caps, ncaptures, named,
     buf, buf_len, buf_cap,
   };

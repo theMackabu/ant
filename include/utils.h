@@ -94,7 +94,7 @@ typedef struct {
 bool repl_template(
   const char *repl, size_t repl_len,
   const char *matched, size_t matched_len,
-  const char *str, size_t str_len, size_t position,
+  const char *str, size_t str_len, size_t position, size_t tail,
   const repl_capture_t *caps, int ncaptures,
   const repl_named_t *named,
   char **buf, size_t *buf_len, size_t *buf_cap

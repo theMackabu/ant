@@ -40,8 +40,9 @@ static constexpr uint64_t STR_META_WELL_FORMED    = UINT64_C(1) << 61;
 static constexpr uint64_t STR_META_WTF8_CHECKED   = UINT64_C(1) << 62;
 static constexpr uint64_t STR_META_WTF8_VALID     = UINT64_C(1) << 63;
 static constexpr uint64_t STR_META_LONE_SURROGATE = UINT64_C(1) << 55;
+static constexpr uint64_t STR_META_NO_SUPPLEMENTARY = UINT64_C(1) << 54;
 
-static constexpr uint64_t STR_META_UTF16_MASK   = STR_META_LONE_SURROGATE - 1;
+static constexpr uint64_t STR_META_UTF16_MASK   = STR_META_NO_SUPPLEMENTARY - 1;
 static constexpr uint64_t STR_META_ASCII_MASK   = STR_META_FIELD_MASK << STR_META_ASCII_SHIFT;
 static constexpr uint64_t STR_META_VALID_MASK   = STR_META_FIELD_MASK << STR_META_VALID_SHIFT;
 static constexpr uint64_t STR_META_STATE_MASK   = ~STR_META_UTF16_MASK;
@@ -466,6 +467,7 @@ void gc_strings_begin(ant_t *js);
 void gc_strings_sweep(ant_t *js);
 void gc_strings_epoch_bump(void);
 void gc_strings_mark(ant_t *js, const void *ptr);
+bool gc_strings_is_marked(ant_t *js, const void *ptr);
 void gc_strings_mark_shared(ant_t *js, const void *ptr);
 void gc_strings_destroy(ant_t *js);
 

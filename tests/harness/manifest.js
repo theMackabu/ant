@@ -611,6 +611,8 @@ export function targets() {
     'test_protector_key_stores.cjs',
     'test_reflect_set_result.cjs',
     'test_regexp_cache_admission.cjs',
+    'test_regexp_code_units.cjs',
+    'test_regexp_jit_stack_limit.cjs',
     'test_proxy_inspect.cjs',
     'test_regexp_exec_discard.cjs',
     'test_regexp_exec_position_hints.cjs',

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "silver/call.h"
+#include "gc/roots.h"
 
 #include "cfunc.h"
 #include "utf8.h"
@@ -135,6 +136,18 @@ typedef struct {
 } regexp_validated_entry_t;
 
 static constexpr size_t REGEXP_SITE_CACHE_SIZE = 64;
+static constexpr size_t REGEXP_CODE_UNIT_CACHE_SIZE = 16;
+
+// Remembers the code unit view a non-unicode RegExp matches a subject string
+// against (see regexp_code_unit_view). Entries die with the string sweep epoch
+// unless regexp_code_units_gc carries them over.
+typedef struct {
+  const char *bytes;
+  size_t len;
+  uint64_t epoch;
+  uint64_t used;
+  ant_value_t view;
+} regexp_code_unit_entry_t;
 
 struct ant_regex_state {
   compiled_regex_cache_table_t compiled[2];
@@ -157,6 +170,9 @@ struct ant_regex_state {
   size_t out_cap;
   bool out_busy;
   uint32_t string_replace_slot;
+
+  regexp_code_unit_entry_t code_units[REGEXP_CODE_UNIT_CACHE_SIZE];
+  uint64_t code_units_clock, code_units_gc_clock;
 };
 
 static constexpr uint32_t REGEXP_NATIVE_TAG = Ant_NativeTag("REGX");
@@ -489,6 +505,53 @@ static inline ant_offset_t regexp_vstr(ant_t *js, ant_value_t value, ant_offset_
   return (ant_offset_t)(uintptr_t)flat->bytes;
 }
 
+// PCRE2 runs in UTF-8 mode, where a supplementary character is one character.
+// Without the u or v flag a JS RegExp works on UTF-16 code units, so it has to
+// see each surrogate pair as two characters. regexp_code_unit_view returns str
+// itself when it has no supplementary characters, and otherwise an internal
+// string whose pairs are split into two 3-byte WTF-8 surrogates. The view has
+// the same UTF-16 length and offsets as str. It must never reach JS: strings
+// made from its bytes are normalized when created, which joins the pairs again.
+ant_value_t regexp_code_unit_view(ant_t *js, ant_value_t str);
+void regexp_code_units_gc(ant_t *js, ant_regex_state_t *state);
+
+static inline bool regexp_matches_code_units(uint8_t flags) {
+  return !(flags & (REGEXP_FLAG_UNICODE | REGEXP_FLAG_UNICODE_SET));
+}
+
+typedef struct {
+  ant_value_t view;
+  size_t root_mark;
+  bool pinned;
+} regexp_subject_scope_t;
+
+static __attribute__((always_inline)) inline bool regexp_subject_may_split(uint8_t flags, ant_value_t str) {
+  if (!regexp_matches_code_units(flags)) return false;
+  ant_flat_string_t *flat = ant_str_flat_ptr(str);
+  return !flat || (str_flat_ascii_state(flat) != STR_ASCII_YES && !(flat->meta & STR_META_NO_SUPPLEMENTARY));
+}
+
+// The subject a RegExp with these flags matches against: str, or its code unit
+// view, which stays pinned until regexp_subject_end.
+static __attribute__((always_inline)) inline ant_value_t regexp_subject_begin(
+  ant_t *js, regexp_subject_scope_t *scope, uint8_t flags, ant_value_t str
+) {
+  scope->pinned = false;
+  if (!regexp_subject_may_split(flags, str)) return str;
+  ant_value_t view = regexp_code_unit_view(js, str);
+  if (is_err(view) || view == str) return view;
+  scope->view = view;
+  scope->root_mark = gc_root_scope(js);
+  GC_ROOT_PIN(js, scope->view);
+  scope->pinned = true;
+  return view;
+}
+
+static __attribute__((always_inline)) inline void regexp_subject_end(ant_t *js, regexp_subject_scope_t *scope) {
+  if (scope->pinned) GC_ROOT_RESTORE(js, scope->root_mark);
+  scope->pinned = false;
+}
+
 static __attribute__((always_inline)) inline int regexp_match_literal(
   const compiled_regex_cache_entry_t *compiled,
   const char *str_ptr,
@@ -631,13 +694,13 @@ static __attribute__((always_inline)) inline ant_value_t regexp_fast_set_last_in
   return regexp_set_lastindex(js, fast->compiled, rx, Ant_Value_FromNumber(value));
 }
 
-static __attribute__((always_inline)) inline ant_value_t regexp_exec_run(
+static __attribute__((always_inline)) inline ant_value_t regexp_exec_run_subject(
   ant_t *js, ant_value_t regexp, const regexp_fast_t *fast,
-  double last_index, ant_value_t str_arg, bool truthy_only
+  double last_index, ant_value_t str_arg, ant_value_t subject, bool truthy_only
 ) {
   compiled_regex_cache_entry_t *compiled = fast->compiled;
   uint8_t flags = fast->flags;
-  ant_offset_t str_len, str_off = regexp_vstr(js, str_arg, &str_len);
+  ant_offset_t str_len, str_off = regexp_vstr(js, subject, &str_len);
   const char *str_ptr = (const char *)(uintptr_t)str_off;
   bool uses_last_index = (flags & (REGEXP_FLAG_GLOBAL | REGEXP_FLAG_STICKY)) != 0;
   PCRE2_SIZE start = 0;
@@ -662,7 +725,7 @@ static __attribute__((always_inline)) inline ant_value_t regexp_exec_run(
     return is_err(stored) ? stored : Ant_Value_Null;
   }
 
-  update_regexp_statics(js, str_arg, ovector, ovcount);
+  update_regexp_statics(js, subject, ovector, ovcount);
   double index = truthy_only ? 0 : (double)utf16_pos_units(&pos, ovector[0]);
   if (uses_last_index) {
     ant_value_t stored = regexp_fast_set_last_index(js, regexp, fast, (double)utf16_pos_units(&pos, ovector[1]));
@@ -682,6 +745,20 @@ static __attribute__((always_inline)) inline ant_value_t regexp_exec_run(
   utf16_pos_save(&pos);
   regex_match_scope_end(&scope);
   return result;
+}
+
+ant_value_t regexp_exec_run_code_units(
+  ant_t *js, ant_value_t regexp, const regexp_fast_t *fast,
+  double last_index, ant_value_t str_arg, bool truthy_only
+);
+
+static __attribute__((always_inline)) inline ant_value_t regexp_exec_run(
+  ant_t *js, ant_value_t regexp, const regexp_fast_t *fast,
+  double last_index, ant_value_t str_arg, bool truthy_only
+) {
+  if (__builtin_expect(regexp_subject_may_split(fast->flags, str_arg), 0))
+    return regexp_exec_run_code_units(js, regexp, fast, last_index, str_arg, truthy_only);
+  return regexp_exec_run_subject(js, regexp, fast, last_index, str_arg, str_arg, truthy_only);
 }
 
 static inline PCRE2_SIZE regexp_advance_empty_match(const char *str_ptr, ant_offset_t str_len, PCRE2_SIZE offset) {

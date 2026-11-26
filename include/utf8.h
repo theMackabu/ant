@@ -60,6 +60,8 @@ char *latin1_to_utf8(const uint8_t *src, size_t len, size_t *out_len);
 char *wtf8_to_utf8_dup(const char *str, size_t *byte_len);
 char *wtf8_str_to_utf8_dup(const char *str, size_t *byte_len);
 char *wtf8_split_pairs_dup(const char *str, size_t byte_len, size_t *out_len);
+size_t wtf8_split_pairs_into(const char *str, size_t byte_len, char *out);
+size_t wtf8_supplementary_count(const char *str, size_t byte_len);
 char *utf8_replace_invalid(const char *str, size_t byte_len, size_t valid, size_t *out_len);
 char *wtf8_replace_invalid(const char *str, size_t byte_len, size_t *out_len);
 
@@ -79,6 +81,17 @@ int utf8_full_case_map(
   const utf8proc_uint8_t *src, utf8proc_ssize_t len, utf8proc_ssize_t pos,
   utf8proc_ssize_t n, utf8proc_int32_t cp, bool upper, utf8proc_int32_t out[3]
 );
+
+// Decodes the well-formed supplementary character starting at s[i], if any.
+static inline bool utf8_supplementary_at(const unsigned char *s, size_t len, size_t i, uint32_t *cp) {
+  if (s[i] < 0xF0 || s[i] > 0xF4 || len - i < 4) return false;
+  if ((s[i + 1] & 0xC0) != 0x80 || (s[i + 2] & 0xC0) != 0x80 || (s[i + 3] & 0xC0) != 0x80) return false;
+  uint32_t value = ((uint32_t)(s[i] & 0x07) << 18) | ((uint32_t)(s[i + 1] & 0x3F) << 12) |
+    ((uint32_t)(s[i + 2] & 0x3F) << 6) | (uint32_t)(s[i + 3] & 0x3F);
+  if (value < 0x10000 || value > 0x10FFFF) return false;
+  *cp = value;
+  return true;
+}
 
 static inline uint32_t utf16_units_for_utf8_byte(unsigned char c) {
   if ((c & 0xC0) == 0x80) return 0;

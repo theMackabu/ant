@@ -1,10 +1,13 @@
 #include "regex_internal.h"
+#include "modules/string.h"
 
-static ant_value_t regexp_split_fast(ant_t *js, const regexp_fast_t *fast, ant_value_t str, uint32_t limit) {
+static ant_value_t regexp_split_fast_subject(
+  ant_t *js, const regexp_fast_t *fast, ant_value_t str, ant_value_t subject, uint32_t limit
+) {
   ant_value_t result = Ant_Array_Create(js);
   if (is_err(result) || limit == 0) return result;
 
-  ant_offset_t str_len, str_off = regexp_vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = regexp_vstr(js, subject, &str_len);
   const char *str_ptr = (const char *)(uintptr_t)str_off;
   compiled_regex_cache_entry_t *compiled = fast->compiled;
   regex_match_scope_t scope = {0};
@@ -14,7 +17,7 @@ static ant_value_t regexp_split_fast(ant_t *js, const regexp_fast_t *fast, ant_v
   PCRE2_SIZE size = (PCRE2_SIZE)str_len;
   if (size == 0) {
     int rc = regexp_match(js, compiled, str_ptr, str_len, 0, true, &scope, &ovector, &ovcount);
-    if (rc >= 0) update_regexp_statics(js, str, ovector, ovcount);
+    if (rc >= 0) update_regexp_statics(js, subject, ovector, ovcount);
     else js_arr_push(js, result, str);
     regex_match_scope_end(&scope);
     return result;
@@ -30,7 +33,7 @@ static ant_value_t regexp_split_fast(ant_t *js, const regexp_fast_t *fast, ant_v
     }
 
     PCRE2_SIZE start = ovector[0], end = ovector[1];
-    update_regexp_statics(js, str, ovector, ovcount);
+    update_regexp_statics(js, subject, ovector, ovcount);
     last_index = end;
     if (end == p) {
       q = regexp_advance_empty_match(str_ptr, str_len, start);
@@ -63,9 +66,18 @@ static ant_value_t regexp_split_fast(ant_t *js, const regexp_fast_t *fast, ant_v
 done:
   regex_match_scope_end(&scope);
   if (fast->obj && !is_err(result)) {
-    str_off = regexp_vstr(js, str, &str_len);
+    str_off = regexp_vstr(js, subject, &str_len);
     regexp_fast_set_last_index(js, Ant_Value_Undefined, fast, (double)byte_offset_to_utf16((const char *)(uintptr_t)str_off, last_index));
   }
+  return result;
+}
+
+static ant_value_t regexp_split_fast(ant_t *js, const regexp_fast_t *fast, ant_value_t str, uint32_t limit) {
+  regexp_subject_scope_t subject_scope;
+  ant_value_t subject = regexp_subject_begin(js, &subject_scope, fast->flags, str);
+  if (is_err(subject)) return subject;
+  ant_value_t result = regexp_split_fast_subject(js, fast, str, subject, limit);
+  regexp_subject_end(js, &subject_scope);
   return result;
 }
 
@@ -192,11 +204,7 @@ ant_value_t builtin_regexp_symbol_split(ant_params_t) {
     }
 
     str_off = vstr(js, str, &str_len);
-    utf16_pos_t pos;
-    utf16_pos_init(&pos, (const char *)(uintptr_t)str_off, str_len);
-    PCRE2_SIZE piece_start = utf16_pos_seek(&pos, (size_t)p);
-    PCRE2_SIZE piece_end = utf16_pos_seek(&pos, (size_t)q);
-    ant_value_t T_val = js_mkstr_byte_range(js, (const char *)(uintptr_t)str_off, piece_start, piece_end - piece_start);
+    ant_value_t T_val = js_mkstr_utf16_range(js, (const char *)(uintptr_t)str_off, (size_t)str_len, (size_t)p, (size_t)q);
     if (is_err(T_val)) return T_val;
     js_arr_push(js, A, T_val);
     lengthA++;
@@ -215,10 +223,7 @@ ant_value_t builtin_regexp_symbol_split(ant_params_t) {
   }
 
   str_off = vstr(js, str, &str_len);
-  utf16_pos_t pos;
-  utf16_pos_init(&pos, (const char *)(uintptr_t)str_off, str_len);
-  PCRE2_SIZE trailing_start = utf16_pos_seek(&pos, (size_t)p);
-  ant_value_t trailing = js_mkstr_byte_range(js, (const char *)(uintptr_t)str_off, trailing_start, (size_t)str_len - trailing_start);
+  ant_value_t trailing = js_mkstr_utf16_range(js, (const char *)(uintptr_t)str_off, (size_t)str_len, (size_t)p, (size_t)size);
   if (is_err(trailing)) return trailing;
   js_arr_push(js, A, trailing);
   return mkval(kTypeArray, vdata(A));

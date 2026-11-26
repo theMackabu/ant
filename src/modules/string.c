@@ -271,7 +271,7 @@ done:
   return result;
 }
 
-static ant_value_t js_mkstr_utf16_range(
+ant_value_t js_mkstr_utf16_range(
   ant_t *js, const char *str, size_t byte_len,
   size_t utf16_start, size_t utf16_end
 ) {

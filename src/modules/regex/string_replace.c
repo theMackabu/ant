@@ -2,6 +2,7 @@
 
 bool str_buf_append(char **buf, size_t *len, size_t *cap, const char *data, size_t n) {
   if (n == 0) return true;
+  if (n > SIZE_MAX / 2 - *len - 1) return false;
   if (*len + n >= *cap) {
     size_t new_cap = (*len + n + 1) * 2;
     char *nb = (char *)realloc(*buf, new_cap);
@@ -14,18 +15,6 @@ bool str_buf_append(char **buf, size_t *len, size_t *cap, const char *data, size
   return true;
 }
 
-static void regexp_wtf8_surrogate_halves(const char *bytes, char out[6]) {
-  const unsigned char *b = (const unsigned char *)bytes;
-  uint32_t cp = ((uint32_t)(b[0] & 0x07) << 18) | ((uint32_t)(b[1] & 0x3F) << 12) |
-    ((uint32_t)(b[2] & 0x3F) << 6) | (uint32_t)(b[3] & 0x3F);
-  uint32_t units[2] = { 0xD800 + ((cp - 0x10000) >> 10), 0xDC00 + ((cp - 0x10000) & 0x3FF) };
-  for (int i = 0; i < 2; i++) {
-    out[3 * i] = (char)0xED;
-    out[3 * i + 1] = (char)(0x80 | ((units[i] >> 6) & 0x3F));
-    out[3 * i + 2] = (char)(0x80 | (units[i] & 0x3F));
-  }
-}
-
 static inline ant_value_t emit_str_replacement(
   ant_t *js, ant_value_t replacement, bool is_func,
   const char *repl_ptr, ant_offset_t repl_len, bool repl_template_needed,
@@ -36,7 +25,7 @@ static inline ant_value_t emit_str_replacement(
   if (!is_func && repl_template_needed) {
     if (!repl_template(
       repl_ptr, repl_len, str_ptr + pos, match_len,
-      str_ptr, str_len, pos, NULL, 0, NULL,
+      str_ptr, str_len, pos, pos + match_len, NULL, 0, NULL,
       buf, buf_len, buf_cap
     )) return js_mkerr(js, "oom");
   } else if (is_func) {
@@ -276,10 +265,9 @@ static ant_value_t string_replace_impl(ant_native_params_t, ant_value_t call_thi
         if (vtype(err) == kTypeError) { free(buf); return err; }
         if (pos >= str_len) break;
         size_t width = utf8_char_len_at(str_ptr, (size_t)str_len, (size_t)pos);
-        bool split = width == 4;
         char halves[6];
+        bool split = width == 4 && wtf8_split_pairs_into(str_ptr + pos, 4, halves) == 6;
         if (split) {
-          regexp_wtf8_surrogate_halves(str_ptr + pos, halves);
           if (!str_buf_append(&buf, &len, &cap, halves, 3)) { free(buf); return js_mkerr(js, "oom"); }
           char *split_str = !is_func && repl_template_needed ? malloc((size_t)str_len + 2) : NULL;
           if (split_str) {

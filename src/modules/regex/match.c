@@ -1,11 +1,18 @@
 #include "regex_internal.h"
 
 static ant_value_t regexp_match_fast_global(ant_t *js, const regexp_fast_t *fast, ant_value_t str) {
+  regexp_subject_scope_t subject_scope;
+  ant_value_t subject = regexp_subject_begin(js, &subject_scope, fast->flags, str);
+  if (is_err(subject)) return subject;
+
   ant_value_t matches = Ant_Array_Create(js);
-  if (is_err(matches)) return matches;
+  if (is_err(matches)) {
+    regexp_subject_end(js, &subject_scope);
+    return matches;
+  }
 
   regexp_fast_scan_t scan;
-  regexp_fast_scan_begin(js, &scan, fast, str);
+  regexp_fast_scan_begin(js, &scan, fast, subject);
   ant_value_t error = Ant_Value_Undefined;
   for (;;) {
     PCRE2_SIZE *ovector;
@@ -18,6 +25,7 @@ static ant_value_t regexp_match_fast_global(ant_t *js, const regexp_fast_t *fast
     js_arr_push(js, matches, match);
   }
   regexp_fast_scan_end(js, &scan);
+  regexp_subject_end(js, &subject_scope);
 
   if (is_err(error)) return error;
   return scan.count == 0 ? Ant_Value_Null : matches;
@@ -270,7 +278,11 @@ ant_value_t builtin_regexp_symbol_search(ant_params_t) {
 }
 
 ant_value_t regexp_search_fast(ant_t *js, const regexp_fast_t *fast, ant_value_t str) {
-  ant_offset_t str_len, str_off = regexp_vstr(js, str, &str_len);
+  regexp_subject_scope_t subject_scope;
+  ant_value_t subject = regexp_subject_begin(js, &subject_scope, fast->flags, str);
+  if (is_err(subject)) return subject;
+
+  ant_offset_t str_len, str_off = regexp_vstr(js, subject, &str_len);
   const char *str_ptr = (const char *)(uintptr_t)str_off;
   regex_match_scope_t scope = {0};
   PCRE2_SIZE *ovector;
@@ -281,12 +293,14 @@ ant_value_t regexp_search_fast(ant_t *js, const regexp_fast_t *fast, ant_value_t
   );
   if (rc < 0) {
     regex_match_scope_end(&scope);
+    regexp_subject_end(js, &subject_scope);
     return rc == PCRE2_ERROR_NOMEMORY ? js_mkerr(js, "oom") : Ant_Value_FromNumber(-1);
   }
 
-  update_regexp_statics(js, str, ovector, ovcount);
+  update_regexp_statics(js, subject, ovector, ovcount);
   ant_value_t index = Ant_Value_FromNumber((double)byte_offset_to_utf16(str_ptr, ovector[0]));
   regex_match_scope_end(&scope);
+  regexp_subject_end(js, &subject_scope);
   return index;
 }
 
