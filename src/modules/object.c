@@ -216,7 +216,7 @@ static ant_value_t legacy_accessor_this_obj(ant_t *js, ant_value_t this_val) {
   );
   
   if (t == kTypeBuiltin) return js_cfunc_promote(js, this_val);
-  if (t == kTypeObject || t == kTypeArray || t == kTypeFunction) return js_as_obj(this_val);
+  if (is_object_type(this_val)) return js_as_obj(this_val);
   
   if (t == kTypeString || t == kTypeNumber || t == kTypeBool || t == kTypeBigInt || t == kTypeSymbol) {
     ant_value_t boxed = builtin_Object(js, &this_val, 1, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined);
@@ -273,9 +273,7 @@ static ant_value_t builtin_object___defineGetter__(ant_params_t) {
   if (is_err(obj)) return obj;
 
   ant_value_t getter = nargs > 1 ? args[1] : Ant_Value_Undefined;
-  uint8_t gt = vtype(getter);
-  
-  if (gt != kTypeFunction && gt != kTypeBuiltin)
+  if (!is_callable(getter))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Object.prototype.__defineGetter__: Expecting function");
 
   ant_value_t key_val = Ant_Value_Undefined;
@@ -293,9 +291,7 @@ static ant_value_t builtin_object___defineSetter__(ant_params_t) {
   if (is_err(obj)) return obj;
 
   ant_value_t setter = nargs > 1 ? args[1] : Ant_Value_Undefined;
-  uint8_t st = vtype(setter);
-  
-  if (st != kTypeFunction && st != kTypeBuiltin)
+  if (!is_callable(setter))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Object.prototype.__defineSetter__: Expecting function");
 
   ant_value_t key_val = Ant_Value_Undefined;
@@ -373,13 +369,11 @@ static ant_value_t legacy_lookup_accessor(ant_t *js, ant_value_t this_val, ant_v
 }
 
 static ant_value_t builtin_object___lookupGetter__(ant_params_t) {
-  if (nargs < 1) return Ant_Value_Undefined;
-  return legacy_lookup_accessor(js, call_this, args[0], true);
+  return legacy_lookup_accessor(js, call_this, nargs > 0 ? args[0] : Ant_Value_Undefined, true);
 }
 
 static ant_value_t builtin_object___lookupSetter__(ant_params_t) {
-  if (nargs < 1) return Ant_Value_Undefined;
-  return legacy_lookup_accessor(js, call_this, args[0], false);
+  return legacy_lookup_accessor(js, call_this, nargs > 0 ? args[0] : Ant_Value_Undefined, false);
 }
 
 static ant_value_t builtin_object_create(ant_params_t) {

@@ -102,17 +102,15 @@ static bool define_desc_read_plain(ant_t *js, ant_value_t descriptor, define_des
 }
 
 static inline bool define_desc_accessor_invalid(ant_value_t fn) {
-  uint8_t t = vtype(fn);
-  return t != kTypeFunction && t != kTypeBuiltin && t != kTypeUndefined;
+  return vtype(fn) != kTypeUndefined && !is_callable(fn);
 }
 
-static const struct { const char *name; size_t len; } define_desc_field_names[DESC_FIELD_COUNT] = {
-  { "enumerable", 10 },
-  { "configurable", 12 },
-  { "value", 5 },
-  { "writable", 8 },
-  { "get", 3 },
-  { "set", 3 },
+static const struct {
+  const char *name;
+  size_t len;
+} define_desc_field_names[DESC_FIELD_COUNT] = {
+  #define DESC_FIELD(name, key) [DESC_##name] = { key, sizeof(key) - 1 },
+  #include "descriptors/fields.h"
 };
 
 static ant_value_t describe_join_omitted(ant_t *js, ant_value_t head, ant_value_t tail) {

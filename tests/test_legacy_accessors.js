@@ -163,5 +163,35 @@ if (boxedError) {
   pass = false;
 }
 
+const callableGetter = new Proxy(function () { return 'proxied'; }, {});
+const viaProxy = {};
+viaProxy.__defineGetter__('p', callableGetter);
+Object.defineProperty(viaProxy, 'q', { get: callableGetter, configurable: true });
+if (viaProxy.p !== 'proxied' || viaProxy.q !== 'proxied') {
+  console.log('FAIL: a callable Proxy should be accepted as a getter');
+  pass = false;
+}
+
+for (const receiver of [Promise.resolve(), (function* () {})()]) {
+  let failed = null;
+  try {
+    Object.prototype.__defineGetter__.call(receiver, 'extra', () => 9);
+  } catch (err) {
+    failed = err;
+  }
+
+  if (failed || receiver.extra !== 9) {
+    console.log(`FAIL: a ${Object.prototype.toString.call(receiver)} receiver should accept a legacy getter`);
+    pass = false;
+  }
+}
+
+const undefinedKey = {};
+undefinedKey.__defineGetter__('undefined', () => 'u');
+if (typeof undefinedKey.__lookupGetter__() !== 'function') {
+  console.log('FAIL: __lookupGetter__ with no argument should look up the "undefined" key');
+  pass = false;
+}
+
 if (pass) console.log('PASS');
 else process.exitCode = 1;

@@ -11,12 +11,8 @@ enum: int {
 };
 
 enum: int {
-  DESC_ENUMERABLE,
-  DESC_CONFIGURABLE,
-  DESC_VALUE,
-  DESC_WRITABLE,
-  DESC_GET,
-  DESC_SET,
+  #define DESC_FIELD(name, key) DESC_##name,
+  #include "descriptors/fields.h"
   DESC_FIELD_COUNT
 };
 
