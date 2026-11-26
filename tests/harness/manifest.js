@@ -699,6 +699,7 @@ export function targets() {
     'test_super_static_put.cjs',
     'test_string_replace_empty_surrogates.cjs',
     'test_string_split_limit.cjs',
+    'test_string_split_source_object.cjs',
     'test_super_property_paths.cjs',
     'test_string_prototype_receivers.cjs',
     'test_string_surrogate_join.cjs',

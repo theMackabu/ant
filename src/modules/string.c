@@ -1,5 +1,4 @@
 #include <compat.h> // IWYU pragma: keep
-#include <pcre2.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -605,154 +604,12 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_args_t) {
   ant_value_t limit_status = regexp_split_limit(js, nargs >= 2 ? args[1] : Ant_Value_Undefined, &limit);
   if (is_err(limit_status)) return limit_status;
   
+  ant_value_t sep_arg = nargs > 0 ? args[0] : Ant_Value_Undefined;
+  if (vtype(sep_arg) == kTypeUndefined) goto return_whole;
+  sep_arg = coerce_to_str_hint(js, sep_arg, 1);
+  if (is_err(sep_arg)) return sep_arg;
   if (limit == 0) return mkval(kTypeArray, vdata(arr));
-  if (nargs == 0) goto return_whole;
 
-  ant_value_t sep_arg = args[0];
-  if (vtype(sep_arg) == kTypeObject) {
-    ant_prop_loc_t source_off = lkp(js, sep_arg, "source", 6);
-    if (!source_off.obj) {
-      sep_arg = js_to_primitive(js, sep_arg, 1);
-      if (is_err(sep_arg)) return sep_arg;
-      
-      sep_arg = js_tostring_val(js, sep_arg);
-      if (is_err(sep_arg)) return sep_arg;
-      
-      args[0] = sep_arg;
-      goto split_string_separator;
-    }
-    
-    ant_value_t source_val = js_prop_load(source_off);
-    if (vtype(source_val) != kTypeString) goto return_whole;
-
-    ant_offset_t plen, poff = vstr(js, source_val, &plen);
-    const char *pattern_ptr = (char *)(uintptr_t)(poff);
-
-    if (plen == 0 || (plen == 4 && memcmp(pattern_ptr, "(?:)", 4) == 0)) {
-      ant_offset_t idx = 0;
-      for (ant_offset_t i = 0; i < str_len && idx < limit; i++) {
-        ant_value_t part = js_mkstr_byte_range(js, str_ptr, i, 1);
-        arr_set_owned(js, arr, idx, part);
-        idx++;
-      }
-      return mkval(kTypeArray, vdata(arr));
-    }
-
-    char pcre2_pattern_stack[512];
-    js_cstr_t pcre2_pattern = js_to_pcre2_pattern_cstr(
-      pattern_ptr, plen, pcre2_pattern_stack,
-      sizeof(pcre2_pattern_stack), 0
-    );
-    
-    if (!pcre2_pattern.ptr) goto return_whole;
-    uint32_t options = PCRE2_UTF | PCRE2_MATCH_UNSET_BACKREF | PCRE2_DOLLAR_ENDONLY;
-    int errcode;
-    
-    PCRE2_SIZE erroffset;
-    pcre2_code *re = pcre2_compile(
-      (PCRE2_SPTR)pcre2_pattern.ptr, pcre2_pattern.len,
-      options, &errcode, &erroffset, NULL
-    );
-
-    if (pcre2_pattern.needs_free) free((void *)pcre2_pattern.ptr);
-    if (re == NULL) goto return_whole;
-
-    pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(re, NULL);
-    uint32_t capture_count;
-    pcre2_pattern_info(re, PCRE2_INFO_CAPTURECOUNT, &capture_count);
-
-    if (str_len == 0) {
-      int rc = pcre2_match(re, (PCRE2_SPTR)str_ptr, 0, 0, 0, match_data, NULL);
-      if (rc >= 0) {
-        pcre2_match_data_free(match_data);
-        pcre2_code_free(re);
-        return mkval(kTypeArray, vdata(arr));
-      }
-    }
-
-    ant_offset_t idx = 0;
-    PCRE2_SIZE search_pos = 0;
-    PCRE2_SIZE segment_start = 0;
-    PCRE2_SIZE last_match_end = (PCRE2_SIZE)-1;
-    bool had_any_split = false;
-    
-    while (idx < limit && search_pos <= str_len) {
-      int rc = pcre2_match(re, (PCRE2_SPTR)str_ptr, str_len, search_pos, 0, match_data, NULL);
-      if (rc < 0) break;
-
-      PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
-      PCRE2_SIZE match_start = ovector[0];
-      PCRE2_SIZE match_end = ovector[1];
-
-      if (match_start == match_end && match_start == last_match_end) {
-        search_pos = match_end + 1;
-        continue;
-      }
-
-      if (match_start == match_end && capture_count > 0) {
-        bool is_pure_empty_capture = true;
-        for (uint32_t i = 1; i <= capture_count; i++) {
-          PCRE2_SIZE cap_start = ovector[2*i];
-          PCRE2_SIZE cap_end = ovector[2*i+1];
-          if (cap_start == PCRE2_UNSET || cap_end != cap_start) {
-            is_pure_empty_capture = false;
-            break;
-          }
-        }
-        if (is_pure_empty_capture) {
-          search_pos = match_end + 1;
-          continue;
-        }
-      }
-      
-      had_any_split = true;
-
-      ant_value_t part = js_mkstr_byte_range(js, str_ptr, segment_start, match_start - segment_start);
-      arr_set_owned(js, arr, idx, part);
-      idx++;
-
-      for (uint32_t i = 1; i <= capture_count && idx < limit; i++) {
-        PCRE2_SIZE cap_start = ovector[2*i];
-        PCRE2_SIZE cap_end = ovector[2*i+1];
-        if (cap_start == PCRE2_UNSET) {
-          arr_set_owned(js, arr, idx, Ant_Value_Undefined);
-        } else {
-          part = js_mkstr_byte_range(js, str_ptr, cap_start, cap_end - cap_start);
-          arr_set_owned(js, arr, idx, part);
-        }
-        idx++;
-      }
-
-      last_match_end = match_end;
-      segment_start = match_end;
-      if (match_start == match_end) {
-        search_pos = match_end + 1;
-      } else {
-        search_pos = match_end;
-      }
-    }
-
-    if (!had_any_split) {
-      pcre2_match_data_free(match_data);
-      pcre2_code_free(re);
-      arr_set_owned(js, arr, 0, js_mkstr_byte_range(js, str_ptr, 0, str_len));
-      return mkval(kTypeArray, vdata(arr));
-    }
-
-    if (idx < limit) {
-      ant_value_t part = js_mkstr_byte_range(js, str_ptr, segment_start, str_len - segment_start);
-      arr_set_owned(js, arr, idx, part);
-      idx++;
-    }
-
-    pcre2_match_data_free(match_data);
-    pcre2_code_free(re);
-    return mkval(kTypeArray, vdata(arr));
-  }
-
-  if (vtype(sep_arg) != kTypeString) goto return_whole;
-
-split_string_separator:;
   ant_offset_t sep_len, sep_off = vstr(js, sep_arg, &sep_len);
   const char *sep_ptr = (char *)(uintptr_t)(sep_off);
   ant_offset_t idx = 0, start = 0;
@@ -806,26 +663,30 @@ return_whole:
   return mkval(kTypeArray, vdata(arr));
 }
 
+static ant_value_t split_dispatch(ant_native_params_t, ant_value_t receiver, bool *called) {
+  ant_value_t call_args[2] = { receiver, nargs >= 2 ? args[1] : Ant_Value_Undefined };
+  return maybe_call_symbol_method(js, args[0], js->sym.split_sym, args[0], call_args, nargs >= 2 ? 2 : 1, called);
+}
+
 static ant_value_t builtin_string_split(ant_params_t) {
+  bool sep_obj = nargs > 0 && is_object_type(args[0]);
+  // ToString(this) can run code or throw for these, and @@split must see them first
+  bool early = is_object_type(call_this) || vtype(call_this) == kTypeSymbol;
+  bool called = false;
+
+  if (sep_obj && early) {
+    ant_value_t dispatched = split_dispatch(js, args, nargs, call_this, &called);
+    if (is_err(dispatched) || called) return dispatched;
+  }
+
   ant_value_t str = Ant_String_CoerceThis(js, call_this, "split");
   if (is_err(str)) return str;
 
-  if (nargs > 0 && is_object_type(args[0])) {
+  if (sep_obj && !early) {
     ant_value_t fast_result;
     if (regexp_split_try_fast(js, args[0], str, nargs >= 2 ? args[1] : Ant_Value_Undefined, &fast_result)) return fast_result;
-    bool called = false;
-    ant_value_t call_args[2];
-    int call_nargs = 1;
-    call_args[0] = str;
-    if (nargs >= 2) {
-      call_args[1] = args[1];
-      call_nargs = 2;
-    }
-    ant_value_t dispatched = maybe_call_symbol_method(
-      js, args[0], js->sym.split_sym, args[0], call_args, call_nargs, &called
-    );
-    if (is_err(dispatched)) return dispatched;
-    if (called) return dispatched;
+    ant_value_t dispatched = split_dispatch(js, args, nargs, call_this, &called);
+    if (is_err(dispatched) || called) return dispatched;
   }
 
   return string_split_impl(js, str, args, nargs);
