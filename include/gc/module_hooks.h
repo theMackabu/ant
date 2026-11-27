@@ -26,7 +26,6 @@ GC_MODULE_MARK(sandbox)
 GC_MODULE_MARK(abort)
 GC_MODULE_MARK(wasm)
 GC_MODULE_MARK(napi)
-GC_MODULE_MARK(rpc)
 GC_MODULE_MARK(inspector)
 #undef GC_MODULE_MARK
 #endif

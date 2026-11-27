@@ -123,13 +123,6 @@ double_conversion_dep = subproject('double-conversion', default_options: ['b_nde
 dragonbox_dep = subproject('dragonbox').get_variable('dragonbox_dep')
 yyjson_dep = subproject('yyjson', default_options: ['non-standard-json=disabled',]).get_variable('yyjson_dep')
 
-wirecall = dependency('wirecall', default_options: [
-  'b_lto=' + get_option('b_lto').to_string(),
-  'scheduler=false',
-  'demos=disabled',
-  'tests=disabled',
-])
-
 ucd_derived_core_properties = subproject('ucd').get_variable('derived_core_properties')
 utf8proc_base_dep = subproject('utf8proc', default_options: ['tests=disabled',]).get_variable('utf8proc_dep')
 utf8proc_srcdir = src_root / 'vendor' / ('utf8proc-' + utf8proc_base_dep.version())
@@ -187,7 +180,7 @@ ant_format_deps = [
 
 ant_runtime_deps = [
   ssl_dep, crypto_dep, uthash_dep, wamr_dep,
-  double_conversion_dep, dragonbox_dep, wirecall, skim_dep,
+  double_conversion_dep, dragonbox_dep, skim_dep,
 ]
 
 ant_deps = allocator_deps + ant_core_deps + ant_format_deps + ant_runtime_deps + win_deps + mir_dep

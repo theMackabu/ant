@@ -2,7 +2,6 @@ const assert = require('node:assert');
 const net = require('node:net');
 const tls = require('node:tls');
 const dns = require('node:dns');
-const { RpcServer, RpcClient } = require('ant:rpc');
 const { Readable, Writable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 
@@ -49,11 +48,6 @@ async function main() {
   expectTypeError(() => net.Socket.prototype.write.call({}, 'x'), 'Invalid net.Socket');
   expectTypeError(() => net.Server.prototype.listen.call({}, 0), 'Invalid net.Server');
   expectTypeError(() => tls.TLSSocket.prototype.write.call({}, 'x'), 'Invalid TLS socket');
-  expectTypeError(() => RpcServer.prototype.register.call({}, 'x', () => []), 'Invalid RpcServer');
-  expectTypeError(() => RpcClient.prototype.connect.call({}), 'Invalid RpcClient');
-  const rpcServer = new RpcServer();
-  expectTypeError(() => rpcServer.register(1, () => []), 'route name must be a string');
-  rpcServer.close();
 
   // A malformed numeric host fails locally without depending on external DNS.
   await expectRejection(() => dns.promises.lookup('256.256.256.256'));

@@ -72,22 +72,6 @@ const cases = {
     await new Promise(resolve => setTimeout(resolve, 0));
     assert(handled, 'server close callback did not run');
   `,
-  rpc: `
-    const { RpcClient } = require('ant:rpc');
-    const client = new RpcClient({ host: '127.0.0.1', port: await closedPort() });
-    try { await rejected(client.connect()); } finally { await client.close(); }
-    await rejected(client.connect());
-    await rejected(client.ping());
-    await rejected(client.call('unused', []));
-  `,
-  rpcListen: `
-    const { RpcServer } = require('ant:rpc');
-    const server = new RpcServer();
-    try {
-      await rejected(server.listen());
-      await rejected(server.listen({ port: 0, integrity: 'invalid' }));
-    } finally { await server.close(); }
-  `,
   dns: `
     const dns = require('node:dns').promises;
     // c-ares rejects this name before sending any network traffic.

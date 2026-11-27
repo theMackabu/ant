@@ -70,8 +70,6 @@ typedef struct fs_watcher_s     fs_watcher_t;
 typedef struct fs_request_s     fs_request_t;
 typedef struct fetch_request_s  fetch_request_t;
 typedef struct rl_interface_s   rl_interface_t;
-typedef struct rpc_server       rpc_server_t;
-typedef struct rpc_client       rpc_client_t;
 typedef struct sandbox_state    sandbox_state_t;
 typedef struct ant_napi_env__   ant_napi_env_t;
 typedef struct ant_port_binding ant_port_binding_t;

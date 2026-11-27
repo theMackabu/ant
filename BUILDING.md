@@ -117,7 +117,6 @@ and are fetched automatically:
 - uthash 2.4.0
 - uuidv7-h `9ae44fec0eb2843d5230caac484b0388c93b836b`
 - wasm-micro-runtime `ffc22889948b1f063d7258d34d4e636ee0914925`
-- wirecall `26931f0b5085e0c1c76101d8c6d4563273f69c2d`
 - yyjson 0.13.0
 - zlib-ng 2.3.3
 

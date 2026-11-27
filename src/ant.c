@@ -20,7 +20,6 @@
 #include "silver/jit.h"
 #include "silver/ops/eval_env.h"
 
-#include "modules/rpc.h"
 #include "modules/host.h"
 #include "modules/function.h"
 #include "modules/symbol.h"
@@ -245,7 +244,6 @@ void Ant_Destroy(ant_t *js) {
   js->ic.gf_mega_keyed = NULL;
   
   code_arenas_destroy(js);
-  cleanup_rpc_module(js);
   js_descriptor_registry_cleanup(js);
   cleanup_iterator_module(js);
 

@@ -6,11 +6,9 @@
 #include "esm/library.h"
 #include "esm/loader.h"
 #include "modules/process.h"
-#include "modules/rpc.h"
 #include "modules/vm.h"
 #include "value.h"
 
-void cleanup_rpc_module(ant_t *js) {}
 void js_esm_cleanup_module_cache(ant_t *js) {}
 void ant_host_modules_destroy(ant_t *js) {}
 

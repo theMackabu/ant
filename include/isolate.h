@@ -171,8 +171,6 @@ struct ant_isolate_t {
   net_socket_t *net_sockets;
   ant_tls_socket_t *tls_sockets;
   ant_tls_server_t *tls_servers;
-  rpc_server_t *rpc_servers;
-  rpc_client_t *rpc_clients;
   sandbox_state_t *sandboxes;
   ant_napi_env_t *napi_env;
   ant_port_binding_t *port_bindings;
