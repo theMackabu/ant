@@ -5,8 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-struct map_entry;
-struct set_entry;
+struct collection_table;
 
 static constexpr size_t ANT_INSPECT_MAX_ENTRIES = 100;
 static constexpr int ANT_INSPECT_MAX_DEPTH = 2;
@@ -70,9 +69,9 @@ ant_value_t js_inspect_builder_result(js_inspect_builder_t *builder);
 ant_value_t string_builder_finalize(ant_t *js, string_builder_t *sb);
 
 bool js_inspect_plain_header(js_inspect_builder_t *builder, ant_value_t obj);
-bool js_inspect_map(js_inspect_builder_t *builder, ant_value_t obj, struct map_entry **map);
-bool js_inspect_set(js_inspect_builder_t *builder, ant_value_t obj, struct set_entry **set);
 bool string_builder_append(string_builder_t *sb, const char *data, size_t len);
+bool js_inspect_map(js_inspect_builder_t *builder, ant_value_t obj, struct collection_table *map);
+bool js_inspect_set(js_inspect_builder_t *builder, ant_value_t obj, struct collection_table *set);
 
 bool string_builder_append_value(
   ant_t *js, string_builder_t *sb, 

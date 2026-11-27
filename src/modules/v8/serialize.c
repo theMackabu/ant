@@ -388,34 +388,41 @@ static void ser_regexp(ser_t *s, ant_value_t value) {
 }
 
 static ant_value_t ser_map(ser_t *s, ant_value_t value) {
-  map_entry_t **head = get_map_from_obj(value);
-  map_entry_t *entry, *next;
+  collection_table_t *map = get_map_from_obj(value);
   uint32_t count = 0;
 
   put_u8(s, V8_TAG_BEGIN_MAP);
-  if (head) HASH_ITER(hh, *head, entry, next) {
-    ant_value_t r = ser_value(s, entry->key_val);
-    if (is_err(r) || is_err(r = ser_value(s, entry->value))) return r;
+  if (map) for (uint32_t index = 0;;) {
+    map_entry_t *entry = collections_map_next(map, &index);
+    if (!entry) break;
+    ant_value_t entry_value = entry->value;
+    ant_value_t r = ser_value(s, entry->key);
+    if (is_err(r) || is_err(r = ser_value(s, entry_value))) return r;
     count += 2;
   }
+  
   put_u8(s, V8_TAG_END_MAP);
   put_varint(s, count);
+  
   return Ant_Value_Undefined;
 }
 
 static ant_value_t ser_set(ser_t *s, ant_value_t value) {
-  set_entry_t **head = get_set_from_obj(value);
-  set_entry_t *entry, *next;
+  collection_table_t *set = get_set_from_obj(value);
   uint32_t count = 0;
 
   put_u8(s, V8_TAG_BEGIN_SET);
-  if (head) HASH_ITER(hh, *head, entry, next) {
-    ant_value_t r = ser_value(s, entry->value);
+  if (set) for (uint32_t index = 0;;) {
+    set_entry_t *entry = collections_set_next(set, &index);
+    if (!entry) break;
+    ant_value_t r = ser_value(s, entry->key);
     if (is_err(r)) return r;
     count++;
   }
+  
   put_u8(s, V8_TAG_END_SET);
   put_varint(s, count);
+  
   return Ant_Value_Undefined;
 }
 

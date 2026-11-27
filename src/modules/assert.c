@@ -9,14 +9,14 @@
 #include "error_render.h"
 #include "internal.h"
 #include "gc/roots.h"
-
 #include "esm/library.h"
+#include "silver/engine.h"
+#include "silver/vm.h"
+
+#include "modules/date.h"
 #include "modules/assert.h"
 #include "modules/buffer.h"
 #include "modules/collections.h"
-#include "modules/date.h"
-#include "silver/engine.h"
-#include "silver/call.h"
 
 typedef struct {
   const char *op;
@@ -729,7 +729,7 @@ static bool deep_array_elements(deep_equal_t *ctx, ant_value_t a, ant_value_t b)
 
 static bool deep_match_candidate(
   deep_equal_t *ctx, ant_value_t *candidates, bool *used, size_t count,
-  ant_value_t key, ant_value_t item, map_entry_t **map
+  ant_value_t key, ant_value_t item, collection_table_t *map
 ) {
   for (size_t i = 0; i < count; i++) {
     if (used[i] || !deep_equal_values(ctx, key, candidates[i])) continue;
@@ -745,26 +745,24 @@ static bool deep_match_candidate(
 
 static bool deep_set_equal(deep_equal_t *ctx, ant_value_t a, ant_value_t b) {
   ant_t *js = ctx->js;
-  set_entry_t **sa = get_set_from_obj(js_as_obj(a)), **sb = get_set_from_obj(js_as_obj(b));
+  collection_table_t *sa = get_set_from_obj(js_as_obj(a)), *sb = get_set_from_obj(js_as_obj(b));
   if (!sa || !sb) return false;
 
-  size_t count = HASH_COUNT(*sb), n = 0;
+  size_t count = sb->size, n = 0;
   ant_value_t *candidates = malloc((count ? count : 1) * sizeof(*candidates));
   bool *used = calloc(count ? count : 1, sizeof(*used));
   bool ok = candidates && used;
 
-  set_entry_t *entry, *tmp;
-  HASH_ITER(hh, *sb, entry, tmp) {
-    if (!ok) break;
-    if (Ant_Set_Find(js, sa, entry->value)) continue;
-    if (ctx->strict && !deep_is_object(entry->value)) ok = false;
-    else candidates[n++] = entry->value;
+  set_entry_t *entry;
+  for (uint32_t index = 0; ok && n < count && (entry = collections_set_next(sb, &index));) {
+    if (Ant_Set_Find(js, sa, entry->key)) continue;
+    if (ctx->strict && !deep_is_object(entry->key)) ok = false;
+    else candidates[n++] = entry->key;
   }
 
-  HASH_ITER(hh, *sa, entry, tmp) {
-    if (!ok || n == 0) break;
-    if (Ant_Set_Find(js, sb, entry->value)) continue;
-    ok = deep_match_candidate(ctx, candidates, used, n, entry->value, Ant_Value_Undefined, NULL);
+  for (uint32_t index = 0; ok && n > 0 && (entry = collections_set_next(sa, &index));) {
+    if (Ant_Set_Find(js, sb, entry->key)) continue;
+    ok = deep_match_candidate(ctx, candidates, used, n, entry->key, Ant_Value_Undefined, NULL);
   }
 
   free(candidates);
@@ -774,32 +772,32 @@ static bool deep_set_equal(deep_equal_t *ctx, ant_value_t a, ant_value_t b) {
 
 static bool deep_map_equal(deep_equal_t *ctx, ant_value_t a, ant_value_t b) {
   ant_t *js = ctx->js;
-  map_entry_t **ma = get_map_from_obj(js_as_obj(a)), **mb = get_map_from_obj(js_as_obj(b));
+  collection_table_t *ma = get_map_from_obj(js_as_obj(a)), *mb = get_map_from_obj(js_as_obj(b));
   if (!ma || !mb) return false;
 
-  size_t count = HASH_COUNT(*mb), n = 0;
+  size_t count = mb->size, n = 0;
   ant_value_t *candidates = malloc((count ? count : 1) * sizeof(*candidates));
   bool *used = calloc(count ? count : 1, sizeof(*used));
   bool ok = candidates && used;
 
-  map_entry_t *entry, *tmp;
-  HASH_ITER(hh, *mb, entry, tmp) {
-    if (!ok) break;
-    if (!deep_is_object(entry->key_val)) {
-      map_entry_t *other = Ant_Map_Find(js, ma, entry->key_val);
-      if (other && deep_equal_values(ctx, other->value, entry->value)) continue;
+  map_entry_t *entry;
+  for (uint32_t index = 0; ok && n < count && (entry = collections_map_next(mb, &index));) {
+    ant_value_t key = entry->key, value = entry->value;
+    if (!deep_is_object(key)) {
+      map_entry_t *other = Ant_Map_Find(js, ma, key);
+      if (other && deep_equal_values(ctx, other->value, value)) continue;
       if (ctx->strict) { ok = false; break; }
     }
-    candidates[n++] = entry->key_val;
+    candidates[n++] = key;
   }
 
-  HASH_ITER(hh, *ma, entry, tmp) {
-    if (!ok || n == 0) break;
-    if (!deep_is_object(entry->key_val)) {
-      map_entry_t *other = Ant_Map_Find(js, mb, entry->key_val);
-      if (other && deep_equal_values(ctx, entry->value, other->value)) continue;
+  for (uint32_t index = 0; ok && n > 0 && (entry = collections_map_next(ma, &index));) {
+    ant_value_t key = entry->key, value = entry->value;
+    if (!deep_is_object(key)) {
+      map_entry_t *other = Ant_Map_Find(js, mb, key);
+      if (other && deep_equal_values(ctx, value, other->value)) continue;
     }
-    ok = deep_match_candidate(ctx, candidates, used, n, entry->key_val, entry->value, mb);
+    ok = deep_match_candidate(ctx, candidates, used, n, key, value, mb);
   }
 
   free(candidates);
@@ -882,6 +880,7 @@ static bool deep_objects_equal(deep_equal_t *ctx, ant_value_t a, ant_value_t b) 
   const char *tag = js_getstr(js, tag_a, &tag_len);
   if (tag_len == 15 && memcmp(tag, "[object Object]", 15) == 0) return deep_key_check(ctx, a, b, DEEP_ITER_NONE, false);
 
+  // TODO: WTF IS THIS
   if (is_date_instance(a)) {
     if (!is_date_instance(b)) return false;
     ant_value_t ta = js_get_slot(a, SLOT_DATA), tb = js_get_slot(b, SLOT_DATA);
@@ -895,12 +894,12 @@ static bool deep_objects_equal(deep_equal_t *ctx, ant_value_t a, ant_value_t b) 
     else if (!deep_bytes_equal(ba, la, bb, lb)) return false;
     return deep_key_check(ctx, a, b, DEEP_ITER_NONE, true);
   } else if (get_set_from_obj(js_as_obj(a))) {
-    set_entry_t **sb = get_set_from_obj(js_as_obj(b));
-    if (!sb || HASH_COUNT(*get_set_from_obj(js_as_obj(a))) != HASH_COUNT(*sb)) return false;
+    collection_table_t *sb = get_set_from_obj(js_as_obj(b));
+    if (!sb || get_set_from_obj(js_as_obj(a))->size != sb->size) return false;
     return deep_key_check(ctx, a, b, DEEP_ITER_SET, false);
   } else if (get_map_from_obj(js_as_obj(a))) {
-    map_entry_t **mb = get_map_from_obj(js_as_obj(b));
-    if (!mb || HASH_COUNT(*get_map_from_obj(js_as_obj(a))) != HASH_COUNT(*mb)) return false;
+    collection_table_t *mb = get_map_from_obj(js_as_obj(b));
+    if (!mb || get_map_from_obj(js_as_obj(a))->size != mb->size) return false;
     return deep_key_check(ctx, a, b, DEEP_ITER_MAP, false);
   } else if ((abuf = buffer_get_arraybuffer_data(a))) {
     ArrayBufferData *bbuf = buffer_get_arraybuffer_data(b);

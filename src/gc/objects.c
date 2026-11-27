@@ -840,22 +840,21 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   }
 
   if (obj->type_tag == kTypeMap) {
-    ant_value_t value = js_obj_from_ptr(obj);
-    map_entry_t **head = (map_entry_t **)js_get_native(value, MAP_NATIVE_TAG);
-    if (head) {
-    map_entry_t *e, *tmp;
-    HASH_ITER(hh, *head, e, tmp) { 
-      gc_mark_value_fast(js, e->key_val); 
-      gc_mark_value_fast(js, e->value); 
+    collection_table_t *table = js_get_native(js_obj_from_ptr(obj), MAP_NATIVE_TAG);
+    if (table) {
+    map_entry_t *entries = (map_entry_t *)table->entries;
+    for (uint32_t i = 0; i < table->used; i++) if (entries[i].key != COLLECTION_HOLE) {
+      gc_mark_value_fast(js, entries[i].key);
+      gc_mark_value_fast(js, entries[i].value);
     }}
   } 
   
   else if (obj->type_tag == kTypeSet) {
-    ant_value_t value = js_obj_from_ptr(obj);
-    set_entry_t **head = (set_entry_t **)js_get_native(value, SET_NATIVE_TAG);
-    if (head) {
-      set_entry_t *e, *tmp;
-      HASH_ITER(hh, *head, e, tmp) { gc_mark_value_fast(js, e->value); }
+    collection_table_t *table = js_get_native(js_obj_from_ptr(obj), SET_NATIVE_TAG);
+    if (table) {
+    set_entry_t *entries = (set_entry_t *)table->entries;
+    for (uint32_t i = 0; i < table->used; i++)
+      if (entries[i].key != COLLECTION_HOLE) gc_mark_value_fast(js, entries[i].key);
     }
   }
 
@@ -1820,10 +1819,10 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   switch (obj->type_tag) {
     case kTypeMap: {
       ant_value_t value = js_obj_from_ptr(obj);
-      map_entry_t **head = (map_entry_t **)js_get_native(value, MAP_NATIVE_TAG);
+      collection_table_t *table = js_get_native(value, MAP_NATIVE_TAG);
       
-      if (head) {
-        collections_map_store_free(head);
+      if (table) {
+        collections_table_free(table);
         js_clear_native(value, MAP_NATIVE_TAG);
       }
       
@@ -1832,10 +1831,10 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     
     case kTypeSet: {
       ant_value_t value = js_obj_from_ptr(obj);
-      set_entry_t **head = (set_entry_t **)js_get_native(value, SET_NATIVE_TAG);
+      collection_table_t *table = js_get_native(value, SET_NATIVE_TAG);
       
-      if (head) {
-        collections_set_store_free(head);
+      if (table) {
+        collections_table_free(table);
         js_clear_native(value, SET_NATIVE_TAG);
       }
       

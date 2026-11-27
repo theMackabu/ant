@@ -493,31 +493,33 @@ static ant_value_t wire_write_object(wire_writer_t *w, ant_value_t value) {
 
   if (ptr->type_tag == kTypeMap) {
     if (!put_u8(w, WIRE_MAP) || !wire_remember(w, value)) return wire_oom(js);
-    map_entry_t **head = get_map_from_obj(value);
-    if (head) {
-      map_entry_t *e, *tmp;
-      HASH_ITER(hh, *head, e, tmp) {
-        if (!put_u8(w, WIRE_PROP)) return wire_oom(js);
-        ant_value_t r = wire_write(w, e->key_val);
-        if (is_err(r)) return r;
-        r = wire_write(w, e->value);
-        if (is_err(r)) return r;
-      }
+    collection_table_t *map = get_map_from_obj(value);
+    
+    if (map) for (uint32_t index = 0;;) {
+      map_entry_t *e = collections_map_next(map, &index);
+      if (!e) break;
+      ant_value_t entry_value = e->value;
+      if (!put_u8(w, WIRE_PROP)) return wire_oom(js);
+      ant_value_t r = wire_write(w, e->key);
+      if (is_err(r)) return r;
+      r = wire_write(w, entry_value);
+      if (is_err(r)) return r;
     }
+    
     return put_u8(w, WIRE_END) ? Ant_Value_Undefined : wire_oom(js);
   }
 
   if (ptr->type_tag == kTypeSet) {
     if (!put_u8(w, WIRE_SET) || !wire_remember(w, value)) return wire_oom(js);
-    set_entry_t **head = get_set_from_obj(value);
-    if (head) {
-      set_entry_t *e, *tmp;
-      HASH_ITER(hh, *head, e, tmp) {
-        if (!put_u8(w, WIRE_PROP)) return wire_oom(js);
-        ant_value_t r = wire_write(w, e->value);
-        if (is_err(r)) return r;
-      }
+    collection_table_t *set = get_set_from_obj(value);
+    if (set) for (uint32_t index = 0;;) {
+      set_entry_t *e = collections_set_next(set, &index);
+      if (!e) break;
+      if (!put_u8(w, WIRE_PROP)) return wire_oom(js);
+      ant_value_t r = wire_write(w, e->key);
+      if (is_err(r)) return r;
     }
+    
     return put_u8(w, WIRE_END) ? Ant_Value_Undefined : wire_oom(js);
   }
 
@@ -528,6 +530,7 @@ static ant_value_t wire_write_object(wire_writer_t *w, ant_value_t value) {
       ant_value_t r = wire_write(w, js_arr_get(js, value, i));
       if (is_err(r)) return r;
     }
+    
     return wire_write_props(w, value, len ? len : 1);
   }
 
@@ -939,7 +942,7 @@ static ant_value_t wire_read_object(wire_reader_t *r, uint8_t tag) {
     }
 
     case WIRE_MAP: {
-      map_entry_t **head = NULL;
+      collection_table_t *head = NULL;
       ant_value_t map = wire_track(r, collections_map_create(js, &head));
       if (is_err(map)) return map;
       for (;;) {
@@ -960,7 +963,7 @@ static ant_value_t wire_read_object(wire_reader_t *r, uint8_t tag) {
     }
 
     case WIRE_SET: {
-      set_entry_t **head = NULL;
+      collection_table_t *head = NULL;
       ant_value_t set = wire_track(r, collections_set_create(js, &head));
       if (is_err(set)) return set;
       for (;;) {

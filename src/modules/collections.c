@@ -1,11 +1,4 @@
 #include <stddef.h>
-
-static void *collection_alloc(size_t size);
-static void collection_release(void *block, size_t size);
-
-#define uthash_malloc(size) collection_alloc(size)
-#define uthash_free(block, size) collection_release(block, size)
-
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -40,619 +33,571 @@ static void collection_release(void *block, size_t size);
 #define HASH_INITIAL_NUM_BUCKETS_LOG2 3U
 #define HASH_BKT_CAPACITY_THRESH 6U
 
-enum {
-  COLLECTION_POOL_GRAIN = 16,
-  COLLECTION_POOL_CLASSES = 32,
-  COLLECTION_POOL_CAP = 128,
-};
-
-typedef struct collection_block {
-  struct collection_block *next;
-} collection_block_t;
-
-typedef struct {
-  collection_block_t *head[COLLECTION_POOL_CLASSES];
-  uint32_t count[COLLECTION_POOL_CLASSES];
-} collection_pool_t;
-
-static _Thread_local collection_pool_t collection_pool;
-
-static inline size_t collection_pool_class(size_t size) {
-  return size == 0 ? COLLECTION_POOL_CLASSES : (size - 1) / COLLECTION_POOL_GRAIN;
-}
-
-static void *collection_alloc(size_t size) {
-  size_t cls = collection_pool_class(size);
-  if (cls >= COLLECTION_POOL_CLASSES) return malloc(size);
-  collection_pool_t *pool = &collection_pool;
-  collection_block_t *block = pool->head[cls];
-  if (!block) return malloc((cls + 1) * COLLECTION_POOL_GRAIN);
-  pool->head[cls] = block->next;
-  pool->count[cls]--;
-  return block;
-}
-
-static void *collection_zalloc(size_t size) {
-  void *block = collection_alloc(size);
-  if (block) memset(block, 0, size);
-  return block;
-}
-
-static void collection_release(void *block, size_t size) {
-  if (!block) return;
-  size_t cls = collection_pool_class(size);
-  collection_pool_t *pool = &collection_pool;
-  if (cls >= COLLECTION_POOL_CLASSES || pool->count[cls] >= COLLECTION_POOL_CAP) {
-    free(block);
-    return;
-  }
-  ((collection_block_t *)block)->next = pool->head[cls];
-  pool->head[cls] = block;
-  pool->count[cls]++;
-}
-
 static bool can_be_held_weakly(ant_value_t value) {
   if (is_object_type(value) || vtype(value) == kTypeBuiltin) return true;
   return vtype(value) == kTypeSymbol && js_sym_key(value) == NULL;
 }
 
-typedef struct {
-  unsigned char stack[32];
-  unsigned char *heap;
-  const unsigned char *payload;
-  size_t len;
-  unsigned hash;
-  uint8_t tag;
-} collection_key_t;
+enum {
+  COLLECTION_KEY_VALUE,
+  COLLECTION_KEY_STRING,
+  COLLECTION_KEY_BIGINT,
+};
 
-static ant_value_t normalize_map_key(ant_value_t key) {
-  if (vtype(key) == kTypeNumber) {
-    double d = Ant_Value_AsNumberUnchecked(key);
-    if (d == 0.0 && signbit(d)) return Ant_Value_FromNumber(0.0);
+typedef struct {
+  ant_value_t key;
+  const unsigned char *bytes;
+  size_t len;
+  uint32_t hash;
+  uint8_t kind;
+  bool negative;
+} collection_probe_t;
+
+typedef set_entry_t collection_slot_t;
+
+static constexpr size_t MAP_STRIDE = sizeof(map_entry_t);
+static constexpr size_t SET_STRIDE = sizeof(set_entry_t);
+
+static constexpr uint32_t COLLECTION_MIN_CAPACITY = 8;
+static constexpr uint32_t COLLECTION_MAX_CAPACITY = UINT32_C(1) << 30;
+static constexpr ant_value_t COLLECTION_CANONICAL_NAN = UINT64_C(0x7FF8000000000000);
+static constexpr uint64_t COLLECTION_BIGINT_SIGN = UINT64_C(0x9e3779b97f4a7c15);
+
+static const uint32_t collection_empty_buckets[1] = { COLLECTION_END };
+static collection_table_t collection_empty_table = { .buckets = (uint32_t *)collection_empty_buckets };
+
+static inline uint32_t collection_value_hash(ant_value_t key) {
+  return (uint32_t)ant_hash_mix(key ^ ant_hash_secret[0], ant_hash_secret[1]);
+}
+
+static inline uint32_t collection_string_hash(const unsigned char *bytes, size_t len) {
+  return (uint32_t)hash_key((const char *)bytes, len);
+}
+
+static const uint32_t *collection_bigint_limbs(ant_t *js, ant_value_t value, size_t *count, bool *negative) {
+  const uint32_t *limbs = bigint_limbs(js, value, count);
+  while (*count > 1 && limbs[*count - 1] == 0) (*count)--;
+  *negative = bigint_is_negative(js, value) && !(*count == 1 && limbs[0] == 0);
+  return limbs;
+}
+
+static void collection_probe_bigint(ant_t *js, ant_value_t key, collection_probe_t *probe) {
+  size_t count = 0;
+  const uint32_t *limbs = collection_bigint_limbs(js, key, &count, &probe->negative);
+  probe->key = key;
+  probe->bytes = (const unsigned char *)limbs;
+  probe->len = count * sizeof(uint32_t);
+  probe->kind = COLLECTION_KEY_BIGINT;
+  probe->hash = (uint32_t)(hash_key((const char *)limbs, probe->len) ^ (probe->negative ? COLLECTION_BIGINT_SIGN : 0));
+}
+
+static void collection_probe_flat(ant_value_t key, const ant_flat_string_t *flat, collection_probe_t *probe) {
+  probe->key = key;
+  probe->bytes = (const unsigned char *)flat->bytes;
+  probe->len = (size_t)flat->len;
+  probe->kind = COLLECTION_KEY_STRING;
+}
+
+static bool collection_probe_string(ant_t *js, ant_value_t key, collection_probe_t *probe) {
+  ant_flat_string_t *flat = ant_str_flat_ptr(key);
+  if (!flat) {
+    key = str_materialize(js, key);
+    if (is_err(key) || !(flat = ant_str_flat_ptr(key))) return false;
   }
+  collection_probe_flat(key, flat, probe);
+  probe->hash = collection_string_hash(probe->bytes, probe->len);
+  return true;
+}
+
+static inline ant_value_t collection_normalize_number(ant_value_t key) {
+  double number = Ant_Value_AsNumberUnchecked(key);
+  if (number == 0.0) return Ant_Value_FromNumber(0.0);
+  if (number != number) return COLLECTION_CANONICAL_NAN;
   return key;
 }
 
-static inline unsigned collection_hash(uint8_t tag, const unsigned char *payload, size_t len) {
-  return (unsigned)(hash_key((const char *)payload, len) ^ ((uint64_t)tag * UINT64_C(0x9e3779b97f4a7c15)));
-}
-
-static void collection_key_free(collection_key_t *key) {
-  if (!key->heap) return;
-  free(key->heap);
-  key->heap = NULL;
-}
-
-static unsigned char *collection_key_reserve(collection_key_t *key, size_t len) {
-  if (len <= sizeof(key->stack)) return key->stack;
-  return key->heap = malloc(len);
-}
-
-static bool collection_key_init(ant_t *js, ant_value_t input, collection_key_t *out) {
-  ant_value_t key = normalize_map_key(input);
-  out->heap = NULL;
-  out->tag = (uint8_t)vtype(key);
-
-  if (out->tag == kTypeString) {
-    ant_flat_string_t *flat = ant_str_flat_ptr(key);
-    if (flat) {
-      out->payload = (const unsigned char *)flat->bytes;
-      out->len = (size_t)flat->len;
-    } else out->payload = (const unsigned char *)js_getstr(js, key, &out->len);
-  } else if (out->tag == kTypeBigInt) {
-    out->len = bigint_digits_len(js, key) + (bigint_is_negative(js, key) ? 1 : 0);
-    unsigned char *digits = collection_key_reserve(out, out->len + 1);
-    if (!digits) return false;
-    if (out->len > 0) strbigint(js, key, (char *)digits, out->len + 1);
-    out->payload = digits;
-  } else {
-    memcpy(out->stack, &key, sizeof(ant_value_t));
-    out->payload = out->stack;
-    out->len = sizeof(ant_value_t);
-    out->hash = (unsigned)ant_hash_mix(key ^ ant_hash_secret[0], ant_hash_secret[1] ^ out->tag);
+__attribute__((always_inline))
+static inline bool collection_probe_init(ant_t *js, ant_value_t input, collection_probe_t *probe) {
+  uint8_t type = vtype(input);
+  probe->kind = COLLECTION_KEY_VALUE;
+  if (type == kTypeString) return collection_probe_string(js, input, probe);
+  if (type == kTypeBigInt) {
+    collection_probe_bigint(js, input, probe);
     return true;
   }
-
-  out->hash = collection_hash(out->tag, out->payload, out->len);
+  probe->key = type == kTypeNumber ? collection_normalize_number(input) : input;
+  probe->hash = collection_value_hash(probe->key);
   return true;
 }
 
-static inline bool collection_payload_equal(const unsigned char *bytes, const collection_key_t *key) {
-  if (key->len == sizeof(uint64_t)) {
-    uint64_t a, b;
-    memcpy(&a, bytes, sizeof(a));
-    memcpy(&b, key->payload, sizeof(b));
-    return a == b;
-  }
-  return key->len == 0 || memcmp(bytes, key->payload, key->len) == 0;
+static void collection_probe_stored(ant_t *js, ant_value_t key, uint32_t hash, collection_probe_t *probe) {
+  uint8_t type = vtype(key);
+  probe->key = key;
+  probe->kind = COLLECTION_KEY_VALUE;
+  if (type == kTypeString) collection_probe_flat(key, ant_str_flat_ptr(key), probe);
+  else if (type == kTypeBigInt) collection_probe_bigint(js, key, probe);
+  probe->hash = hash;
 }
 
-static void *collection_find(const UT_hash_table *tbl, const collection_key_t *key) {
-  if (!tbl) return NULL;
-  const UT_hash_handle *hh = tbl->buckets[key->hash & (tbl->num_buckets - 1U)].hh_head;
-  
-  for (; hh; hh = hh->hh_next) {
-    const unsigned char *bytes = hh->key;
-    if (
-      hh->hashv == key->hash && hh->keylen == key->len + 1 && bytes[0] == key->tag &&
-      collection_payload_equal(bytes + 1, key)
-    ) return ELMT_FROM_HH(tbl, hh);
+static inline collection_slot_t *collection_slot(const collection_table_t *table, uint32_t index, size_t stride) {
+  return (collection_slot_t *)(table->entries + (size_t)index * stride);
+}
+
+static inline bool collection_short_equal(const unsigned char *a, const unsigned char *b, size_t len) {
+  if (len >= 8) {
+    uint64_t a0, b0, a1, b1;
+    memcpy(&a0, a, 8);
+    memcpy(&b0, b, 8);
+    memcpy(&a1, a + len - 8, 8);
+    memcpy(&b1, b + len - 8, 8);
+    return ((a0 ^ b0) | (a1 ^ b1)) == 0;
   }
-  
+  if (len >= 4) {
+    uint32_t a0, b0, a1, b1;
+    memcpy(&a0, a, 4);
+    memcpy(&b0, b, 4);
+    memcpy(&a1, a + len - 4, 4);
+    memcpy(&b1, b + len - 4, 4);
+    return ((a0 ^ b0) | (a1 ^ b1)) == 0;
+  }
+  for (size_t i = 0; i < len; i++) if (a[i] != b[i]) return false;
+  return true;
+}
+
+static inline const ant_flat_string_t *collection_stored_string(ant_value_t stored, size_t len) {
+  if (vtype(stored) != kTypeString) return NULL;
+  const ant_flat_string_t *flat = (const ant_flat_string_t *)vptr(stored);
+  return (size_t)flat->len == len ? flat : NULL;
+}
+
+static bool collection_bigint_equal(ant_t *js, ant_value_t stored, const collection_probe_t *probe) {
+  if (vtype(stored) != kTypeBigInt) return false;
+  if (stored == probe->key) return true;
+  size_t count = 0;
+  bool negative = false;
+  const uint32_t *limbs = collection_bigint_limbs(js, stored, &count, &negative);
+  return negative == probe->negative && count * sizeof(uint32_t) == probe->len && memcmp(limbs, probe->bytes, probe->len) == 0;
+}
+
+__attribute__((noinline))
+static collection_slot_t *collection_find_long_string(const collection_table_t *table, const collection_probe_t *probe, size_t stride) {
+  for (uint32_t index = table->buckets[probe->hash & table->mask]; index != COLLECTION_END;) {
+    collection_slot_t *slot = collection_slot(table, index, stride);
+    if (slot->hash == probe->hash) {
+      if (slot->key == probe->key) return slot;
+      const ant_flat_string_t *flat = collection_stored_string(slot->key, probe->len);
+      if (flat && memcmp(flat->bytes, probe->bytes, probe->len) == 0) return slot;
+    }
+    index = slot->chain;
+  }
   return NULL;
 }
 
-static void collection_key_copy(unsigned char *dst, const collection_key_t *key) {
-  dst[0] = key->tag;
-  if (key->len > 0) memcpy(dst + 1, key->payload, key->len);
-}
-
-map_entry_t *Ant_Map_Find(ant_t *js, map_entry_t **map_ptr, ant_value_t key_val) {
-  collection_key_t key;
-  if (!collection_key_init(js, key_val, &key)) return NULL;
-  map_entry_t *entry = collection_find(*map_ptr ? (*map_ptr)->hh.tbl : NULL, &key);
-  collection_key_free(&key);
-  return entry;
-}
-
-set_entry_t *Ant_Set_Find(ant_t *js, set_entry_t **set_ptr, ant_value_t value) {
-  collection_key_t key;
-  if (!collection_key_init(js, value, &key)) return NULL;
-  set_entry_t *entry = collection_find(*set_ptr ? (*set_ptr)->hh.tbl : NULL, &key);
-  collection_key_free(&key);
-  return entry;
-}
-
-static map_store_t *map_store_of(map_entry_t **head) {
-  return (map_store_t *)head;
-}
-
-static set_store_t *set_store_of(set_entry_t **head) {
-  return (set_store_t *)head;
-}
-
-map_entry_t **collections_map_store_new(void) {
-  map_store_t *store = collection_zalloc(sizeof(*store));
-  if (!store) return NULL;
-  store->cursors.flag_offset = offsetof(map_entry_t, cursored);
-  return &store->head;
-}
-
-set_entry_t **collections_set_store_new(void) {
-  set_store_t *store = collection_zalloc(sizeof(*store));
-  if (!store) return NULL;
-  store->cursors.flag_offset = offsetof(set_entry_t, cursored);
-  return &store->head;
-}
-
-static collection_cursor_t *cursor_new(collection_cursors_t *cursors) {
-  collection_cursor_t *cursor = collection_alloc(sizeof(*cursor));
-  if (cursor) *cursor = (collection_cursor_t){ .owner = cursors };
-  return cursor;
-}
-
-static uint32_t *cursor_flag(collection_cursors_t *cursors, void *entry) {
-  return (uint32_t *)((char *)entry + cursors->flag_offset);
-}
-
-static void cursor_link(collection_cursors_t *cursors, collection_cursor_t *cursor) {
-  cursor->prev = NULL;
-  cursor->next = cursors->head;
-  if (cursors->head) cursors->head->prev = cursor;
-  cursors->head = cursor;
-}
-
-static void cursor_detach(collection_cursor_t *cursor) {
-  collection_cursors_t *cursors = cursor->owner;
-  if (cursors && cursors->end == cursor) cursors->end = NULL;
-  else if (cursors && cursor->entry) {
-    if (cursor->prev) cursor->prev->next = cursor->next;
-    else cursors->head = cursor->next;
-    if (cursor->next) cursor->next->prev = cursor->prev;
-    *cursor_flag(cursors, cursor->entry) = 0;
+__attribute__((noinline))
+static collection_slot_t *collection_find_string(const collection_table_t *table, const collection_probe_t *probe, size_t stride) {
+  if (probe->len > 16) return collection_find_long_string(table, probe, stride);
+  for (uint32_t index = table->buckets[probe->hash & table->mask]; index != COLLECTION_END;) {
+    collection_slot_t *slot = collection_slot(table, index, stride);
+    if (slot->hash == probe->hash) {
+      if (slot->key == probe->key) return slot;
+      const ant_flat_string_t *flat = collection_stored_string(slot->key, probe->len);
+      if (flat && collection_short_equal((const unsigned char *)flat->bytes, probe->bytes, probe->len)) return slot;
+    }
+    index = slot->chain;
   }
-  cursor->entry = NULL;
-  cursor->prev = cursor->next = NULL;
+  return NULL;
 }
 
-static void cursor_park(collection_cursors_t *cursors, collection_cursor_t *cursor, void *entry) {
-  cursor->owner = cursors;
-  if (!entry) {
-    cursors->end = cursor;
+__attribute__((noinline))
+static collection_slot_t *collection_find_bigint(
+  ant_t *js, const collection_table_t *table, const collection_probe_t *probe, size_t stride
+) {
+  for (uint32_t index = table->buckets[probe->hash & table->mask]; index != COLLECTION_END;) {
+    collection_slot_t *slot = collection_slot(table, index, stride);
+    if (slot->hash == probe->hash && collection_bigint_equal(js, slot->key, probe)) return slot;
+    index = slot->chain;
+  }
+  return NULL;
+}
+
+__attribute__((always_inline))
+static inline collection_slot_t *collection_find(
+  ant_t *js, const collection_table_t *table, const collection_probe_t *probe, size_t stride
+) {
+  if (__builtin_expect(probe->kind == COLLECTION_KEY_VALUE, 1)) {
+    for (uint32_t index = table->buckets[probe->hash & table->mask]; index != COLLECTION_END;) {
+      collection_slot_t *slot = collection_slot(table, index, stride);
+      if (slot->key == probe->key) return slot;
+      index = slot->chain;
+    }
+    return NULL;
+  }
+  if (probe->kind == COLLECTION_KEY_STRING) return collection_find_string(table, probe, stride);
+  return collection_find_bigint(js, table, probe, stride);
+}
+
+static void collection_remap_iters(collection_table_t *table, const uint32_t *remap, uint32_t live) {
+  for (collection_iter_state_t *it = table->iters; it; it = it->next)
+    it->index = it->index < table->used ? remap[it->index] : live;
+}
+
+static void collection_link_chains(collection_table_t *table, size_t stride) {
+  memset(table->buckets, 0xff, ((size_t)table->mask + 1) * sizeof(uint32_t));
+  for (uint32_t i = 0; i < table->used; i++) {
+    collection_slot_t *slot = collection_slot(table, i, stride);
+    uint32_t *bucket = &table->buckets[slot->hash & table->mask];
+    slot->chain = *bucket;
+    *bucket = i;
+  }
+}
+
+static bool collection_resize(collection_table_t *table, uint32_t capacity, size_t stride) {
+  unsigned char *block = malloc((size_t)capacity * (stride + sizeof(uint32_t)));
+  if (!block) return false;
+
+  uint32_t *remap = table->iters ? table->buckets : NULL;
+  uint32_t live = 0;
+
+  for (uint32_t i = 0; i < table->used; i++) {
+    collection_slot_t *from = collection_slot(table, i, stride);
+    if (remap) remap[i] = live;
+    if (from->key == COLLECTION_HOLE) continue;
+    memcpy(block + (size_t)live * stride, from, stride);
+    live++;
+  }
+
+  if (remap) collection_remap_iters(table, remap, live);
+  free(table->entries);
+
+  table->entries = block;
+  table->buckets = (uint32_t *)(block + (size_t)capacity * stride);
+  table->capacity = capacity;
+  table->mask = capacity - 1;
+  table->used = live;
+  table->first = 0;
+  collection_link_chains(table, stride);
+
+  return true;
+}
+
+static void collection_compact(collection_table_t *table, size_t stride) {
+  uint32_t *remap = table->iters ? table->buckets : NULL;
+  uint32_t live = 0;
+
+  for (uint32_t i = 0; i < table->used; i++) {
+    collection_slot_t *from = collection_slot(table, i, stride);
+    if (remap) remap[i] = live;
+    if (from->key == COLLECTION_HOLE) continue;
+    if (i != live) memcpy(collection_slot(table, live, stride), from, stride);
+    live++;
+  }
+
+  if (remap) collection_remap_iters(table, remap, live);
+  table->used = live;
+  table->first = 0;
+  collection_link_chains(table, stride);
+}
+
+static bool collection_make_room(collection_table_t *table, size_t stride) {
+  if (!table->entries) return collection_resize(table, COLLECTION_MIN_CAPACITY, stride);
+  if (table->size <= table->capacity / 2) {
+    collection_compact(table, stride);
+    return true;
+  }
+  if (table->capacity >= COLLECTION_MAX_CAPACITY) return false;
+  return collection_resize(table, table->capacity * 2, stride);
+}
+
+__attribute__((always_inline))
+static inline collection_slot_t *collection_append(collection_table_t *table, ant_value_t key, uint32_t hash, size_t stride) {
+  if (__builtin_expect(table->used == table->capacity, 0) && !collection_make_room(table, stride)) return NULL;
+  uint32_t index = table->used++;
+  collection_slot_t *slot = collection_slot(table, index, stride);
+  uint32_t *bucket = &table->buckets[hash & table->mask];
+  slot->key = key;
+  slot->hash = hash;
+  slot->chain = *bucket;
+  *bucket = index;
+  table->size++;
+  return slot;
+}
+
+static void collection_remove(collection_table_t *table, collection_slot_t *slot, size_t stride) {
+  slot->key = COLLECTION_HOLE;
+  if (stride == MAP_STRIDE) ((map_entry_t *)slot)->value = Ant_Value_Undefined;
+  table->size--;
+
+  uint32_t index = (uint32_t)(((unsigned char *)slot - table->entries) / stride);
+  if (index == table->first) {
+    uint32_t first = index + 1;
+    while (first < table->used && collection_slot(table, first, stride)->key == COLLECTION_HOLE) first++;
+    table->first = first;
+  }
+
+  if (table->size < table->capacity / 4 && table->capacity > COLLECTION_MIN_CAPACITY)
+    (void)collection_resize(table, table->capacity / 2, stride);
+}
+
+static void collection_clear(collection_table_t *table) {
+  if (table == &collection_empty_table) return;
+  for (collection_iter_state_t *it = table->iters; it; it = it->next) it->index = 0;
+  free(table->entries);
+  table->entries = NULL;
+  table->buckets = (uint32_t *)collection_empty_buckets;
+  table->used = table->size = table->capacity = table->mask = table->first = 0;
+}
+
+static bool collection_copy(collection_table_t *dst, const collection_table_t *src, size_t stride) {
+  if (src->size == 0) return true;
+  if (dst->entries) return false;
+
+  uint32_t capacity = src->capacity;
+  while (capacity > COLLECTION_MIN_CAPACITY && src->size < capacity / 4) capacity /= 2;
+  unsigned char *block = malloc((size_t)capacity * (stride + sizeof(uint32_t)));
+  if (!block) return false;
+
+  dst->entries = block;
+  dst->buckets = (uint32_t *)(block + (size_t)capacity * stride);
+  dst->capacity = capacity;
+  dst->mask = capacity - 1;
+  dst->first = 0;
+
+  if (capacity == src->capacity && src->used == src->size) {
+    memcpy(dst->entries, src->entries, (size_t)src->used * stride);
+    memcpy(dst->buckets, src->buckets, (size_t)capacity * sizeof(uint32_t));
+    dst->used = dst->size = src->used;
+    return true;
+  }
+
+  uint32_t live = 0;
+  for (uint32_t i = 0; i < src->used; i++) {
+    collection_slot_t *from = collection_slot(src, i, stride);
+    if (from->key == COLLECTION_HOLE) continue;
+    memcpy(block + (size_t)live * stride, from, stride);
+    live++;
+  }
+  dst->used = dst->size = live;
+  collection_link_chains(dst, stride);
+  return true;
+}
+
+static inline void collection_barrier(ant_t *js, const collection_table_t *table, ant_value_t value) {
+  if (table->owner) gc_write_barrier(js, table->owner, value);
+}
+
+static void collection_barrier_all(ant_t *js, const collection_table_t *table, size_t stride) {
+  if (!table->owner || table->owner->flags.generation != 1) return;
+  for (uint32_t i = 0; i < table->used; i++) {
+    collection_slot_t *slot = collection_slot(table, i, stride);
+    collection_barrier(js, table, slot->key);
+    if (stride == MAP_STRIDE) collection_barrier(js, table, ((map_entry_t *)slot)->value);
+  }
+}
+
+static void collection_iter_link(collection_iter_state_t *st, collection_table_t *table, iter_type_t type) {
+  st->type = type;
+  st->table = table;
+  st->prev = NULL;
+  st->next = NULL;
+  if (!table || table == &collection_empty_table) {
+    st->index = 0;
     return;
   }
-  cursor->entry = entry;
-  *cursor_flag(cursors, entry) = 1;
-  cursor_link(cursors, cursor);
+  st->index = table->first;
+  st->next = table->iters;
+  if (table->iters) table->iters->prev = st;
+  table->iters = st;
 }
 
-static void cursor_forward(collection_cursor_t *cursor, collection_cursor_t *to) {
-  cursor->forward = to;
-  cursor->owner = NULL;
-  to->refs++;
-}
-
-static collection_cursor_t *cursor_find(collection_cursors_t *cursors, const void *entry) {
-  collection_cursor_t *cursor = cursors->head;
-  while (cursor && cursor->entry != entry) cursor = cursor->next;
-  return cursor;
-}
-
-static collection_cursor_t *cursor_at(collection_cursors_t *cursors, void *entry) {
-  if (!entry) return cursors->end;
-  return *cursor_flag(cursors, entry) ? cursor_find(cursors, entry) : NULL;
-}
-
-static void cursor_idle(collection_cursor_t *cursor) {
-  collection_iter_state_t *state = (collection_iter_state_t *)((char *)cursor - offsetof(collection_iter_state_t, own));
-  if (!state->live) collection_release(state, sizeof(*state));
-}
-
-static void cursor_release(collection_cursor_t *cursor) {
-  while (cursor && --cursor->refs == 0) {
-    collection_cursor_t *forward = cursor->forward;
-    if (!forward) cursor_detach(cursor);
-    cursor->forward = NULL;
-    cursor->owner = NULL;
-    if (cursor->embedded) cursor_idle(cursor);
-    else collection_release(cursor, sizeof(*cursor));
-    cursor = forward;
+void collections_iter_finish(collection_iter_state_t *st) {
+  collection_table_t *table = st->table;
+  if (!table) return;
+  if (table == &collection_empty_table) {
+    st->table = NULL;
+    return;
   }
+  if (st->prev) st->prev->next = st->next;
+  else table->iters = st->next;
+  if (st->next) st->next->prev = st->prev;
+  st->table = NULL;
+  st->prev = st->next = NULL;
 }
 
-static collection_cursor_t *cursor_resolve(collection_cursor_t **slot) {
-  collection_cursor_t *cursor = *slot;
-  while (cursor && cursor->forward) {
-    collection_cursor_t *to = cursor->forward;
-    to->refs++;
-    cursor_release(cursor);
-    cursor = to;
-  }
-  return *slot = cursor;
+void collections_map_iter_open(map_iterator_state_t *st, collection_table_t *map, iter_type_t type) {
+  collection_iter_link(st, map, type);
 }
 
-static void cursor_place(collection_cursors_t *cursors, collection_cursor_t *cursor, void *entry) {
-  collection_cursor_t *there = cursor_at(cursors, entry);
-  if (there) cursor_forward(cursor, there);
-  else cursor_park(cursors, cursor, entry);
-}
-
-static collection_cursor_t *cursor_join(collection_cursors_t *cursors, void *entry) {
-  collection_cursor_t *cursor = cursor_at(cursors, entry);
-  if (!cursor) {
-    if (!(cursor = cursor_new(cursors))) return NULL;
-    cursor_park(cursors, cursor, entry);
-  }
-  cursor->refs++;
-  return cursor;
-}
-
-static collection_cursor_t *cursor_open(collection_cursors_t *cursors, void *entry, collection_cursor_t *own) {
-  if (!own || cursor_at(cursors, entry)) return cursor_join(cursors, entry);
-  *own = (collection_cursor_t){ .refs = 1, .embedded = true };
-  cursor_park(cursors, own, entry);
-  return own;
-}
-
-static void cursors_resume(collection_cursors_t *cursors, void *entry) {
-  collection_cursor_t *cursor = cursors->end;
-  cursors->end = NULL;
-  cursor_park(cursors, cursor, entry);
-}
-
-static void cursors_rewind(collection_cursors_t *cursors) {
-  for (collection_cursor_t *cursor = cursors->head, *next; cursor; cursor = next) {
-    next = cursor->next;
-    cursor_detach(cursor);
-    if (cursors->end) cursor_forward(cursor, cursors->end);
-    else cursors->end = cursor;
-  }
-  cursors->head = NULL;
-}
-
-static void cursor_orphan(collection_cursor_t *cursor) {
-  *cursor = (collection_cursor_t){ .refs = cursor->refs, .embedded = cursor->embedded };
-}
-
-static void cursors_orphan(collection_cursors_t *cursors) {
-  for (collection_cursor_t *cursor = cursors->head, *next; cursor; cursor = next) {
-    next = cursor->next;
-    cursor_orphan(cursor);
-  }
-  if (cursors->end) cursor_orphan(cursors->end);
-  cursors->head = cursors->end = NULL;
-}
-
-static void iter_state_open(collection_iter_state_t *st, collection_cursors_t *cursors, void *first, iter_type_t type, bool owned) {
-  st->type = type;
-  st->live = owned;
-  st->own = (collection_cursor_t){ .embedded = true };
-  st->at = cursors ? cursor_open(cursors, first, owned ? &st->own : NULL) : NULL;
-}
-
-static void iter_state_dispose(collection_iter_state_t *st) {
-  collection_cursor_t *at = st->at;
-  st->at = NULL;
-  cursor_release(at);
-  st->live = false;
-  if (st->own.refs == 0) collection_release(st, sizeof(*st));
-}
-
-void collections_map_iter_open(map_iterator_state_t *st, map_entry_t **head, iter_type_t type) {
-  iter_state_open(st, head ? &map_store_of(head)->cursors : NULL, head ? *head : NULL, type, false);
-}
-
-void collections_set_iter_open(set_iterator_state_t *st, set_entry_t **head, iter_type_t type) {
-  iter_state_open(st, head ? &set_store_of(head)->cursors : NULL, head ? *head : NULL, type, false);
+void collections_set_iter_open(set_iterator_state_t *st, collection_table_t *set, iter_type_t type) {
+  collection_iter_link(st, set, type);
 }
 
 void collections_map_iter_close(map_iterator_state_t *st) {
-  cursor_release(st->at);
-  st->at = NULL;
+  collections_iter_finish(st);
 }
 
 void collections_set_iter_close(set_iterator_state_t *st) {
-  cursor_release(st->at);
-  st->at = NULL;
+  collections_iter_finish(st);
 }
 
-static bool iter_state_finish(collection_iter_state_t *st, collection_cursor_t *at) {
-  if (at->entry || at->forward || at->refs != 1) return false;
-  collection_cursors_t *cursors = at->owner;
-  if (cursors && cursors->end == at) cursors->end = NULL;
-  st->at = NULL;
-  at->refs = 0;
-  at->owner = NULL;
-  if (at->embedded) cursor_idle(at);
-  else collection_release(at, sizeof(*at));
-  return true;
+static collection_table_t *collection_table_new(ant_object_t *owner) {
+  collection_table_t *table = malloc(sizeof(*table));
+  if (!table) return NULL;
+  *table = (collection_table_t){ .buckets = (uint32_t *)collection_empty_buckets, .owner = owner };
+  return table;
 }
 
-static bool iter_state_last(collection_cursor_t *at, uint32_t *flag) {
-  collection_cursors_t *cursors = at->owner;
-  if (at->forward || at->refs != 1 || cursors->end) return false;
-  if (at->prev) at->prev->next = at->next;
-  else cursors->head = at->next;
-  if (at->next) at->next->prev = at->prev;
-  at->prev = at->next = NULL;
-  at->entry = NULL;
-  *flag = 0;
-  cursors->end = at;
-  return true;
-}
-
-static void iter_state_step(collection_iter_state_t *st, collection_cursor_t *at, void *next) {
-  if (at->refs == 1) {
-    collection_cursors_t *cursors = at->owner;
-    cursor_detach(at);
-    cursor_place(cursors, at, next);
-  } else {
-    at->refs--;
-    st->at = cursor_join(at->owner, next);
+void collections_table_free(collection_table_t *table) {
+  if (!table || table == &collection_empty_table) return;
+  for (collection_iter_state_t *it = table->iters, *next; it; it = next) {
+    next = it->next;
+    it->table = NULL;
+    it->prev = it->next = NULL;
   }
+  free(table->entries);
+  free(table);
 }
 
-map_entry_t *collections_map_iter_step(map_iterator_state_t *st) {
-  collection_cursor_t *at = st->at;
-  if (!at || iter_state_finish(st, at)) return NULL;
-  map_entry_t *last = (map_entry_t *)at->entry;
-  if (last && !last->hh.next && iter_state_last(at, &last->cursored)) return last;
+static void collections_table_attach_empty(ant_value_t obj, uint8_t type) {
+  js_obj_ptr(obj)->type_tag = type;
+  js_set_native(obj, &collection_empty_table, type == kTypeMap ? MAP_NATIVE_TAG : SET_NATIVE_TAG);
+}
 
-  at = cursor_resolve(&st->at);
-  map_entry_t *entry = at ? (map_entry_t *)at->entry : NULL;
-  if (!entry) {
-    collections_map_iter_close(st);
-    return NULL;
-  }
-  iter_state_step(st, at, entry->hh.next);
+static collection_table_t *collection_writable(ant_value_t obj, uint32_t tag) {
+  collection_table_t *table = js_get_native(obj, tag);
+  if (table != &collection_empty_table) return table;
+  table = collection_table_new(js_obj_ptr(obj));
+  if (table) js_set_native(obj, table, tag);
+  return table;
+}
+
+collection_table_t *collections_table_attach(ant_t *js, ant_value_t obj, uint8_t type) {
+  ant_object_t *ptr = js_obj_ptr(obj);
+  collection_table_t *table = collection_table_new(ptr);
+  if (!table) return NULL;
+  ptr->type_tag = type;
+  js_set_native(obj, table, type == kTypeMap ? MAP_NATIVE_TAG : SET_NATIVE_TAG);
+  return table;
+}
+
+__attribute__((always_inline))
+static inline map_entry_t *map_find(ant_t *js, const collection_table_t *map, const collection_probe_t *probe) {
+  return (map_entry_t *)collection_find(js, map, probe, MAP_STRIDE);
+}
+
+__attribute__((always_inline))
+static inline set_entry_t *set_find(ant_t *js, const collection_table_t *set, const collection_probe_t *probe) {
+  return collection_find(js, set, probe, SET_STRIDE);
+}
+
+__attribute__((always_inline))
+static inline map_entry_t *map_lookup(ant_t *js, const collection_table_t *map, ant_value_t key) {
+  collection_probe_t probe;
+  if (!collection_probe_init(js, key, &probe)) return NULL;
+  return map_find(js, map, &probe);
+}
+
+__attribute__((always_inline))
+static inline set_entry_t *set_lookup(ant_t *js, const collection_table_t *set, ant_value_t value) {
+  collection_probe_t probe;
+  if (!collection_probe_init(js, value, &probe)) return NULL;
+  return set_find(js, set, &probe);
+}
+
+map_entry_t *Ant_Map_Find(ant_t *js, collection_table_t *map, ant_value_t key) {
+  return map_lookup(js, map, key);
+}
+
+set_entry_t *Ant_Set_Find(ant_t *js, collection_table_t *set, ant_value_t value) {
+  return set_lookup(js, set, value);
+}
+
+static map_entry_t *map_append(ant_t *js, collection_table_t *map, const collection_probe_t *probe, ant_value_t value) {
+  map_entry_t *entry = (map_entry_t *)collection_append(map, probe->key, probe->hash, MAP_STRIDE);
+  if (!entry) return NULL;
+  entry->value = value;
+  collection_barrier(js, map, probe->key);
+  collection_barrier(js, map, value);
   return entry;
 }
 
-set_entry_t *collections_set_iter_step(set_iterator_state_t *st) {
-  collection_cursor_t *at = st->at;
-  if (!at || iter_state_finish(st, at)) return NULL;
-  set_entry_t *last = (set_entry_t *)at->entry;
-  if (last && !last->hh.next && iter_state_last(at, &last->cursored)) return last;
-
-  at = cursor_resolve(&st->at);
-  set_entry_t *entry = at ? (set_entry_t *)at->entry : NULL;
-  if (!entry) {
-    collections_set_iter_close(st);
-    return NULL;
-  }
-  iter_state_step(st, at, entry->hh.next);
-  return entry;
+static bool map_store(ant_t *js, collection_table_t *map, ant_value_t key, ant_value_t value) {
+  collection_probe_t probe;
+  if (!collection_probe_init(js, key, &probe)) return false;
+  map_entry_t *entry = map_find(js, map, &probe);
+  if (!entry) return map_append(js, map, &probe, value) != NULL;
+  entry->value = value;
+  collection_barrier(js, map, value);
+  return true;
 }
 
-void collections_map_remove(map_entry_t **head, map_entry_t *entry) {
-  if (entry->cursored) {
-    map_store_t *store = map_store_of(head);
-    collection_cursor_t *cursor = cursor_find(&store->cursors, entry);
-    map_entry_t *next = (map_entry_t *)entry->hh.next;
-    if (next && !next->cursored) {
-      cursor->entry = next;
-      next->cursored = 1;
-    } else {
-      cursor_detach(cursor);
-      cursor_place(&store->cursors, cursor, next);
-    }
-  }
-  HASH_DEL(*head, entry);
-  collection_release(entry, sizeof(map_entry_t) + entry->key_len);
+static bool set_append(ant_t *js, collection_table_t *set, ant_value_t key, uint32_t hash) {
+  if (!collection_append(set, key, hash, SET_STRIDE)) return false;
+  collection_barrier(js, set, key);
+  return true;
 }
 
-void collections_set_remove(set_entry_t **head, set_entry_t *entry) {
-  if (entry->cursored) {
-    set_store_t *store = set_store_of(head);
-    collection_cursor_t *cursor = cursor_find(&store->cursors, entry);
-    set_entry_t *next = (set_entry_t *)entry->hh.next;
-    if (next && !next->cursored) {
-      cursor->entry = next;
-      next->cursored = 1;
-    } else {
-      cursor_detach(cursor);
-      cursor_place(&store->cursors, cursor, next);
-    }
-  }
-  HASH_DEL(*head, entry);
-  collection_release(entry, sizeof(set_entry_t) + entry->key_len);
+static bool set_store(ant_t *js, collection_table_t *set, ant_value_t value) {
+  collection_probe_t probe;
+  if (!collection_probe_init(js, value, &probe)) return false;
+  if (set_find(js, set, &probe)) return true;
+  return set_append(js, set, probe.key, probe.hash);
 }
 
-static void map_free_entries(map_entry_t **head) {
-  map_entry_t *entry = *head, *next;
-  HASH_CLEAR(hh, *head);
-  for (; entry; entry = next) {
-    next = (map_entry_t *)entry->hh.next;
-    collection_release(entry, sizeof(map_entry_t) + entry->key_len);
-  }
+static bool map_remove_key(ant_t *js, collection_table_t *map, ant_value_t key) {
+  map_entry_t *entry = map_lookup(js, map, key);
+  if (!entry) return false;
+  collection_remove(map, (collection_slot_t *)entry, MAP_STRIDE);
+  return true;
 }
 
-void collections_map_clear(map_entry_t **head) {
-  cursors_rewind(&map_store_of(head)->cursors);
-  map_free_entries(head);
-}
-
-static void set_free_entries(set_entry_t **head) {
-  set_entry_t *entry = *head, *next;
-  HASH_CLEAR(hh, *head);
-  for (; entry; entry = next) {
-    next = (set_entry_t *)entry->hh.next;
-    collection_release(entry, sizeof(set_entry_t) + entry->key_len);
-  }
-}
-
-void collections_set_clear(set_entry_t **head) {
-  cursors_rewind(&set_store_of(head)->cursors);
-  set_free_entries(head);
-}
-
-void collections_map_store_free(map_entry_t **head) {
-  if (!head) return;
-  map_store_t *store = map_store_of(head);
-  cursors_orphan(&store->cursors);
-  map_free_entries(&store->head);
-  collection_release(store, sizeof(*store));
-}
-
-void collections_set_store_free(set_entry_t **head) {
-  if (!head) return;
-  set_store_t *store = set_store_of(head);
-  cursors_orphan(&store->cursors);
-  set_free_entries(&store->head);
-  collection_release(store, sizeof(*store));
+static bool set_remove_key(ant_t *js, collection_table_t *set, ant_value_t value) {
+  set_entry_t *entry = set_lookup(js, set, value);
+  if (!entry) return false;
+  collection_remove(set, entry, SET_STRIDE);
+  return true;
 }
 
 ant_value_t collections_entry_pair(ant_t *js, ant_value_t first, ant_value_t second) {
   ant_value_t pair[2] = { first, second };
-  return js_mkarr_dense_literal(js, pair, 2);
+  return mkarr_dense_literal_capacity(js, pair, 2, true);
 }
 
-static bool map_store_entry(
-  ant_t *js, map_entry_t **map_ptr, ant_value_t raw_key, ant_value_t key_val, ant_value_t value
-) {
-  collection_key_t key;
-  if (!collection_key_init(js, raw_key, &key)) return false;
-
-  map_entry_t *entry = collection_find(*map_ptr ? (*map_ptr)->hh.tbl : NULL, &key);
-  if (entry) {
-    entry->key_val = key_val;
-    entry->value = value;
-    collection_key_free(&key);
-    return true;
-  }
-
-  entry = collection_alloc(sizeof(map_entry_t) + key.len + 1);
-  if (!entry) {
-    collection_key_free(&key);
-    return false;
-  }
-
-  entry->key = (unsigned char *)(entry + 1);
-  collection_key_copy(entry->key, &key);
-  
-  entry->key_len = (uint32_t)key.len + 1;
-  entry->cursored = 0;
-  entry->key_val = key_val;
-  entry->value = value;
-  
-  HASH_ADD_KEYPTR_BYHASHVALUE(hh, *map_ptr, entry->key, entry->key_len, key.hash, entry);
-  map_store_t *store = map_store_of(map_ptr);
-  
-  if (store->cursors.end) cursors_resume(&store->cursors, entry);
-  collection_key_free(&key);
-  
-  return true;
+bool collections_map_store_cloned_entry(ant_t *js, collection_table_t *map, ant_value_t key, ant_value_t value) {
+  return map_store(js, map, key, value);
 }
 
-static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value) {
-  ant_value_t stored_value = normalize_map_key(value);
-  
-  collection_key_t key;
-  if (!collection_key_init(js, stored_value, &key)) return false;
-
-  set_entry_t *entry = collection_find(*set_ptr ? (*set_ptr)->hh.tbl : NULL, &key);
-  if (entry) {
-    collection_key_free(&key);
-    return true;
-  }
-
-  entry = collection_alloc(sizeof(set_entry_t) + key.len + 1);
-  if (!entry) {
-    collection_key_free(&key);
-    return false;
-  }
-
-  entry->key = (unsigned char *)(entry + 1);
-  collection_key_copy(entry->key, &key);
-  entry->key_len = (uint32_t)key.len + 1;
-  entry->cursored = 0;
-  entry->value = stored_value;
-  
-  HASH_ADD_KEYPTR_BYHASHVALUE(hh, *set_ptr, entry->key, entry->key_len, key.hash, entry);
-  set_store_t *store = set_store_of(set_ptr);
-  if (store->cursors.end) cursors_resume(&store->cursors, entry);
-  collection_key_free(&key);
-  
-  return true;
+bool collections_set_store_cloned_entry(ant_t *js, collection_table_t *set, ant_value_t value) {
+  return set_store(js, set, value);
 }
 
-bool collections_map_store_cloned_entry(
-  ant_t *js, map_entry_t **map_ptr, ant_value_t key, ant_value_t value
-) {
-  ant_value_t key_val = normalize_map_key(key);
-  return map_store_entry(js, map_ptr, key, key_val, value);
+static ant_value_t collection_create(ant_t *js, uint8_t type, ant_value_t proto, collection_table_t **out) {
+  ant_value_t obj = Ant_Object_CreateBare(js);
+  if (is_err(obj)) return obj;
+  if (is_special_object(proto)) js_set_proto_init(obj, proto);
+  collection_table_t *table = collections_table_attach(js, obj, type);
+  if (!table) return Ant_Error_CreateOutOfMemory(js);
+  if (out) *out = table;
+  return obj;
 }
 
-ant_value_t collections_map_create(ant_t *js, map_entry_t ***out_map) {
-  ant_value_t map_obj = Ant_Object_CreateBare(js);
-  if (is_err(map_obj)) return map_obj;
-  js_obj_ptr(map_obj)->type_tag = kTypeMap;
-
-  ant_value_t map_proto = js->builtins.map_proto;
-  if (is_special_object(map_proto)) js_set_proto_init(map_obj, map_proto);
-
-  map_entry_t **map_head = collections_map_store_new();
-  if (!map_head) return Ant_Error_CreateOutOfMemory(js);
-
-  js_set_native(map_obj, map_head, MAP_NATIVE_TAG);
-  if (out_map) *out_map = map_head;
-  return map_obj;
+ant_value_t collections_map_create(ant_t *js, collection_table_t **out_map) {
+  return collection_create(js, kTypeMap, js->builtins.map_proto, out_map);
 }
 
-bool collections_set_store_cloned_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value) {
-  return set_store_entry(js, set_ptr, value);
+ant_value_t collections_set_create(ant_t *js, collection_table_t **out_set) {
+  return collection_create(js, kTypeSet, js->builtins.set_proto, out_set);
 }
 
-map_entry_t **get_map_from_obj(ant_value_t obj) {
+collection_table_t *get_map_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != kTypeMap) return NULL;
-  return (map_entry_t **)js_get_native(obj, MAP_NATIVE_TAG);
+  return (collection_table_t *)js_get_native(obj, MAP_NATIVE_TAG);
 }
 
-set_entry_t **get_set_from_obj(ant_value_t obj) {
+collection_table_t *get_set_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != kTypeSet) return NULL;
-  return (set_entry_t **)js_get_native(obj, SET_NATIVE_TAG);
+  return (collection_table_t *)js_get_native(obj, SET_NATIVE_TAG);
 }
 
 static weakmap_table_t *get_weakmap_from_obj(
@@ -845,30 +790,19 @@ static inline ant_value_t collection_arg(ant_args_t, int i) {
 }
 
 static ant_value_t map_set(ant_params_t) {
-  
-  map_entry_t **map_ptr = get_map_from_obj(call_this);
-  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.set");
+  if (!get_map_from_obj(call_this)) return collection_receiver_error(js, "Map.prototype.set");
+  collection_table_t *map = collection_writable(call_this, MAP_NATIVE_TAG);
 
-  ant_value_t key = collection_arg(args, nargs, 0);
-  ant_value_t value = collection_arg(args, nargs, 1);
-  ant_value_t key_val = normalize_map_key(key);
-  
-  if (!map_store_entry(js, map_ptr, key, key_val, value))
+  if (!map || !map_store(js, map, collection_arg(args, nargs, 0), collection_arg(args, nargs, 1)))
     return Ant_Error_CreateOutOfMemory(js);
-
-  ant_object_t *map_obj = js_obj_ptr(call_this);
-  if (map_obj) {
-    gc_write_barrier(js, map_obj, key_val);
-    gc_write_barrier(js, map_obj, value);
-  }
 
   return call_this;
 }
 
 ant_value_t collections_map_get(ant_t *js, ant_value_t map, ant_value_t key) {
-  map_entry_t **map_ptr = get_map_from_obj(map);
-  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.get");
-  map_entry_t *entry = Ant_Map_Find(js, map_ptr, key);
+  collection_table_t *table = get_map_from_obj(map);
+  if (!table) return collection_receiver_error(js, "Map.prototype.get");
+  map_entry_t *entry = map_lookup(js, table, key);
   return entry ? entry->value : Ant_Value_Undefined;
 }
 
@@ -894,52 +828,59 @@ static size_t collection_number_to_string(double value, char *buf, size_t len) {
   return ant_number_to_shortest(value, buf, len);
 }
 
+static map_entry_t *map_find_bytes(ant_t *js, const collection_table_t *map, const unsigned char *bytes, size_t len) {
+  collection_probe_t probe = {
+    .key = Ant_Value_Undefined,
+    .bytes = bytes,
+    .len = len,
+    .hash = collection_string_hash(bytes, len),
+    .kind = COLLECTION_KEY_STRING,
+  };
+  return map_find(js, map, &probe);
+}
+
 __attribute__((aligned(64))) ant_value_t collections_map_get_numeric_pair(
-  ant_t *js, ant_value_t map, ant_value_t left, 
+  ant_t *js, ant_value_t map, ant_value_t left,
   const char *separator, size_t separator_len, ant_value_t right
 ) {
-  map_entry_t **map_ptr = get_map_from_obj(map);
-  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.get");
+  collection_table_t *table = get_map_from_obj(map);
+  if (!table) return collection_receiver_error(js, "Map.prototype.get");
 
   unsigned char inline_key[128];
   char right_buf[32];
-  
-  size_t left_len = collection_number_to_string(Ant_Value_AsNumberUnchecked(left), (char *)inline_key + 1, sizeof(right_buf));  
+
+  size_t left_len = collection_number_to_string(Ant_Value_AsNumberUnchecked(left), (char *)inline_key, sizeof(right_buf));
   if (left_len > sizeof(right_buf)) return Ant_Error_CreateOutOfMemory(js);
 
-  bool right_inline = separator_len <= sizeof(inline_key) - 1 - left_len - sizeof(right_buf);
-  char *right_out = right_inline ? (char *)inline_key + 1 + left_len + separator_len : right_buf;
+  bool right_inline = separator_len <= sizeof(inline_key) - left_len - sizeof(right_buf);
+  char *right_out = right_inline ? (char *)inline_key + left_len + separator_len : right_buf;
   size_t right_len = collection_number_to_string(Ant_Value_AsNumberUnchecked(right), right_out, sizeof(right_buf));
 
   if (right_len > sizeof(right_buf) ||
-    separator_len > SIZE_MAX - 1 - left_len - right_len)
+    separator_len > SIZE_MAX - left_len - right_len)
     return Ant_Error_CreateOutOfMemory(js);
 
-  size_t key_len = 1 + left_len + separator_len + right_len;
+  size_t key_len = left_len + separator_len + right_len;
   unsigned char *key = inline_key;
-  
+
   if (key_len > sizeof(inline_key)) {
     key = malloc(key_len);
     if (!key) return Ant_Error_CreateOutOfMemory(js);
-    memcpy(key + 1, inline_key + 1, left_len);
+    memcpy(key, inline_key, left_len);
   }
 
-  key[0] = (uint8_t)kTypeString;
-  if (separator_len > 0) memcpy(key + 1 + left_len, separator, separator_len);
-  if (!right_inline) memcpy(key + 1 + left_len + separator_len, right_buf, right_len);
-  map_entry_t *entry = NULL;
-  
-  unsigned key_hash = collection_hash((uint8_t)kTypeString, key + 1, key_len - 1);
-  HASH_FIND_BYHASHVALUE(hh, *map_ptr, key, key_len, key_hash, entry);
-  
+  if (separator_len > 0) memcpy(key + left_len, separator, separator_len);
+  if (!right_inline) memcpy(key + left_len + separator_len, right_buf, right_len);
+
+  map_entry_t *entry = map_find_bytes(js, table, key, key_len);
   if (key != inline_key) free(key);
   return entry ? entry->value : Ant_Value_Undefined;
 }
 
 ant_value_t collections_map_has(ant_t *js, ant_value_t map, ant_value_t key) {
-  map_entry_t **map_ptr = get_map_from_obj(map);
-  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.has");
-  return Ant_Value_FromBool(Ant_Map_Find(js, map_ptr, key) != NULL);
+  collection_table_t *table = get_map_from_obj(map);
+  if (!table) return collection_receiver_error(js, "Map.prototype.has");
+  return Ant_Value_FromBool(map_lookup(js, table, key) != NULL);
 }
 
 static ant_value_t map_has(ant_params_t) {
@@ -951,15 +892,15 @@ bool collections_is_map_has_builtin(ant_value_t func) {
 }
 
 static ant_value_t map_numeric_template_general(
-  ant_t *js, map_entry_t **map_ptr, bool return_presence,
+  ant_t *js, collection_table_t *map, bool return_presence,
   const ant_value_t *substitutions, const sv_map_template_desc_t *desc
 ) {
   uint8_t substitution_count = desc->substitution_count;
   char number_bufs[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS][32];
-  
+
   size_t number_lens[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS] = {0};
-  size_t key_len = 1;
-  
+  size_t key_len = 0;
+
   for (uint8_t i = 0; i < substitution_count; i++) {
     number_lens[i] = collection_number_to_string(
       Ant_Value_AsNumberUnchecked(substitutions[i]), number_bufs[i], sizeof(number_bufs[i]));
@@ -969,21 +910,20 @@ static ant_value_t map_numeric_template_general(
       return Ant_Error_CreateOutOfMemory(js);
     key_len += desc->segments[i].len + number_lens[i];
   }
-  
+
   if (desc->segments[substitution_count].len > SIZE_MAX - key_len) return Ant_Error_CreateOutOfMemory(js);
   key_len += desc->segments[substitution_count].len;
 
   unsigned char inline_key[64];
   unsigned char *key = inline_key;
-  
+
   if (key_len > sizeof(inline_key)) {
     key = malloc(key_len);
     if (!key) return Ant_Error_CreateOutOfMemory(js);
   }
 
   unsigned char *out = key;
-  *out++ = (uint8_t)kTypeString;
-  
+
   for (uint8_t i = 0; i < substitution_count; i++) {
     const sv_atom_t *segment = &desc->segments[i];
     if (segment->len > 0) {
@@ -993,17 +933,14 @@ static ant_value_t map_numeric_template_general(
     memcpy(out, number_bufs[i], number_lens[i]);
     out += number_lens[i];
   }
-  
+
   const sv_atom_t *tail = &desc->segments[substitution_count];
   if (tail->len > 0) memcpy(out, tail->str, tail->len);
 
-  map_entry_t *entry = NULL;
-  unsigned key_hash = collection_hash((uint8_t)kTypeString, key + 1, key_len - 1);
-  
-  HASH_FIND_BYHASHVALUE(hh, *map_ptr, key, key_len, key_hash, entry);
+  map_entry_t *entry = map_find_bytes(js, map, key, key_len);
   if (key != inline_key) free(key);
-  
-  return return_presence 
+
+  return return_presence
     ? Ant_Value_FromBool(entry != NULL)
     : (entry ? entry->value : Ant_Value_Undefined);
 }
@@ -1016,7 +953,7 @@ ant_value_t collections_map_numeric_template(
   if (!substitutions || !desc || desc->substitution_count == 0 ||
       desc->substitution_count > SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS)
     return js_mkerr(js, "invalid numeric map template");
-  
+
   for (uint8_t i = 0; i < desc->substitution_count; i++)
     if (vtype(substitutions[i]) != kTypeNumber)
       return js_mkerr(js, "invalid numeric map template substitution");
@@ -1026,28 +963,28 @@ ant_value_t collections_map_numeric_template(
       js, map, substitutions[0],
       desc->segments[1].str, desc->segments[1].len, substitutions[1]);
 
-  map_entry_t **map_ptr = get_map_from_obj(map);
-  if (!map_ptr) return collection_receiver_error(js, return_presence ? "Map.prototype.has" : "Map.prototype.get");
-  
+  collection_table_t *table = get_map_from_obj(map);
+  if (!table) return collection_receiver_error(js, return_presence ? "Map.prototype.has" : "Map.prototype.get");
+
   return map_numeric_template_general(
-    js, map_ptr, return_presence, substitutions, desc);
+    js, table, return_presence, substitutions, desc);
 }
 
 static ant_value_t map_upsert(ant_params_t) {
-  map_entry_t **map_ptr = get_map_from_obj(call_this);
-  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.upsert");
+  collection_table_t *map = get_map_from_obj(call_this);
+  if (!map) return collection_receiver_error(js, "Map.prototype.upsert");
 
   ant_value_t key = collection_arg(args, nargs, 0);
   ant_value_t update_fn = collection_arg(args, nargs, 1);
   ant_value_t insert_fn = collection_arg(args, nargs, 2);
-  
+
   if (!is_callable(update_fn))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Map.upsert update callback must be callable");
-  
+
   if (!is_callable(insert_fn))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Map.upsert insert callback must be callable");
 
-  map_entry_t *entry = Ant_Map_Find(js, map_ptr, key);
+  map_entry_t *entry = map_lookup(js, map, key);
   ant_value_t value;
 
   if (entry) {
@@ -1059,47 +996,31 @@ static ant_value_t map_upsert(ant_params_t) {
   }
 
   if (is_err(value)) return value;
-
-  ant_value_t key_val = normalize_map_key(key);
-  if (!map_store_entry(js, map_ptr, key, key_val, value))
-    return Ant_Error_CreateOutOfMemory(js);
-
-  ant_object_t *map_obj = js_obj_ptr(call_this);
-  if (map_obj) {
-    gc_write_barrier(js, map_obj, key_val);
-    gc_write_barrier(js, map_obj, value);
-  }
-
-  return value;
-}
-
-static ant_value_t map_insert_missing(ant_t *js, ant_value_t map, map_entry_t **map_ptr, ant_value_t key, ant_value_t value) {
-  ant_value_t key_val = normalize_map_key(key);
-  if (!map_store_entry(js, map_ptr, key, key_val, value)) return Ant_Error_CreateOutOfMemory(js);
-
-  ant_object_t *map_obj = js_obj_ptr(map);
-  if (map_obj) {
-    gc_write_barrier(js, map_obj, key_val);
-    gc_write_barrier(js, map_obj, value);
-  }
+  map = collection_writable(call_this, MAP_NATIVE_TAG);
+  if (!map || !map_store(js, map, key, value)) return Ant_Error_CreateOutOfMemory(js);
 
   return value;
 }
 
 static ant_value_t map_get_or_insert(ant_params_t) {
-  map_entry_t **map_ptr = get_map_from_obj(call_this);
-  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.getOrInsert");
+  collection_table_t *map = get_map_from_obj(call_this);
+  if (!map) return collection_receiver_error(js, "Map.prototype.getOrInsert");
 
-  ant_value_t key = collection_arg(args, nargs, 0);
-  map_entry_t *entry = Ant_Map_Find(js, map_ptr, key);
+  collection_probe_t probe;
+  ant_value_t value = collection_arg(args, nargs, 1);
+  if (!collection_probe_init(js, collection_arg(args, nargs, 0), &probe)) return Ant_Error_CreateOutOfMemory(js);
+
+  map_entry_t *entry = map_find(js, map, &probe);
   if (entry) return entry->value;
+  map = collection_writable(call_this, MAP_NATIVE_TAG);
+  if (!map || !map_append(js, map, &probe, value)) return Ant_Error_CreateOutOfMemory(js);
 
-  return map_insert_missing(js, call_this, map_ptr, key, collection_arg(args, nargs, 1));
+  return value;
 }
 
 static ant_value_t map_get_or_insert_computed(ant_params_t) {
-  map_entry_t **map_ptr = get_map_from_obj(call_this);
-  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.getOrInsertComputed");
+  collection_table_t *map = get_map_from_obj(call_this);
+  if (!map) return collection_receiver_error(js, "Map.prototype.getOrInsertComputed");
 
   ant_value_t key = collection_arg(args, nargs, 0);
   ant_value_t callback = collection_arg(args, nargs, 1);
@@ -1107,65 +1028,56 @@ static ant_value_t map_get_or_insert_computed(ant_params_t) {
   if (!is_callable(callback)) return js_mkerr_typed(js, JS_ERR_TYPE, "Map.prototype.getOrInsertComputed callback must be callable");
   if (vtype(key) == kTypeNumber && Ant_Value_AsNumberUnchecked(key) == 0) key = Ant_Value_FromNumber(0.0);
 
-  map_entry_t *entry = Ant_Map_Find(js, map_ptr, key);
+  map_entry_t *entry = map_lookup(js, map, key);
   if (entry) return entry->value;
 
   ant_value_t call_args[1] = { key };
   ant_value_t value = sv_vm_call(js->vm, js, callback, Ant_Value_Undefined, call_args, 1, NULL, Ant_Value_Undefined);
   if (is_err(value)) return value;
-  
-  return map_insert_missing(js, call_this, map_ptr, key, value);
+  map = collection_writable(call_this, MAP_NATIVE_TAG);
+  if (!map || !map_store(js, map, key, value)) return Ant_Error_CreateOutOfMemory(js);
+
+  return value;
 }
 
 static ant_value_t map_delete(ant_params_t) {
-  map_entry_t **map_ptr = get_map_from_obj(call_this);
-
-  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.delete");
-  map_entry_t *entry = Ant_Map_Find(js, map_ptr, collection_arg(args, nargs, 0));
-
-  if (entry) {
-    collections_map_remove(map_ptr, entry);
-    return Ant_Value_True;
-  }
-
-  return Ant_Value_False;
+  collection_table_t *map = get_map_from_obj(call_this);
+  if (!map) return collection_receiver_error(js, "Map.prototype.delete");
+  return Ant_Value_FromBool(map_remove_key(js, map, collection_arg(args, nargs, 0)));
 }
 
 static ant_value_t map_clear(ant_params_t) {
-  map_entry_t **map_ptr = get_map_from_obj(call_this);
-  
-  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.clear");
-  collections_map_clear(map_ptr);
-  
+  collection_table_t *map = get_map_from_obj(call_this);
+  if (!map) return collection_receiver_error(js, "Map.prototype.clear");
+  collection_clear(map);
   return Ant_Value_Undefined;
 }
 
 static ant_value_t map_size(ant_params_t) {
-  map_entry_t **map_ptr = get_map_from_obj(call_this);
-  if (!map_ptr) return collection_receiver_error(js, "get Map.prototype.size");
-  
-  return Ant_Value_FromNumber((double)HASH_COUNT(*map_ptr));
+  collection_table_t *map = get_map_from_obj(call_this);
+  if (!map) return collection_receiver_error(js, "get Map.prototype.size");
+  return Ant_Value_FromNumber((double)map->size);
 }
 
 static ant_value_t map_forEach(ant_params_t) {
-  map_entry_t **map_ptr = get_map_from_obj(call_this);
-  if (!map_ptr) return collection_receiver_error(js, "Map.prototype.forEach");
+  collection_table_t *map = get_map_from_obj(call_this);
+  if (!map) return collection_receiver_error(js, "Map.prototype.forEach");
 
   if (nargs < 1 || !is_callable(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "forEach requires a callback function");
-  
+
   sv_callback_t cb = sv_callback_prepare(js, args[0], nargs > 1 ? args[1] : Ant_Value_Undefined);
-  
+
   map_iterator_state_t it;
-  collections_map_iter_open(&it, map_ptr, ITER_TYPE_MAP_ENTRIES);
+  collections_map_iter_open(&it, map, ITER_TYPE_MAP_ENTRIES);
   ant_value_t result = Ant_Value_Undefined;
-  
+
   for (map_entry_t *entry; (entry = map_iter_take(&it));) {
-    ant_value_t call_args[3] = { entry->value, entry->key_val, call_this };
+    ant_value_t call_args[3] = { entry->value, entry->key, call_this };
     result = sv_callback_call(js->vm, js, &cb, call_args, 3);
     if (is_err(result)) break;
   }
-  
+
   collections_map_iter_close(&it);
   return is_err(result) ? result : Ant_Value_Undefined;
 }
@@ -1174,7 +1086,11 @@ static void collection_iter_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   uint32_t tag = obj->native_tag;
   if (tag != MAP_ITER_NATIVE_TAG && tag != SET_ITER_NATIVE_TAG) return;
-  iter_state_dispose(js_get_native(value, tag));
+  collection_iter_state_t *st = js_get_native(value, tag);
+  if (st) {
+    collections_iter_finish(st);
+    free(st);
+  }
   js_clear_native(value, tag);
 }
 
@@ -1191,21 +1107,30 @@ static ant_value_t map_iter_next(ant_params_t) {
   return js_iter_next_result(js, call_this, advance_map);
 }
 
-static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type_t type, const char *method) {
-  map_entry_t **map_ptr = get_map_from_obj(map_obj);
-  if (!map_ptr) return collection_receiver_error(js, method);
-
-  map_iterator_state_t *state = collection_alloc(sizeof(map_iterator_state_t));
-  if (!state) return Ant_Error_CreateOutOfMemory(js);
-  iter_state_open(state, &map_store_of(map_ptr)->cursors, *map_ptr, type, true);
-
+static ant_value_t create_collection_iterator(
+  ant_t *js, ant_value_t source, collection_table_t *table,
+  ant_value_t proto, uint32_t tag, iter_type_t type
+) {
   ant_value_t iter = Ant_Object_CreateBare(js);
-  js_set_proto_init(iter, js->builtins.map_iter_proto);
-  js_set_slot_wb(js, iter, SLOT_DATA, map_obj);
-  js_set_native(iter, state, MAP_ITER_NATIVE_TAG);
+  if (is_err(iter)) return iter;
+
+  collection_iter_state_t *state = malloc(sizeof(*state));
+  if (!state) return Ant_Error_CreateOutOfMemory(js);
+  collection_iter_link(state, table, type);
+
+  js_set_proto_init(iter, proto);
+  js_set_slot_wb(js, iter, SLOT_DATA, source);
+  js_set_native(iter, state, tag);
   js_set_finalizer(iter, collection_iter_finalize);
-  
+
   return iter;
+}
+
+static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type_t type, const char *method) {
+  if (!get_map_from_obj(map_obj)) return collection_receiver_error(js, method);
+  collection_table_t *map = collection_writable(map_obj, MAP_NATIVE_TAG);
+  if (!map) return Ant_Error_CreateOutOfMemory(js);
+  return create_collection_iterator(js, map_obj, map, js->builtins.map_iter_proto, MAP_ITER_NATIVE_TAG, type);
 }
 
 static ant_value_t map_values(ant_params_t) {
@@ -1234,40 +1159,26 @@ static ant_value_t set_iter_next(ant_params_t) {
 }
 
 static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type_t type, const char *method) {
-  set_entry_t **set_ptr = get_set_from_obj(set_obj);
-  if (!set_ptr) return collection_receiver_error(js, method);
-
-  set_iterator_state_t *state = collection_alloc(sizeof(set_iterator_state_t));
-  if (!state) return Ant_Error_CreateOutOfMemory(js);
-  iter_state_open(state, &set_store_of(set_ptr)->cursors, *set_ptr, type, true);
-
-  ant_value_t iter = Ant_Object_CreateBare(js);
-  js_set_proto_init(iter, js->builtins.set_iter_proto);
-  js_set_slot_wb(js, iter, SLOT_DATA, set_obj);
-  js_set_native(iter, state, SET_ITER_NATIVE_TAG);
-  js_set_finalizer(iter, collection_iter_finalize);
-  
-  return iter;
+  if (!get_set_from_obj(set_obj)) return collection_receiver_error(js, method);
+  collection_table_t *set = collection_writable(set_obj, SET_NATIVE_TAG);
+  if (!set) return Ant_Error_CreateOutOfMemory(js);
+  return create_collection_iterator(js, set_obj, set, js->builtins.set_iter_proto, SET_ITER_NATIVE_TAG, type);
 }
 
 static ant_value_t set_add(ant_params_t) {
-  set_entry_t **set_ptr = get_set_from_obj(call_this);
-  if (!set_ptr) return collection_receiver_error(js, "Set.prototype.add");
+  if (!get_set_from_obj(call_this)) return collection_receiver_error(js, "Set.prototype.add");
+  collection_table_t *set = collection_writable(call_this, SET_NATIVE_TAG);
 
-  ant_value_t value = collection_arg(args, nargs, 0);
-  if (!set_store_entry(js, set_ptr, value))
+  if (!set || !set_store(js, set, collection_arg(args, nargs, 0)))
     return Ant_Error_CreateOutOfMemory(js);
-
-  ant_object_t *set_obj = js_obj_ptr(call_this);
-  if (set_obj) gc_write_barrier(js, set_obj, value);
 
   return call_this;
 }
 
 ant_value_t collections_set_has(ant_t *js, ant_value_t set, ant_value_t value) {
-  set_entry_t **set_ptr = get_set_from_obj(set);
-  if (!set_ptr) return collection_receiver_error(js, "Set.prototype.has");
-  return Ant_Value_FromBool(Ant_Set_Find(js, set_ptr, value) != NULL);
+  collection_table_t *table = get_set_from_obj(set);
+  if (!table) return collection_receiver_error(js, "Set.prototype.has");
+  return Ant_Value_FromBool(set_lookup(js, table, value) != NULL);
 }
 
 static ant_value_t set_has(ant_params_t) {
@@ -1279,32 +1190,22 @@ bool collections_is_set_has_builtin(ant_value_t func) {
 }
 
 static ant_value_t set_delete(ant_params_t) {
-  set_entry_t **set_ptr = get_set_from_obj(call_this);
-  if (!set_ptr) return collection_receiver_error(js, "Set.prototype.delete");
-
-  set_entry_t *entry = Ant_Set_Find(js, set_ptr, collection_arg(args, nargs, 0));
-  
-  if (entry) {
-    collections_set_remove(set_ptr, entry);
-    return Ant_Value_True;
-  }
-
-  return Ant_Value_False;
+  collection_table_t *set = get_set_from_obj(call_this);
+  if (!set) return collection_receiver_error(js, "Set.prototype.delete");
+  return Ant_Value_FromBool(set_remove_key(js, set, collection_arg(args, nargs, 0)));
 }
 
 static ant_value_t set_clear(ant_params_t) {
-  set_entry_t **set_ptr = get_set_from_obj(call_this);
-  if (!set_ptr) return collection_receiver_error(js, "Set.prototype.clear");
-
-  collections_set_clear(set_ptr);
+  collection_table_t *set = get_set_from_obj(call_this);
+  if (!set) return collection_receiver_error(js, "Set.prototype.clear");
+  collection_clear(set);
   return Ant_Value_Undefined;
 }
 
 static ant_value_t set_size(ant_params_t) {
-  set_entry_t **set_ptr = get_set_from_obj(call_this);
-  if (!set_ptr) return collection_receiver_error(js, "get Set.prototype.size");
-  
-  return Ant_Value_FromNumber((double)HASH_COUNT(*set_ptr));
+  collection_table_t *set = get_set_from_obj(call_this);
+  if (!set) return collection_receiver_error(js, "get Set.prototype.size");
+  return Ant_Value_FromNumber((double)set->size);
 }
 
 static ant_value_t set_values(ant_params_t) {
@@ -1316,77 +1217,44 @@ static ant_value_t set_entries(ant_params_t) {
 }
 
 static ant_value_t set_forEach(ant_params_t) {
-  set_entry_t **set_ptr = get_set_from_obj(call_this);
-  if (!set_ptr) return collection_receiver_error(js, "Set.prototype.forEach");
+  collection_table_t *set = get_set_from_obj(call_this);
+  if (!set) return collection_receiver_error(js, "Set.prototype.forEach");
 
   if (nargs < 1 || !is_callable(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "forEach requires a callback function");
-  
+
   sv_callback_t cb = sv_callback_prepare(js, args[0], nargs > 1 ? args[1] : Ant_Value_Undefined);
-  
+
   set_iterator_state_t it;
-  collections_set_iter_open(&it, set_ptr, ITER_TYPE_SET_VALUES);
+  collections_set_iter_open(&it, set, ITER_TYPE_SET_VALUES);
   ant_value_t result = Ant_Value_Undefined;
-  
+
   for (set_entry_t *entry; (entry = set_iter_take(&it));) {
-    ant_value_t call_args[3] = { entry->value, entry->value, call_this };
+    ant_value_t call_args[3] = { entry->key, entry->key, call_this };
     result = sv_callback_call(js->vm, js, &cb, call_args, 3);
     if (is_err(result)) break;
   }
-  
+
   collections_set_iter_close(&it);
   return is_err(result) ? result : Ant_Value_Undefined;
 }
 
-ant_value_t collections_set_create(ant_t *js, set_entry_t ***out_set) {
-  ant_value_t set_obj = Ant_Object_CreateBare(js);
-  if (is_err(set_obj)) return set_obj;
-  js_obj_ptr(set_obj)->type_tag = kTypeSet;
-
-  ant_value_t set_proto = js->builtins.set_proto;
-  if (is_special_object(set_proto)) js_set_proto_init(set_obj, set_proto);
-
-  set_entry_t **set_head = collections_set_store_new();
-  if (!set_head) return Ant_Error_CreateOutOfMemory(js);
-  *set_head = NULL;
-  
-  js_set_native(set_obj, set_head, SET_NATIVE_TAG);
-  if (out_set) *out_set = set_head;
-  
-  return set_obj;
+static bool set_result_add(ant_t *js, collection_table_t *set, ant_value_t value) {
+  return set_store(js, set, value);
 }
 
-static bool set_result_add(ant_t *js, ant_value_t set_obj, set_entry_t **set_ptr, ant_value_t value) {
-  if (!set_store_entry(js, set_ptr, value)) return false;
-  ant_object_t *obj = js_obj_ptr(set_obj);
-  if (obj) gc_write_barrier(js, obj, value);
+static bool set_result_clone(ant_t *js, collection_table_t *set, const set_entry_t *from) {
+  return set_append(js, set, from->key, from->hash);
+}
+
+static bool set_result_copy(ant_t *js, collection_table_t *set, const collection_table_t *from) {
+  if (!collection_copy(set, from, SET_STRIDE)) return false;
+  collection_barrier_all(js, set, SET_STRIDE);
   return true;
 }
 
-static bool set_result_clone(ant_t *js, ant_value_t set_obj, set_entry_t **set_ptr, const set_entry_t *from) {
-  set_entry_t *entry = collection_alloc(sizeof(set_entry_t) + from->key_len);
-  if (!entry) return false;
-  entry->key = (unsigned char *)(entry + 1);
-  memcpy(entry->key, from->key, from->key_len);
-  entry->key_len = from->key_len;
-  entry->cursored = 0;
-  entry->value = from->value;
-  HASH_ADD_KEYPTR_BYHASHVALUE(hh, *set_ptr, entry->key, entry->key_len, from->hh.hashv, entry);
-  ant_object_t *obj = js_obj_ptr(set_obj);
-  if (obj) gc_write_barrier(js, obj, entry->value);
-  return true;
-}
-
-static bool set_result_copy(ant_t *js, ant_value_t set_obj, set_entry_t **set_ptr, set_entry_t **from) {
-  for (set_entry_t *each = *from; each; each = (set_entry_t *)each->hh.next) {
-    if (!set_result_clone(js, set_obj, set_ptr, each)) return false;
-  }
-  return true;
-}
-
-static void set_result_delete(ant_t *js, set_entry_t **set_ptr, ant_value_t value) {
-  set_entry_t *entry = Ant_Set_Find(js, set_ptr, value);
-  if (entry) collections_set_remove(set_ptr, entry);
+static void set_result_delete(ant_t *js, collection_table_t *set, ant_value_t value) {
+  set_remove_key(js, set, value);
 }
 
 typedef struct {
@@ -1394,7 +1262,7 @@ typedef struct {
   ant_value_t has;
   ant_value_t keys;
   double size;
-  set_entry_t **native;
+  collection_table_t *native;
 } set_record_t;
 
 typedef enum {
@@ -1415,7 +1283,7 @@ static ant_value_t get_set_record(ant_t *js, ant_value_t value, const char *meth
 
   ant_value_t size = js_getprop_fallback(js, value, "size");
   if (is_err(size)) return size;
-  
+
   if (vtype(size) == kTypeBigInt || vtype(size) == kTypeSymbol)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Set.%s() requires a numeric size", method);
   double num_size = js_to_number(js, size);
@@ -1442,7 +1310,7 @@ static ant_value_t get_set_record(ant_t *js, ant_value_t value, const char *meth
   out->keys = keys;
   out->size = int_size;
   out->native = vtype(has) == kTypeBuiltin && js_cfunc_same_entrypoint(has, set_has) ? get_set_from_obj(value) : NULL;
-  
+
   return Ant_Value_Undefined;
 }
 
@@ -1453,11 +1321,15 @@ static ant_value_t set_record_has(ant_t *js, set_record_t *record, ant_value_t v
   return Ant_Value_Undefined;
 }
 
+static set_entry_t *set_find_entry(ant_t *js, const collection_table_t *set, const set_entry_t *entry) {
+  collection_probe_t probe;
+  collection_probe_stored(js, entry->key, entry->hash, &probe);
+  return set_find(js, set, &probe);
+}
+
 static ant_value_t set_record_has_entry(ant_t *js, set_record_t *record, const set_entry_t *entry, bool *out) {
-  if (!record->native) return set_record_has(js, record, entry->value, out);
-  set_entry_t *found = NULL;
-  HASH_FIND_BYHASHVALUE(hh, *record->native, entry->key, entry->key_len, entry->hh.hashv, found);
-  *out = found != NULL;
+  if (!record->native) return set_record_has(js, record, entry->key, out);
+  *out = set_find_entry(js, record->native, entry) != NULL;
   return Ant_Value_Undefined;
 }
 
@@ -1483,22 +1355,22 @@ static ant_value_t set_record_for_each_key(ant_t *js, set_record_t *record, set_
     if (is_err(next)) return next;
     if (!is_object_type(next))
       return js_mkerr_typed(js, JS_ERR_TYPE, "Set keys() iterator result is not an object");
-    
+
     ant_value_t done = js_getprop_fallback(js, next, "done");
     if (is_err(done)) return done;
     if (js_truthy(js, done)) return Ant_Value_Undefined;
-    
+
     ant_value_t value = js_getprop_fallback(js, next, "value");
     if (is_err(value)) return value;
-    
+
     ant_value_t result = Ant_Value_Undefined;
     set_key_status_t status = cb(js, value, &result, ctx);
-    
+
     if (is_err(result)) {
       ant_value_t close_result = set_record_close_keys_iterator(js, iterator);
       return is_err(close_result) ? close_result : result;
     }
-    
+
     if (status == SET_KEY_STOP) {
       ant_value_t close_result = set_record_close_keys_iterator(js, iterator);
       return is_err(close_result) ? close_result : Ant_Value_Undefined;
@@ -1507,86 +1379,84 @@ static ant_value_t set_record_for_each_key(ant_t *js, set_record_t *record, set_
 }
 
 typedef struct {
-  ant_value_t out;
-  set_entry_t **out_set;
+  collection_table_t *out_set;
+  collection_table_t *this_set;
 } set_build_ctx_t;
 
 static set_key_status_t set_add_key_cb(ant_t *js, ant_value_t value, ant_value_t *result, void *ctx) {
   set_build_ctx_t *build = (set_build_ctx_t *)ctx;
-  if (!set_result_add(js, build->out, build->out_set, value))
+  if (!set_result_add(js, build->out_set, value))
     *result = Ant_Error_CreateOutOfMemory(js);
   return SET_KEY_CONTINUE;
 }
 
 static ant_value_t set_union(ant_params_t) {
-  set_entry_t **this_set = get_set_from_obj(call_this);
+  collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.union");
-  
+
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "union", &other);
   if (is_err(rec)) return rec;
 
-  set_entry_t **out_set = NULL;
+  collection_table_t *out_set = NULL;
   ant_value_t out = collections_set_create(js, &out_set);
   if (is_err(out)) return out;
-  set_build_ctx_t build = { out, out_set };
+  set_build_ctx_t build = { out_set, this_set };
 
-  if (!set_result_copy(js, out, out_set, this_set)) return Ant_Error_CreateOutOfMemory(js);
+  if (!set_result_copy(js, out_set, this_set)) return Ant_Error_CreateOutOfMemory(js);
   ant_value_t result = set_record_for_each_key(js, &other, set_add_key_cb, &build);
-  
+
   return is_err(result) ? result : out;
 }
 
-typedef struct {
-  ant_value_t out;
-  set_entry_t **out_set;
-  set_entry_t **this_set;
-} set_compare_build_ctx_t;
-
 static set_key_status_t set_intersection_key_cb(ant_t *js, ant_value_t value, ant_value_t *result, void *ctx) {
-  set_compare_build_ctx_t *build = (set_compare_build_ctx_t *)ctx;
+  set_build_ctx_t *build = (set_build_ctx_t *)ctx;
   if (
-    Ant_Set_Find(js, build->this_set, value) && 
-    !set_result_add(js, build->out, build->out_set, value)
+    set_lookup(js, build->this_set, value) &&
+    !set_result_add(js, build->out_set, value)
   ) *result = Ant_Error_CreateOutOfMemory(js);
   return SET_KEY_CONTINUE;
 }
 
 static ant_value_t set_intersection(ant_params_t) {
-  set_entry_t **this_set = get_set_from_obj(call_this);
+  collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.intersection");
-  
+
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "intersection", &other);
   if (is_err(rec)) return rec;
 
-  set_entry_t **out_set = NULL;
+  collection_table_t *out_set = NULL;
   ant_value_t out = collections_set_create(js, &out_set);
   if (is_err(out)) return out;
 
-  double this_size = (double)HASH_COUNT(*this_set);
-  if (this_size <= other.size) {
+  if ((double)this_set->size <= other.size) {
     set_iterator_state_t it;
     collections_set_iter_open(&it, this_set, ITER_TYPE_SET_VALUES);
     ant_value_t result = out;
     for (set_entry_t *entry; (entry = set_iter_take(&it));) {
       bool has = false;
-      ant_value_t value = entry->value;
+      ant_value_t value = entry->key;
+      uint32_t hash = entry->hash;
       result = set_record_has_entry(js, &other, entry, &has);
       if (is_err(result)) break;
-      if (has && !set_result_add(js, out, out_set, value)) {
+      result = out;
+      if (!has) continue;
+      collection_probe_t probe;
+      collection_probe_stored(js, value, hash, &probe);
+      if (set_find(js, out_set, &probe)) continue;
+      if (!set_append(js, out_set, value, hash)) {
         result = Ant_Error_CreateOutOfMemory(js);
         break;
       }
-      result = out;
     }
     collections_set_iter_close(&it);
     return result;
   }
 
-  set_compare_build_ctx_t build = { out, out_set, this_set };
+  set_build_ctx_t build = { out_set, this_set };
   ant_value_t result = set_record_for_each_key(js, &other, set_intersection_key_cb, &build);
-  
+
   return is_err(result) ? result : out;
 }
 
@@ -1597,28 +1467,29 @@ static set_key_status_t set_delete_key_cb(ant_t *js, ant_value_t value, ant_valu
 }
 
 static ant_value_t set_difference(ant_params_t) {
-  set_entry_t **this_set = get_set_from_obj(call_this);
+  collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.difference");
-  
+
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "difference", &other);
   if (is_err(rec)) return rec;
 
-  set_entry_t **out_set = NULL;
+  collection_table_t *out_set = NULL;
   ant_value_t out = collections_set_create(js, &out_set);
   if (is_err(out)) return out;
 
-  bool scan = (double)HASH_COUNT(*this_set) <= other.size;
+  bool scan = (double)this_set->size <= other.size;
   if (scan && other.native) {
-    for (set_entry_t *each = *this_set; each; each = (set_entry_t *)each->hh.next) {
-      bool has = false;
-      set_record_has_entry(js, &other, each, &has);
-      if (!has && !set_result_clone(js, out, out_set, each)) return Ant_Error_CreateOutOfMemory(js);
+    for (uint32_t index = 0; index < this_set->used;) {
+      set_entry_t *each = collections_set_next(this_set, &index);
+      if (!each) break;
+      if (!set_find_entry(js, other.native, each) && !set_result_clone(js, out_set, each))
+        return Ant_Error_CreateOutOfMemory(js);
     }
     return out;
   }
 
-  if (!set_result_copy(js, out, out_set, this_set)) return Ant_Error_CreateOutOfMemory(js);
+  if (!set_result_copy(js, out_set, this_set)) return Ant_Error_CreateOutOfMemory(js);
 
   if (scan) {
     set_iterator_state_t it;
@@ -1626,65 +1497,62 @@ static ant_value_t set_difference(ant_params_t) {
     ant_value_t result = out;
     for (set_entry_t *each; (each = set_iter_take(&it));) {
       bool has = false;
-      set_entry_t *twin = NULL;
-      HASH_FIND_BYHASHVALUE(hh, *out_set, each->key, each->key_len, each->hh.hashv, twin);
+      ant_value_t value = each->key;
+      uint32_t hash = each->hash;
       result = set_record_has_entry(js, &other, each, &has);
       if (is_err(result)) break;
-      if (has && twin) collections_set_remove(out_set, twin);
       result = out;
+      if (!has) continue;
+      collection_probe_t probe;
+      collection_probe_stored(js, value, hash, &probe);
+      set_entry_t *twin = set_find(js, out_set, &probe);
+      if (twin) collection_remove(out_set, twin, SET_STRIDE);
     }
     collections_set_iter_close(&it);
     return result;
   }
 
-  set_build_ctx_t build = { out, out_set };
+  set_build_ctx_t build = { out_set, this_set };
   ant_value_t result = set_record_for_each_key(js, &other, set_delete_key_cb, &build);
-  
+
   return is_err(result) ? result : out;
 }
 
-typedef struct {
-  ant_value_t out;
-  set_entry_t **out_set;
-  set_entry_t **this_set;
-} set_symdiff_ctx_t;
-
 static set_key_status_t set_symmetric_difference_key_cb(ant_t *js, ant_value_t value, ant_value_t *result, void *ctx) {
-  set_symdiff_ctx_t *build = (set_symdiff_ctx_t *)ctx;
-  if (Ant_Set_Find(js, build->this_set, value)) {
+  set_build_ctx_t *build = (set_build_ctx_t *)ctx;
+  if (set_lookup(js, build->this_set, value)) {
     set_result_delete(js, build->out_set, value);
-  } else if (!Ant_Set_Find(js, build->out_set, value))
-    if (!set_result_add(js, build->out, build->out_set, value)) *result = Ant_Error_CreateOutOfMemory(js);
+  } else if (!set_result_add(js, build->out_set, value)) *result = Ant_Error_CreateOutOfMemory(js);
   return SET_KEY_CONTINUE;
 }
 
 static ant_value_t set_symmetricDifference(ant_params_t) {
-  set_entry_t **this_set = get_set_from_obj(call_this);
+  collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.symmetricDifference");
-  
+
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "symmetricDifference", &other);
   if (is_err(rec)) return rec;
 
-  set_entry_t **out_set = NULL;
+  collection_table_t *out_set = NULL;
   ant_value_t out = collections_set_create(js, &out_set);
   if (is_err(out)) return out;
 
-  if (!set_result_copy(js, out, out_set, this_set)) return Ant_Error_CreateOutOfMemory(js);
-  set_symdiff_ctx_t build = { out, out_set, this_set };
+  if (!set_result_copy(js, out_set, this_set)) return Ant_Error_CreateOutOfMemory(js);
+  set_build_ctx_t build = { out_set, this_set };
   ant_value_t result = set_record_for_each_key(js, &other, set_symmetric_difference_key_cb, &build);
   return is_err(result) ? result : out;
 }
 
 static ant_value_t set_isSubsetOf(ant_params_t) {
-  set_entry_t **this_set = get_set_from_obj(call_this);
+  collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.isSubsetOf");
-  
+
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "isSubsetOf", &other);
-  
+
   if (is_err(rec)) return rec;
-  if ((double)HASH_COUNT(*this_set) > other.size) return Ant_Value_False;
+  if ((double)this_set->size > other.size) return Ant_Value_False;
 
   set_iterator_state_t it;
   collections_set_iter_open(&it, this_set, ITER_TYPE_SET_VALUES);
@@ -1701,13 +1569,13 @@ static ant_value_t set_isSubsetOf(ant_params_t) {
 }
 
 typedef struct {
-  set_entry_t **this_set;
+  collection_table_t *this_set;
   bool result;
 } set_predicate_ctx_t;
 
 static set_key_status_t set_superset_key_cb(ant_t *js, ant_value_t value, ant_value_t *result, void *ctx) {
   set_predicate_ctx_t *pred = (set_predicate_ctx_t *)ctx;
-  if (!Ant_Set_Find(js, pred->this_set, value)) {
+  if (!set_lookup(js, pred->this_set, value)) {
     pred->result = false;
     return SET_KEY_STOP;
   }
@@ -1715,13 +1583,13 @@ static set_key_status_t set_superset_key_cb(ant_t *js, ant_value_t value, ant_va
 }
 
 static ant_value_t set_isSupersetOf(ant_params_t) {
-  set_entry_t **this_set = get_set_from_obj(call_this);
+  collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.isSupersetOf");
-  
+
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "isSupersetOf", &other);
   if (is_err(rec)) return rec;
-  if ((double)HASH_COUNT(*this_set) < other.size) return Ant_Value_False;
+  if ((double)this_set->size < other.size) return Ant_Value_False;
 
   set_predicate_ctx_t pred = { this_set, true };
   ant_value_t result = set_record_for_each_key(js, &other, set_superset_key_cb, &pred);
@@ -1731,7 +1599,7 @@ static ant_value_t set_isSupersetOf(ant_params_t) {
 
 static set_key_status_t set_disjoint_key_cb(ant_t *js, ant_value_t value, ant_value_t *result, void *ctx) {
   set_predicate_ctx_t *pred = (set_predicate_ctx_t *)ctx;
-  if (Ant_Set_Find(js, pred->this_set, value)) {
+  if (set_lookup(js, pred->this_set, value)) {
     pred->result = false;
     return SET_KEY_STOP;
   }
@@ -1739,14 +1607,14 @@ static set_key_status_t set_disjoint_key_cb(ant_t *js, ant_value_t value, ant_va
 }
 
 static ant_value_t set_isDisjointFrom(ant_params_t) {
-  set_entry_t **this_set = get_set_from_obj(call_this);
+  collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.isDisjointFrom");
-  
+
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "isDisjointFrom", &other);
   if (is_err(rec)) return rec;
 
-  if ((double)HASH_COUNT(*this_set) <= other.size) {
+  if ((double)this_set->size <= other.size) {
     set_iterator_state_t it;
     collections_set_iter_open(&it, this_set, ITER_TYPE_SET_VALUES);
     ant_value_t result = Ant_Value_True;
@@ -1764,7 +1632,7 @@ static ant_value_t set_isDisjointFrom(ant_params_t) {
   set_predicate_ctx_t pred = { this_set, true };
   ant_value_t result = set_record_for_each_key(js, &other, set_disjoint_key_cb, &pred);
   if (is_err(result)) return result;
-  
+
   return Ant_Value_FromBool(pred.result);
 }
 
@@ -1891,6 +1759,28 @@ static ant_value_t weakmap_delete(ant_params_t) {
   return Ant_Value_FromBool(weakmap_table_delete(table, key));
 }
 
+static bool weakset_store_entry(ant_t *js, ant_value_t ws_obj, weakset_entry_t **ws_ptr, ant_value_t value_obj) {
+  unsigned hashv;
+  weakset_entry_t *entry;
+  HASH_VALUE(&value_obj, sizeof(ant_value_t), hashv);
+  HASH_FIND_BYHASHVALUE(hh, *ws_ptr, &value_obj, sizeof(ant_value_t), hashv, entry);
+  
+  if (!entry) {
+    entry = calloc(1, sizeof(weakset_entry_t));
+    if (!entry) return false;
+    entry->value_obj = value_obj;
+    HASH_ADD_BYHASHVALUE(hh, *ws_ptr, value_obj, sizeof(ant_value_t), hashv, entry);
+  }
+
+  ant_object_t *object = js_obj_ptr(ws_obj);
+  if (object) {
+    gc_weak_remember_set(js, object, value_obj);
+    gc_write_barrier(js, object, value_obj);
+  }
+  
+  return true;
+}
+
 static ant_value_t weakset_add(ant_params_t) {
   weakset_entry_t **ws_ptr = get_weakset_from_obj(call_this);
   if (!ws_ptr) return collection_receiver_error(js, "WeakSet.prototype.add");
@@ -1899,22 +1789,7 @@ static ant_value_t weakset_add(ant_params_t) {
   if (!can_be_held_weakly(value_obj))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid value used in weak set");
   
-  weakset_entry_t *entry;
-  HASH_FIND(hh, *ws_ptr, &value_obj, sizeof(ant_value_t), entry);
-  
-  if (!entry) {
-    entry = calloc(1, sizeof(weakset_entry_t));
-    if (!entry) return Ant_Error_CreateOutOfMemory(js);
-    entry->value_obj = value_obj;
-    HASH_ADD(hh, *ws_ptr, value_obj, sizeof(ant_value_t), entry);
-  }
-
-  ant_object_t *ws_obj = js_obj_ptr(call_this);
-  if (ws_obj) {
-    gc_weak_remember_set(js, ws_obj, value_obj);
-    gc_write_barrier(js, ws_obj, value_obj);
-  }
-  
+  if (!weakset_store_entry(js, call_this, ws_ptr, value_obj)) return Ant_Error_CreateOutOfMemory(js);
   return call_this;
 }
 
@@ -2188,15 +2063,17 @@ void js_finalization_run(ant_t *js) {
 }
 
 static ant_value_t map_group_add(ant_t *js, void *ctx, ant_value_t key, ant_value_t value) {
-  map_entry_t **map_head = ctx;
-  key = normalize_map_key(key);
+  collection_table_t *map = ctx;
+  collection_probe_t probe;
+  if (!collection_probe_init(js, key, &probe)) return Ant_Error_CreateOutOfMemory(js);
   
-  map_entry_t *entry = Ant_Map_Find(js, map_head, key);
+  map_entry_t *entry = map_find(js, map, &probe);
   ant_value_t group;
 
   if (entry) group = entry->value; else {
     group = Ant_Array_Create(js);
-    if (!map_store_entry(js, map_head, key, key, group)) return Ant_Error_CreateOutOfMemory(js);
+    if (is_err(group)) return group;
+    if (!map_append(js, map, &probe, group)) return Ant_Error_CreateOutOfMemory(js);
   }
   
   js_arr_push(js, group, value);
@@ -2206,18 +2083,11 @@ static ant_value_t map_group_add(ant_t *js, void *ctx, ant_value_t key, ant_valu
 static ant_value_t map_groupBy(ant_params_t) {
   if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "Map.groupBy requires 2 arguments");
   
-  ant_value_t map_obj = Ant_Object_CreateBare(js);
-  js_obj_ptr(map_obj)->type_tag = kTypeMap;
+  collection_table_t *map = NULL;
+  ant_value_t map_obj = collections_map_create(js, &map);
+  if (is_err(map_obj)) return map_obj;
   
-  ant_value_t map_proto = js->builtins.map_proto;
-  if (is_special_object(map_proto)) js_set_proto_init(map_obj, map_proto);
-  
-  map_entry_t **map_head = collections_map_store_new();
-  if (!map_head) return Ant_Error_CreateOutOfMemory(js);
-  *map_head = NULL;
-  js_set_native(map_obj, map_head, MAP_NATIVE_TAG);
-  
-  ant_value_t grouped = js_group_by(js, args[0], args[1], map_group_add, map_head);
+  ant_value_t grouped = js_group_by(js, args[0], args[1], map_group_add, map);
   return is_err(grouped) ? grouped : map_obj;
 }
 
@@ -2225,7 +2095,7 @@ static bool is_original_collection_adder(ant_value_t adder, ant_cfunc_t fn) {
   return vtype(adder) == kTypeBuiltin && js_cfunc_same_entrypoint(adder, fn);
 }
 
-static ant_value_t map_init_from_iterable(ant_t *js, ant_value_t map_obj, map_entry_t **map_head, ant_value_t iterable) {
+static ant_value_t map_init_from_iterable(ant_t *js, ant_value_t map_obj, collection_table_t *map, ant_value_t iterable) {
   ant_value_t adder = js_getprop_fallback(js, map_obj, "set");
   if (is_err(adder)) return adder;
   if (!is_callable(adder))
@@ -2257,9 +2127,7 @@ static ant_value_t map_init_from_iterable(ant_t *js, ant_value_t map_obj, map_en
     }
     
     if (use_fast_path) {
-      ant_value_t key = normalize_map_key(js_arr_get(js, entry, 0));
-      ant_value_t value = js_arr_get(js, entry, 1);
-      if (!map_store_entry(js, map_head, key, key, value)) {
+      if (!map_store(js, map, js_arr_get(js, entry, 0), js_arr_get(js, entry, 1))) {
         result = Ant_Error_CreateOutOfMemory(js);
         goto close_iter;
       }
@@ -2278,7 +2146,7 @@ close_iter:
   return result;
 }
 
-static ant_value_t set_init_from_iterable(ant_t *js, ant_value_t set_obj, set_entry_t **set_head, ant_value_t iterable) {
+static ant_value_t set_init_from_iterable(ant_t *js, ant_value_t set_obj, collection_table_t *set, ant_value_t iterable) {
   ant_value_t adder = js_getprop_fallback(js, set_obj, "add");
   if (is_err(adder)) return adder;
 
@@ -2298,7 +2166,7 @@ static ant_value_t set_init_from_iterable(ant_t *js, ant_value_t set_obj, set_en
   
   while (js_iter_next(js, &it, &value)) {
     if (use_fast_path) {
-      if (!set_store_entry(js, set_head, value)) {
+      if (!set_store(js, set, value)) {
         result = Ant_Error_CreateOutOfMemory(js);
         goto close_iter;
       }
@@ -2406,18 +2274,10 @@ static ant_value_t weakset_init_from_iterable(ant_t *js, ant_value_t ws_obj, wea
       goto close_iter;
     }
     
-    weakset_entry_t *entry;
-    HASH_FIND(hh, *ws_head, &value, sizeof(ant_value_t), entry);
-    if (entry) continue;
-    
-    entry = calloc(1, sizeof(weakset_entry_t));
-    if (!entry) {
+    if (!weakset_store_entry(js, ws_obj, ws_head, value)) {
       result = Ant_Error_CreateOutOfMemory(js);
       goto close_iter;
     }
-    
-    entry->value_obj = value;
-    HASH_ADD(hh, *ws_head, value_obj, sizeof(ant_value_t), entry);
   }
 
   return Ant_Exception_Pending(js) ? Ant_Exception_Current(js) : result;
@@ -2442,16 +2302,18 @@ static ant_value_t builtin_Map(ant_params_t) {
   
   if (is_special_object(instance_proto)) js_set_proto_init(map_obj, instance_proto);
   
-  map_entry_t **map_head = collections_map_store_new();
-  if (!map_head) return Ant_Error_CreateOutOfMemory(js);
-  *map_head = NULL;
-  
   if (vtype(call_new_target) == kTypeFunction || vtype(call_new_target) == kTypeBuiltin)
     js_set_slot(map_obj, SLOT_CTOR, call_new_target);
-  js_set_native(map_obj, map_head, MAP_NATIVE_TAG);
   
-  if (nargs == 0 || vtype(args[0]) == kTypeUndefined || vtype(args[0]) == kTypeNull) return map_obj;
-  ant_value_t init_result = map_init_from_iterable(js, map_obj, map_head, args[0]);
+  if (nargs == 0 || vtype(args[0]) == kTypeUndefined || vtype(args[0]) == kTypeNull) {
+    collections_table_attach_empty(map_obj, kTypeMap);
+    return map_obj;
+  }
+
+  collection_table_t *map = collections_table_attach(js, map_obj, kTypeMap);
+  if (!map) return Ant_Error_CreateOutOfMemory(js);
+  
+  ant_value_t init_result = map_init_from_iterable(js, map_obj, map, args[0]);
   if (is_err(init_result)) return init_result;
   
   return map_obj;
@@ -2472,16 +2334,18 @@ static ant_value_t builtin_Set(ant_params_t) {
 
   if (is_special_object(instance_proto)) js_set_proto_init(set_obj, instance_proto);
   
-  set_entry_t **set_head = collections_set_store_new();
-  if (!set_head) return Ant_Error_CreateOutOfMemory(js);
-  *set_head = NULL;
-  
   if (vtype(call_new_target) == kTypeFunction || vtype(call_new_target) == kTypeBuiltin)
     js_set_slot(set_obj, SLOT_CTOR, call_new_target);
-  js_set_native(set_obj, set_head, SET_NATIVE_TAG);
   
-  if (nargs == 0 || vtype(args[0]) == kTypeUndefined || vtype(args[0]) == kTypeNull) return set_obj;
-  ant_value_t init_result = set_init_from_iterable(js, set_obj, set_head, args[0]);
+  if (nargs == 0 || vtype(args[0]) == kTypeUndefined || vtype(args[0]) == kTypeNull) {
+    collections_table_attach_empty(set_obj, kTypeSet);
+    return set_obj;
+  }
+
+  collection_table_t *set = collections_table_attach(js, set_obj, kTypeSet);
+  if (!set) return Ant_Error_CreateOutOfMemory(js);
+  
+  ant_value_t init_result = set_init_from_iterable(js, set_obj, set, args[0]);
   if (is_err(init_result)) return init_result;
   
   return set_obj;

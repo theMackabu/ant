@@ -4,21 +4,20 @@
 
 #include "ant.h"
 #include "cfunc.h"
-#include "ptr.h"
 #include "errors.h"
 #include "internal.h"
 #include "descriptors.h"
 #include "silver/call.h"
 #include "arrays.h"
 
+#include "modules/structured-clone.h"
+#include "modules/blob.h"
 #include "modules/date.h"
+#include "modules/wire.h"
 #include "modules/regex.h"
 #include "modules/buffer.h"
 #include "modules/collections.h"
 #include "modules/domexception.h"
-#include "modules/blob.h"
-#include "modules/structured-clone.h"
-#include "modules/wire.h"
 #include "modules/iterator.h"
 
 typedef struct sc_entry {
@@ -263,58 +262,42 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     return js_throw(js, make_dom_exception(js, "WeakMap/WeakSet could not be cloned", "DataCloneError"));
 
   if (obj_ptr->type_tag == kTypeMap) {
-    ant_value_t clone = Ant_Object_CreateBare(js);
-    js_obj_ptr(clone)->type_tag = kTypeMap;
-
-    ant_value_t map_proto = js->builtins.map_proto;
-    if (is_special_object(map_proto)) js_set_proto_init(clone, map_proto);
-    
-    map_entry_t **new_head = collections_map_store_new();
-    if (!new_head) return Ant_Error_CreateOutOfMemory(js);
-    
-    *new_head = NULL;
-    js_set_native(clone, new_head, MAP_NATIVE_TAG);
+    collection_table_t *new_map = NULL;
+    ant_value_t clone = collections_map_create(js, &new_map);
+    if (is_err(clone)) return clone;
     sc_add(seen, val, clone);
     
-    map_entry_t **src_head = get_map_from_obj(val);
-    if (src_head && *src_head) {
-    map_entry_t *e, *tmp;
-    HASH_ITER(hh, *src_head, e, tmp) {
-      ant_value_t kc = sc_clone_rec(js, e->key_val, seen, transfer);
+    collection_table_t *src_map = get_map_from_obj(val);
+    if (src_map) for (uint32_t index = 0;;) {
+      map_entry_t *e = collections_map_next(src_map, &index);
+      if (!e) break;
+      ant_value_t value = e->value;
+      ant_value_t kc = sc_clone_rec(js, e->key, seen, transfer);
       if (is_err(kc)) return kc;
 
-      ant_value_t vc = sc_clone_rec(js, e->value, seen, transfer);
+      ant_value_t vc = sc_clone_rec(js, value, seen, transfer);
       if (is_err(vc)) return vc;
 
-      if (!collections_map_store_cloned_entry(js, new_head, kc, vc))
+      if (!collections_map_store_cloned_entry(js, new_map, kc, vc))
         return Ant_Error_CreateOutOfMemory(js);
-    }}
+    }
     
     return clone;
   }
 
   if (obj_ptr->type_tag == kTypeSet) {
-    ant_value_t clone = Ant_Object_CreateBare(js);
-    js_obj_ptr(clone)->type_tag = kTypeSet;
-    
-    ant_value_t set_proto = js->builtins.set_proto;
-    if (is_special_object(set_proto)) js_set_proto_init(clone, set_proto);
-    
-    set_entry_t **new_head = collections_set_store_new();
-    if (!new_head) return Ant_Error_CreateOutOfMemory(js);
-    *new_head = NULL;
-    
-    js_set_native(clone, new_head, SET_NATIVE_TAG);
+    collection_table_t *new_set = NULL;
+    ant_value_t clone = collections_set_create(js, &new_set);
+    if (is_err(clone)) return clone;
     sc_add(seen, val, clone);
 
-    set_entry_t **src_head = get_set_from_obj(val);
-    if (src_head && *src_head) {
-      set_entry_t *e, *tmp;
-      HASH_ITER(hh, *src_head, e, tmp) {
-        ant_value_t vc = sc_clone_rec(js, e->value, seen, transfer);
-        if (is_err(vc)) return vc;
-        if (!collections_set_store_cloned_entry(js, new_head, vc)) return Ant_Error_CreateOutOfMemory(js);
-      }
+    collection_table_t *src_set = get_set_from_obj(val);
+    if (src_set) for (uint32_t index = 0;;) {
+      set_entry_t *e = collections_set_next(src_set, &index);
+      if (!e) break;
+      ant_value_t vc = sc_clone_rec(js, e->key, seen, transfer);
+      if (is_err(vc)) return vc;
+      if (!collections_set_store_cloned_entry(js, new_set, vc)) return Ant_Error_CreateOutOfMemory(js);
     }
 
     return clone;

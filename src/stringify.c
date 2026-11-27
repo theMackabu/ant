@@ -592,14 +592,14 @@ static size_t strobj_error(ant_t *js, ant_value_t obj, char *buf, size_t len, si
   return builder.n;
 }
 
-static size_t strobj_map(ant_t *js, ant_value_t obj, map_entry_t **map, char *buf, size_t len, size_t n) {
+static size_t strobj_map(ant_t *js, ant_value_t obj, collection_table_t *map, char *buf, size_t len, size_t n) {
   js_inspect_builder_t builder;
   js_inspect_builder_init_fixed(&builder, js, buf, len, n);
   js_inspect_map(&builder, obj, map);
   return builder.n;
 }
 
-static size_t strobj_set(ant_t *js, ant_value_t obj, set_entry_t **set, char *buf, size_t len, size_t n) {
+static size_t strobj_set(ant_t *js, ant_value_t obj, collection_table_t *set, char *buf, size_t len, size_t n) {
   js_inspect_builder_t builder;
   js_inspect_builder_init_fixed(&builder, js, buf, len, n);
   js_inspect_set(&builder, obj, set);
@@ -693,11 +693,11 @@ static size_t strobj_body(ant_t *js, ant_value_t obj, char *buf, size_t len, siz
   if (bd) return n + stringify_blob(bd, js_brand_id(obj) == BRAND_FILE, buf + n, Ant_Remaining(n, len));
   
   bool too_deep = stringify_too_deep(js);
-  map_entry_t **map = get_map_from_obj(obj);
-  if (map) return too_deep && *map ? n + cpy(buf + n, Ant_Remaining(n, len), "[Map]", 5) : strobj_map(js, obj, map, buf, len, n);
+  collection_table_t *map = get_map_from_obj(obj);
+  if (map) return too_deep && map->size ? n + cpy(buf + n, Ant_Remaining(n, len), "[Map]", 5) : strobj_map(js, obj, map, buf, len, n);
   
-  set_entry_t **set = get_set_from_obj(obj);
-  if (set) return too_deep && *set ? n + cpy(buf + n, Ant_Remaining(n, len), "[Set]", 5) : strobj_set(js, obj, set, buf, len, n);
+  collection_table_t *set = get_set_from_obj(obj);
+  if (set) return too_deep && set->size ? n + cpy(buf + n, Ant_Remaining(n, len), "[Set]", 5) : strobj_set(js, obj, set, buf, len, n);
   if (too_deep && stringify_has_shown_props(obj)) return n + stringify_depth_marker(js, obj, "Object", buf + n, Ant_Remaining(n, len));
   
   return strobj_inspect(js, obj, buf, len, n);

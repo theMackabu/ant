@@ -2978,14 +2978,23 @@ static void opt_cg_store_private(opt_cg_t *cg, ir_node_id_t node) {
   masm_bind(m, done);
 }
 
+static void opt_cg_collection_entry_address(masm_t *m, asm_gpr_t entry, asm_gpr_t index, asm_gpr_t offset, bool set) {
+  if (set) masm_shl64_imm(m, offset, index, 4);
+  else {
+    masm_shl64_imm(m, offset, index, 1);
+    masm_add64(m, offset, offset, index);
+    masm_shl64_imm(m, offset, offset, 3);
+  }
+  masm_add64(m, entry, entry, offset);
+}
+
 static void opt_cg_collection_iterator_step(opt_cg_t *cg, ir_node_id_t node) {
   masm_t *m = &cg->masm;
-  bool set = ir_node(cg->graph, node)->op.index != 0;
+  uint32_t kind = ir_node(cg->graph, node)->op.index;
+  bool set = kind == OPT_COLLECTION_STEP_SET || kind == OPT_COLLECTION_STEP_SET_ENTRY;
   asm_gpr_t cursor = opt_cg_input(cg, node, 0), output = opt_cg_output(cg, node), scratch = cg->pinned.scratch;
-  asm_gpr_t state = opt_cg_temp(cg, node, 0), at = opt_cg_temp(cg, node, 1);
-  asm_label_t miss = masm_new_label(m), done = masm_new_label(m), take = masm_new_label(m);
-  const int32_t next_off = set ? (int32_t)(offsetof(set_entry_t, hh) + offsetof(UT_hash_handle, next)) : (int32_t)(offsetof(map_entry_t, hh) + offsetof(UT_hash_handle, next));
-  const int32_t cursored_off = set ? (int32_t)offsetof(set_entry_t, cursored) : (int32_t)offsetof(map_entry_t, cursored);
+  asm_gpr_t state = opt_cg_temp(cg, node, 0), entry = opt_cg_temp(cg, node, 1), index = opt_cg_temp(cg, node, 2);
+  asm_label_t miss = masm_new_label(m), done = masm_new_label(m);
   masm_shr64_imm(m, output, cursor, 52);
   masm_branch32_imm(m, ASM_COND_LESS_THAN, output, 1023, miss);
   masm_branch32_imm(m, ASM_COND_GREATER_THAN, output, 1075, miss);
@@ -2994,27 +3003,36 @@ static void opt_cg_collection_iterator_step(opt_cg_t *cg, ir_node_id_t node) {
   masm_and64_imm(m, state, cursor, (UINT64_C(1) << 52) - 1);
   masm_or64_imm(m, state, state, UINT64_C(1) << 52);
   masm_shr64(m, state, state, scratch);
-  masm_load64(m, at, asm_addr(state, (int32_t)offsetof(collection_iter_state_t, at)));
-  masm_branch64_imm(m, ASM_COND_EQUAL, at, 0, miss);
-  masm_load32(m, scratch, asm_addr(state, (int32_t)offsetof(collection_iter_state_t, type)));
-  if (set) masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, ITER_TYPE_SET_VALUES, miss);
-  else masm_branch32_imm(m, ASM_COND_ABOVE, scratch, ITER_TYPE_MAP_KEYS, miss);
-  masm_branch32_memory_imm(m, ASM_COND_NOT_EQUAL, asm_addr(at, (int32_t)offsetof(collection_cursor_t, refs)), 1, miss);
-  masm_load64(m, output, asm_addr(at, (int32_t)offsetof(collection_cursor_t, entry)));
-  masm_branch64_imm(m, ASM_COND_EQUAL, output, 0, miss);
-  masm_load64(m, state, asm_addr(output, next_off));
-  masm_branch64_imm(m, ASM_COND_EQUAL, state, 0, miss);
-  masm_branch32_memory_imm(m, ASM_COND_NOT_EQUAL, asm_addr(state, cursored_off), 0, miss);
-  masm_store_imm32(m, asm_addr(output, cursored_off), 0);
-  masm_store_imm32(m, asm_addr(state, cursored_off), 1);
-  masm_store64(m, asm_addr(at, (int32_t)offsetof(collection_cursor_t, entry)), state);
-  if (set) masm_load64(m, output, asm_addr(output, (int32_t)offsetof(set_entry_t, value)));
-  else {
-    masm_branch32_imm(m, ASM_COND_EQUAL, scratch, ITER_TYPE_MAP_VALUES, take);
-    masm_load64(m, output, asm_addr(output, (int32_t)offsetof(map_entry_t, key_val)));
+  masm_load64(m, entry, asm_addr(state, (int32_t)offsetof(collection_iter_state_t, table)));
+  masm_branch64_imm(m, ASM_COND_EQUAL, entry, 0, miss);
+  masm_load32(m, index, asm_addr(state, (int32_t)offsetof(collection_iter_state_t, index)));
+  if (kind == OPT_COLLECTION_STEP_MAP_ENTRY_VALUE) {
+    masm_load64(m, entry, asm_addr(entry, (int32_t)offsetof(collection_table_t, entries)));
+    opt_cg_collection_entry_address(m, entry, index, output, false);
+    masm_load64(m, output, asm_addr(entry, (int32_t)offsetof(map_entry_t, value) - (int32_t)sizeof(map_entry_t)));
     masm_jump(m, done);
-    masm_bind(m, take);
-    masm_load64(m, output, asm_addr(output, (int32_t)offsetof(map_entry_t, value)));
+    masm_bind(m, miss);
+    masm_move_imm64(m, output, Ant_Value_Undefined);
+    masm_bind(m, done);
+    return;
+  }
+  masm_load32(m, scratch, asm_addr(state, (int32_t)offsetof(collection_iter_state_t, type)));
+  if (kind == OPT_COLLECTION_STEP_SET) masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, ITER_TYPE_SET_VALUES, miss);
+  else if (kind == OPT_COLLECTION_STEP_SET_ENTRY) masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, ITER_TYPE_SET_ENTRIES, miss);
+  else if (kind == OPT_COLLECTION_STEP_MAP_ENTRY_KEY) masm_branch32_imm(m, ASM_COND_NOT_EQUAL, scratch, ITER_TYPE_MAP_ENTRIES, miss);
+  else masm_branch32_imm(m, ASM_COND_ABOVE, scratch, ITER_TYPE_MAP_KEYS, miss);
+  masm_load32(m, output, asm_addr(entry, (int32_t)offsetof(collection_table_t, used)));
+  masm_branch32(m, ASM_COND_ABOVE_OR_EQUAL, index, output, miss);
+  masm_load64(m, entry, asm_addr(entry, (int32_t)offsetof(collection_table_t, entries)));
+  opt_cg_collection_entry_address(m, entry, index, output, set);
+  masm_load64(m, output, asm_addr(entry, (int32_t)offsetof(map_entry_t, key)));
+  masm_move_imm64(m, scratch, COLLECTION_HOLE);
+  masm_branch64(m, ASM_COND_EQUAL, output, scratch, miss);
+  masm_add32_imm(m, index, index, 1);
+  masm_store32(m, asm_addr(state, (int32_t)offsetof(collection_iter_state_t, index)), index);
+  if (kind == OPT_COLLECTION_STEP_MAP) {
+    masm_branch32_memory_imm(m, ASM_COND_EQUAL, asm_addr(state, (int32_t)offsetof(collection_iter_state_t, type)), ITER_TYPE_MAP_KEYS, done);
+    masm_load64(m, output, asm_addr(entry, (int32_t)offsetof(map_entry_t, value)));
   }
   masm_jump(m, done);
   masm_bind(m, miss);

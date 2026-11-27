@@ -34,6 +34,14 @@ static constexpr ir_locations_t IR_LOC_ALL = 0x1ff;
 static constexpr ir_locations_t IR_LOC_NAMED = IR_LOC_NAMED_SLOTS | IR_LOC_SHAPES;
 static constexpr ir_locations_t IR_LOC_ELEMENTS_AND_COUNTS = IR_LOC_ELEMENTS | IR_LOC_ELEMENT_COUNTS;
 
+enum {
+  OPT_COLLECTION_STEP_MAP,
+  OPT_COLLECTION_STEP_SET,
+  OPT_COLLECTION_STEP_MAP_ENTRY_KEY,
+  OPT_COLLECTION_STEP_MAP_ENTRY_VALUE,
+  OPT_COLLECTION_STEP_SET_ENTRY,
+};
+
 static inline bool ir_locations_intersect(ir_locations_t a, ir_locations_t b) {
   return (a & b) != 0;
 }

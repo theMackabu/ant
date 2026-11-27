@@ -712,15 +712,14 @@ static bool js_inspect_more_items(js_inspect_builder_t *builder, size_t count) {
     js_inspect_appendf(builder, "... %zu more item%s", more, more == 1 ? "" : "s");
 }
 
-bool js_inspect_map(js_inspect_builder_t *builder, ant_value_t obj, map_entry_t **map) {
-  map_entry_t *head = *map;
-  size_t count = HASH_COUNT(head), shown = 0;
+bool js_inspect_map(js_inspect_builder_t *builder, ant_value_t obj, collection_table_t *map) {
+  size_t count = map->size, shown = 0;
   bool nested = false;
-  map_entry_t *entry, *tmp;
+  map_entry_t *entry;
   
-  HASH_ITER(hh, head, entry, tmp) {
+  for (uint32_t index = 0; (entry = collections_map_next(map, &index));) {
     if (shown++ == ANT_INSPECT_MAX_ENTRIES) break;
-    if (js_inspect_is_nested(entry->key_val) || js_inspect_is_nested(entry->value)) { nested = true; break; }
+    if (js_inspect_is_nested(entry->key) || js_inspect_is_nested(entry->value)) { nested = true; break; }
   }
   
   if (!js_inspect_collection_header(builder, obj, "Map", count, nested)) return false;
@@ -733,7 +732,7 @@ bool js_inspect_map(js_inspect_builder_t *builder, ant_value_t obj, map_entry_t 
   
   for (shown = 0; ok && shown < ANT_INSPECT_MAX_ENTRIES && (entry = map_iter_take(&it)); shown++)
     ok = js_inspect_property_prefix(builder) &&
-      js_inspect_append_tostr(builder, entry->key_val) &&
+      js_inspect_append_tostr(builder, entry->key) &&
       js_inspect_append(builder, " => ", 4) &&
       js_inspect_append_tostr(builder, entry->value);
   
@@ -743,15 +742,14 @@ bool js_inspect_map(js_inspect_builder_t *builder, ant_value_t obj, map_entry_t 
   return js_inspect_more_items(builder, count) && js_inspect_object_body(builder, obj) && js_inspect_close(builder);
 }
 
-bool js_inspect_set(js_inspect_builder_t *builder, ant_value_t obj, set_entry_t **set) {
-  set_entry_t *head = *set;
-  size_t count = HASH_COUNT(head), shown = 0;
+bool js_inspect_set(js_inspect_builder_t *builder, ant_value_t obj, collection_table_t *set) {
+  size_t count = set->size, shown = 0;
   bool nested = false;
-  set_entry_t *entry, *tmp;
+  set_entry_t *entry;
   
-  HASH_ITER(hh, head, entry, tmp) {
+  for (uint32_t index = 0; (entry = collections_set_next(set, &index));) {
     if (shown++ == ANT_INSPECT_MAX_ENTRIES) break;
-    if (js_inspect_is_nested(entry->value)) { nested = true; break; }
+    if (js_inspect_is_nested(entry->key)) { nested = true; break; }
   }
   
   if (!js_inspect_collection_header(builder, obj, "Set", count, nested)) return false;
@@ -763,7 +761,7 @@ bool js_inspect_set(js_inspect_builder_t *builder, ant_value_t obj, set_entry_t 
   bool ok = true;
   
   for (shown = 0; ok && shown < ANT_INSPECT_MAX_ENTRIES && (entry = set_iter_take(&it)); shown++)
-    ok = js_inspect_property_prefix(builder) && js_inspect_append_tostr(builder, entry->value);
+    ok = js_inspect_property_prefix(builder) && js_inspect_append_tostr(builder, entry->key);
   
   collections_set_iter_close(&it);
   if (!ok) return false;

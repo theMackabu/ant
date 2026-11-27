@@ -6594,7 +6594,7 @@ static void opt_iteration_generic(opt_builder_t *b, sv_op_t op, ir_node_id_t ite
 
 static void opt_iteration_collection(opt_builder_t *b, sv_op_t op, uint8_t kind, ir_node_id_t iter, ir_node_id_t next, ir_node_id_t tag, uintptr_t helper, uintptr_t extra, const opt_frame_t *base, opt_iteration_paths_t *paths) {
   ir_op_t step = ir_op(IR_OP_COLLECTION_ITERATOR_STEP);
-  step.index = kind == SV_ITER_SET;
+  step.index = kind == SV_ITER_SET ? OPT_COLLECTION_STEP_SET : OPT_COLLECTION_STEP_MAP;
   ir_node_id_t cursor = opt_tagged(b, next);
   ir_node_id_t value = opt_emit(b, step, &cursor, 1, OPT_REPR_TAGGED);
   ir_condition_t empty = ir_cond(IR_COND_TAGGED_EQUALS);
@@ -6602,6 +6602,22 @@ static void opt_iteration_collection(opt_builder_t *b, sv_op_t op, uint8_t kind,
   ir_block_id_t slow;
   opt_branch_off(b, empty, (ir_node_id_t[]){value, opt_constant(b, IR_VALUE_EMPTY)}, 2, true, &slow);
   opt_iteration_path(b, paths, cursor, value, opt_constant(b, IR_VALUE_FALSE), tag);
+  b->block = slow;
+  b->frame = opt_frame_clone(b, base);
+  step.index = kind == SV_ITER_SET ? OPT_COLLECTION_STEP_SET_ENTRY : OPT_COLLECTION_STEP_MAP_ENTRY_KEY;
+  ir_node_id_t key = opt_emit(b, step, &cursor, 1, OPT_REPR_TAGGED);
+  opt_branch_off(b, empty, (ir_node_id_t[]){key, opt_constant(b, IR_VALUE_EMPTY)}, 2, true, &slow);
+  ir_node_id_t pair[2] = {key, key};
+  if (kind != SV_ITER_SET) {
+    step.index = OPT_COLLECTION_STEP_MAP_ENTRY_VALUE;
+    pair[1] = opt_emit(b, step, &cursor, 1, OPT_REPR_TAGGED);
+  }
+  ir_node_id_t array = opt_emit_array(b, pair, 2, 0);
+  if (array == IR_NONE) {
+    opt_fail(b, "collection-entry-pair");
+    return;
+  }
+  opt_iteration_path(b, paths, cursor, array, opt_constant(b, IR_VALUE_FALSE), tag);
   b->block = slow;
   b->frame = opt_frame_clone(b, base);
   opt_iteration_generic(b, op, iter, cursor, tag, helper, extra, paths);

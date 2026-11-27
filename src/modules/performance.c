@@ -316,7 +316,7 @@ static ant_value_t js_eld_percentiles(ant_params_t) {
   ant_value_t err = eld_this(js, call_this, &m);
   if (is_err(err)) return err;
 
-  map_entry_t **entries = NULL;
+  collection_table_t *entries = NULL;
   ant_value_t map = collections_map_create(js, &entries);
   if (is_err(map)) return map;
   const perf_histogram_t *h = &m->hist;

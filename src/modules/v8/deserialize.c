@@ -281,8 +281,10 @@ static ant_value_t des_host_object(des_t *d) {
 
 static ant_value_t des_collection(des_t *d, bool is_map) {
   ant_t *js = d->js;
-  map_entry_t **map = NULL;
-  set_entry_t **set = NULL;
+  
+  collection_table_t *map = NULL;
+  collection_table_t *set = NULL;
+  
   uint64_t count = 0, expected;
   ant_value_t collection = des_track(d, is_map ? collections_map_create(js, &map) : collections_set_create(js, &set));
   if (is_err(collection)) return collection;
