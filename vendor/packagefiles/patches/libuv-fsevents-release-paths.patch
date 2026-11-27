@@ -1,0 +1,28 @@
+--- a/src/unix/fsevents.c
++++ b/src/unix/fsevents.c
+@@ -469,17 +469,15 @@
+   }
+ 
+ final:
+-  /* Deallocate all paths in case of failure */
+-  if (err != 0) {
+-    if (cf_paths == NULL) {
+-      while (i != 0)
+-        pCFRelease(paths[--i]);
+-      uv__free(paths);
+-    } else {
+-      /* CFArray takes ownership of both strings and original C-array */
+-      pCFRelease(cf_paths);
+-    }
++  if (cf_paths != NULL)
++    pCFRelease(cf_paths);
++  if (paths != NULL) {
++    while (i != 0)
++      pCFRelease(paths[--i]);
++    uv__free(paths);
++  }
+ 
++  if (err != 0) {
+     /* Broadcast error to all handles */
+     uv_mutex_lock(&state->fsevent_mutex);
+     uv__queue_foreach(q, &state->fsevent_handles) {
