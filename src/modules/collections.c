@@ -462,12 +462,14 @@ static void collections_table_attach_empty(ant_value_t obj, uint8_t type) {
   js_set_native(obj, &collection_empty_table, type == kTypeMap ? MAP_NATIVE_TAG : SET_NATIVE_TAG);
 }
 
-static collection_table_t *collection_writable(ant_value_t obj, uint32_t tag) {
-  collection_table_t *table = js_get_native(obj, tag);
-  if (table != &collection_empty_table) return table;
-  table = collection_table_new(js_obj_ptr(obj));
+static __attribute__((noinline)) collection_table_t *collection_materialize(ant_value_t obj, uint32_t tag) {
+  collection_table_t *table = collection_table_new(js_obj_ptr(obj));
   if (table) js_set_native(obj, table, tag);
   return table;
+}
+
+static inline collection_table_t *collection_writable(ant_value_t obj, collection_table_t *table, uint32_t tag) {
+  return table != &collection_empty_table ? table : collection_materialize(obj, tag);
 }
 
 collection_table_t *collections_table_attach(ant_t *js, ant_value_t obj, uint8_t type) {
@@ -790,8 +792,9 @@ static inline ant_value_t collection_arg(ant_args_t, int i) {
 }
 
 static ant_value_t map_set(ant_params_t) {
-  if (!get_map_from_obj(call_this)) return collection_receiver_error(js, "Map.prototype.set");
-  collection_table_t *map = collection_writable(call_this, MAP_NATIVE_TAG);
+  collection_table_t *map = get_map_from_obj(call_this);
+  if (!map) return collection_receiver_error(js, "Map.prototype.set");
+  map = collection_writable(call_this, map, MAP_NATIVE_TAG);
 
   if (!map || !map_store(js, map, collection_arg(args, nargs, 0), collection_arg(args, nargs, 1)))
     return Ant_Error_CreateOutOfMemory(js);
@@ -996,7 +999,7 @@ static ant_value_t map_upsert(ant_params_t) {
   }
 
   if (is_err(value)) return value;
-  map = collection_writable(call_this, MAP_NATIVE_TAG);
+  map = collection_writable(call_this, get_map_from_obj(call_this), MAP_NATIVE_TAG);
   if (!map || !map_store(js, map, key, value)) return Ant_Error_CreateOutOfMemory(js);
 
   return value;
@@ -1012,7 +1015,7 @@ static ant_value_t map_get_or_insert(ant_params_t) {
 
   map_entry_t *entry = map_find(js, map, &probe);
   if (entry) return entry->value;
-  map = collection_writable(call_this, MAP_NATIVE_TAG);
+  map = collection_writable(call_this, get_map_from_obj(call_this), MAP_NATIVE_TAG);
   if (!map || !map_append(js, map, &probe, value)) return Ant_Error_CreateOutOfMemory(js);
 
   return value;
@@ -1034,7 +1037,7 @@ static ant_value_t map_get_or_insert_computed(ant_params_t) {
   ant_value_t call_args[1] = { key };
   ant_value_t value = sv_vm_call(js->vm, js, callback, Ant_Value_Undefined, call_args, 1, NULL, Ant_Value_Undefined);
   if (is_err(value)) return value;
-  map = collection_writable(call_this, MAP_NATIVE_TAG);
+  map = collection_writable(call_this, get_map_from_obj(call_this), MAP_NATIVE_TAG);
   if (!map || !map_store(js, map, key, value)) return Ant_Error_CreateOutOfMemory(js);
 
   return value;
@@ -1127,8 +1130,9 @@ static ant_value_t create_collection_iterator(
 }
 
 static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type_t type, const char *method) {
-  if (!get_map_from_obj(map_obj)) return collection_receiver_error(js, method);
-  collection_table_t *map = collection_writable(map_obj, MAP_NATIVE_TAG);
+  collection_table_t *map = get_map_from_obj(map_obj);
+  if (!map) return collection_receiver_error(js, method);
+  map = collection_writable(map_obj, map, MAP_NATIVE_TAG);
   if (!map) return Ant_Error_CreateOutOfMemory(js);
   return create_collection_iterator(js, map_obj, map, js->builtins.map_iter_proto, MAP_ITER_NATIVE_TAG, type);
 }
@@ -1159,15 +1163,17 @@ static ant_value_t set_iter_next(ant_params_t) {
 }
 
 static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type_t type, const char *method) {
-  if (!get_set_from_obj(set_obj)) return collection_receiver_error(js, method);
-  collection_table_t *set = collection_writable(set_obj, SET_NATIVE_TAG);
+  collection_table_t *set = get_set_from_obj(set_obj);
+  if (!set) return collection_receiver_error(js, method);
+  set = collection_writable(set_obj, set, SET_NATIVE_TAG);
   if (!set) return Ant_Error_CreateOutOfMemory(js);
   return create_collection_iterator(js, set_obj, set, js->builtins.set_iter_proto, SET_ITER_NATIVE_TAG, type);
 }
 
 static ant_value_t set_add(ant_params_t) {
-  if (!get_set_from_obj(call_this)) return collection_receiver_error(js, "Set.prototype.add");
-  collection_table_t *set = collection_writable(call_this, SET_NATIVE_TAG);
+  collection_table_t *set = get_set_from_obj(call_this);
+  if (!set) return collection_receiver_error(js, "Set.prototype.add");
+  set = collection_writable(call_this, set, SET_NATIVE_TAG);
 
   if (!set || !set_store(js, set, collection_arg(args, nargs, 0)))
     return Ant_Error_CreateOutOfMemory(js);
