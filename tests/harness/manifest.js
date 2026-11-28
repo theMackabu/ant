@@ -305,6 +305,7 @@ export function targets() {
     'test_gc_lazy_generator_seal.cjs',
     'test_gc_minor_backlog_cost.cjs',
     'test_gc_native_buffers.cjs',
+    'test_gc_osr_host_locals.cjs',
     'test_gc_osr_locals_copy.cjs',
     'test_gc_parallel_root_flood.cjs',
     'test_gc_pending_job_roots.cjs',

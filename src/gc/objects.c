@@ -1135,6 +1135,10 @@ static void gc_scan_frame_span(
   }}
 }
 
+static inline bool gc_osr_host_locals_dead(const sv_jit_osr_mark_t *mark) {
+  return mark->entry && mark->frame && mark->frame->func && !mark->borrowed && !mark->resumed;
+}
+
 static void gc_scan_vm_stack(ant_t *js, sv_vm_t *vm) {
   if (!vm) return;
   
@@ -1142,8 +1146,22 @@ static void gc_scan_vm_stack(ant_t *js, sv_vm_t *vm) {
     sv_native_frame_t *frame = vm->native_frame; 
     frame; frame = frame->caller) gc_mark_value(js, frame->new_target);
   
+  ant_value_t *live_end = vm->stack + vm->sp;
+  for (const sv_jit_osr_mark_t *mark = vm->jit.osr_marks; mark; mark = mark->prev) {
+    if (!gc_osr_host_locals_dead(mark)) continue;
+    
+    ant_value_t *dead = mark->frame->lp;
+    ant_value_t *dead_end = dead + mark->frame->func->max_locals;
+    if (dead < vm->stack || dead_end > live_end) continue;
+    
+    for (ant_value_t *slot = dead_end; slot < live_end; slot++) gc_mark_value(js, *slot);
+    for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next)
+      if (uv->location >= dead && uv->location < dead_end) gc_mark_value(js, *uv->location);
+    live_end = dead;
+  }
+  
   gc_scan_frame_span(
-    js, vm->stack, vm->sp, vm->frames, vm->fp + 1, 
+    js, vm->stack, (int)(live_end - vm->stack), vm->frames, vm->fp + 1, 
     vm->open_upvalues, vm->handler_stack, vm->handler_depth);
 }
 
