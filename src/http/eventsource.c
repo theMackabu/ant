@@ -153,34 +153,28 @@ static bool parser_process_line(ant_sse_parser_t *parser, const char *line, size
   return true;
 }
 
-bool ant_sse_parser_feed(
-  ant_sse_parser_t *parser,
-  const char *chunk,
-  size_t len,
-  ant_sse_message_cb cb,
-  void *user_data
-) {
+bool ant_sse_parser_feed(ant_sse_parser_t *parser, const char *chunk, size_t len, ant_sse_message_cb cb, void *user_data) {
   if (!parser || (!chunk && len > 0)) return false;
-  for (size_t i = 0; i < len; i++) {
-    char ch = chunk[i];
-    if (ch == '\n') {
-      if (!parser_process_line(parser, parser->line ? parser->line : "", parser->line_len, cb, user_data)) return false;
+  
+  while (len > 0) {
+    const char *newline = memchr(chunk, '\n', len);
+    size_t part = newline ? (size_t)(newline - chunk) : len;
+    size_t budget = parser->max_event_size - parser->data_len;
+
+    if (parser->line_len > budget || part > budget - parser->line_len) return false;
+    if (!newline) return append_bytes(&parser->line, &parser->line_len, &parser->line_cap, chunk, part);
+
+    if (parser->line_len == 0) {
+      if (!parser_process_line(parser, chunk, part, cb, user_data)) return false;
+    } else {
+      if (!append_bytes(&parser->line, &parser->line_len, &parser->line_cap, chunk, part)) return false;
+      size_t line_len = parser->line_len;
       parser->line_len = 0;
-      if (parser->line) parser->line[0] = '\0';
-      continue;
+      if (!parser_process_line(parser, parser->line, line_len, cb, user_data)) return false;
     }
-    
-    if (parser->line_len >= parser->max_event_size - parser->data_len) return false;
-    if (parser->line_len + 2 > parser->line_cap) {
-      size_t next_cap = parser->line_cap ? parser->line_cap * 2 : 128;
-      char *next = realloc(parser->line, next_cap);
-      if (!next) return false;
-      parser->line = next;
-      parser->line_cap = next_cap;
-    }
-    
-    parser->line[parser->line_len++] = ch;
-    parser->line[parser->line_len] = '\0';
+
+    chunk = newline + 1;
+    len -= part + 1;
   }
   
   return true;
