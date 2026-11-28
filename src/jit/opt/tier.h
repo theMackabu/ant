@@ -69,7 +69,7 @@ static constexpr uint32_t OPT_CATCH_LEAVE_WINDOW = 64;
 static constexpr uint64_t OPT_CATCH_LEAVE_WINDOW_NS = 128000;
 static constexpr uint64_t OPT_CATCH_LEAVE_HOST_WINDOW_NS = 7500;
 static constexpr uint32_t OPT_CATCH_LEAVE_DROPS = 1;
-static constexpr ant_value_t OPT_CAUGHT = ANT_SENTINEL_TAG | 0xCA7C4ULL;
+static constexpr ant_value_t OPT_CAUGHT = Ant_SentinelTag("CAUG");
 
 typedef struct {
   sv_func_t *func;

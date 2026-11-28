@@ -60,8 +60,10 @@ static constexpr size_t SET_STRIDE = sizeof(set_entry_t);
 
 static constexpr uint32_t COLLECTION_MIN_CAPACITY = 8;
 static constexpr uint32_t COLLECTION_MAX_CAPACITY = UINT32_C(1) << 30;
-static constexpr ant_value_t COLLECTION_CANONICAL_NAN = UINT64_C(0x7FF8000000000000);
 static constexpr uint64_t COLLECTION_BIGINT_SIGN = UINT64_C(0x9e3779b97f4a7c15);
+
+static constexpr ant_value_t COLLECTION_RAW_PROBE = Ant_SentinelTag("PROB");
+static constexpr ant_value_t COLLECTION_CANONICAL_NAN = UINT64_C(0x7FF8000000000000);
 
 static const uint32_t collection_empty_buckets[1] = { COLLECTION_END };
 static collection_table_t collection_empty_table = { .buckets = (uint32_t *)collection_empty_buckets };
@@ -323,11 +325,15 @@ static inline collection_slot_t *collection_append(collection_table_t *table, an
 }
 
 static void collection_remove(collection_table_t *table, collection_slot_t *slot, size_t stride) {
+  uint32_t index = (uint32_t)(((unsigned char *)slot - table->entries) / stride);
+  uint32_t *link = &table->buckets[slot->hash & table->mask];
+  while (*link != index) link = &collection_slot(table, *link, stride)->chain;
+  *link = slot->chain;
+
   slot->key = COLLECTION_HOLE;
   if (stride == MAP_STRIDE) ((map_entry_t *)slot)->value = Ant_Value_Undefined;
   table->size--;
 
-  uint32_t index = (uint32_t)(((unsigned char *)slot - table->entries) / stride);
   if (index == table->first) {
     uint32_t first = index + 1;
     while (first < table->used && collection_slot(table, first, stride)->key == COLLECTION_HOLE) first++;
@@ -469,7 +475,7 @@ static __attribute__((noinline)) collection_table_t *collection_materialize(ant_
 }
 
 static inline collection_table_t *collection_writable(ant_value_t obj, collection_table_t *table, uint32_t tag) {
-  return table != &collection_empty_table ? table : collection_materialize(obj, tag);
+  return __builtin_expect(table->owner != NULL, 1) ? table : collection_materialize(obj, tag);
 }
 
 collection_table_t *collections_table_attach(ant_t *js, ant_value_t obj, uint8_t type) {
@@ -556,6 +562,44 @@ static bool set_remove_key(ant_t *js, collection_table_t *set, ant_value_t value
   set_entry_t *entry = set_lookup(js, set, value);
   if (!entry) return false;
   collection_remove(set, entry, SET_STRIDE);
+  return true;
+}
+
+ant_value_t *collections_snapshot(gc_temp_root_scope_t *scope, collections_snapshot_t snap, uint32_t *out_len) {
+  const collection_table_t *table = snap.table;
+  size_t stride = snap.map ? MAP_STRIDE : SET_STRIDE;
+  
+  uint32_t count = snap.limit && snap.limit < table->size ? snap.limit : table->size;
+  ant_value_t *items = gc_temp_root_slots(scope, (size_t)count * (snap.map ? 2 : 1));
+  uint32_t len = 0;
+  
+  for (uint32_t i = snap.start > table->first ? snap.start : table->first; items && count && i < table->used; i++) {
+    collection_slot_t *slot = collection_slot(table, i, stride);
+    if (slot->key == COLLECTION_HOLE) continue;
+    items[len++] = slot->key;
+    if (snap.map) items[len++] = ((map_entry_t *)slot)->value;
+    count--;
+  }
+  
+  *out_len = len;
+  return items;
+}
+
+bool collections_is_primitive(const collection_table_t *table, bool map) {
+  size_t stride = map ? MAP_STRIDE : SET_STRIDE;
+  for (uint32_t i = table->first; i < table->used; i++) {
+    collection_slot_t *slot = collection_slot(table, i, stride);
+    if (slot->key == COLLECTION_HOLE) continue;
+    if (!is_clone_identity(slot->key)) return false;
+    if (map && !is_clone_identity(((map_entry_t *)slot)->value)) return false;
+  }
+  return true;
+}
+
+bool collections_copy(ant_t *js, collection_table_t *dst, const collection_table_t *src, bool map) {
+  size_t stride = map ? MAP_STRIDE : SET_STRIDE;
+  if (!collection_copy(dst, src, stride)) return false;
+  collection_barrier_all(js, dst, stride);
   return true;
 }
 
@@ -833,7 +877,7 @@ static size_t collection_number_to_string(double value, char *buf, size_t len) {
 
 static map_entry_t *map_find_bytes(ant_t *js, const collection_table_t *map, const unsigned char *bytes, size_t len) {
   collection_probe_t probe = {
-    .key = Ant_Value_Undefined,
+    .key = COLLECTION_RAW_PROBE,
     .bytes = bytes,
     .len = len,
     .hash = collection_string_hash(bytes, len),
@@ -1399,6 +1443,8 @@ static set_key_status_t set_add_key_cb(ant_t *js, ant_value_t value, ant_value_t
 static ant_value_t set_union(ant_params_t) {
   collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.union");
+  this_set = collection_writable(call_this, this_set, SET_NATIVE_TAG);
+  if (!this_set) return Ant_Error_CreateOutOfMemory(js);
 
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "union", &other);
@@ -1427,6 +1473,8 @@ static set_key_status_t set_intersection_key_cb(ant_t *js, ant_value_t value, an
 static ant_value_t set_intersection(ant_params_t) {
   collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.intersection");
+  this_set = collection_writable(call_this, this_set, SET_NATIVE_TAG);
+  if (!this_set) return Ant_Error_CreateOutOfMemory(js);
 
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "intersection", &other);
@@ -1475,6 +1523,8 @@ static set_key_status_t set_delete_key_cb(ant_t *js, ant_value_t value, ant_valu
 static ant_value_t set_difference(ant_params_t) {
   collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.difference");
+  this_set = collection_writable(call_this, this_set, SET_NATIVE_TAG);
+  if (!this_set) return Ant_Error_CreateOutOfMemory(js);
 
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "difference", &other);
@@ -1535,6 +1585,8 @@ static set_key_status_t set_symmetric_difference_key_cb(ant_t *js, ant_value_t v
 static ant_value_t set_symmetricDifference(ant_params_t) {
   collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.symmetricDifference");
+  this_set = collection_writable(call_this, this_set, SET_NATIVE_TAG);
+  if (!this_set) return Ant_Error_CreateOutOfMemory(js);
 
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "symmetricDifference", &other);
@@ -1553,6 +1605,8 @@ static ant_value_t set_symmetricDifference(ant_params_t) {
 static ant_value_t set_isSubsetOf(ant_params_t) {
   collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.isSubsetOf");
+  this_set = collection_writable(call_this, this_set, SET_NATIVE_TAG);
+  if (!this_set) return Ant_Error_CreateOutOfMemory(js);
 
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "isSubsetOf", &other);
@@ -1591,6 +1645,8 @@ static set_key_status_t set_superset_key_cb(ant_t *js, ant_value_t value, ant_va
 static ant_value_t set_isSupersetOf(ant_params_t) {
   collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.isSupersetOf");
+  this_set = collection_writable(call_this, this_set, SET_NATIVE_TAG);
+  if (!this_set) return Ant_Error_CreateOutOfMemory(js);
 
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "isSupersetOf", &other);
@@ -1615,6 +1671,8 @@ static set_key_status_t set_disjoint_key_cb(ant_t *js, ant_value_t value, ant_va
 static ant_value_t set_isDisjointFrom(ant_params_t) {
   collection_table_t *this_set = get_set_from_obj(call_this);
   if (!this_set) return collection_receiver_error(js, "Set.prototype.isDisjointFrom");
+  this_set = collection_writable(call_this, this_set, SET_NATIVE_TAG);
+  if (!this_set) return Ant_Error_CreateOutOfMemory(js);
 
   set_record_t other;
   ant_value_t rec = get_set_record(js, collection_arg(args, nargs, 0), "isDisjointFrom", &other);

@@ -4,7 +4,6 @@
 #include "silver/ast.h"
 #include "silver/engine.h"
 #include "debug.h"
-#include "../src/silver/compiler/compiler_internal.h"
 #include <assert.h>
 #include <limits.h>
 #include <stdarg.h>

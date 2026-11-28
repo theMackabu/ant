@@ -387,20 +387,68 @@ static void ser_regexp(ser_t *s, ant_value_t value) {
   put_varint(s, bits);
 }
 
-static ant_value_t ser_map(ser_t *s, ant_value_t value) {
-  collection_table_t *map = get_map_from_obj(value);
-  uint32_t count = 0;
+static inline bool ser_primitive(ser_t *s, ant_value_t value) {
+  switch (vtype(value)) {
+    case kTypeUndefined: put_u8(s, V8_TAG_UNDEFINED); return true;
+    case kTypeNull: put_u8(s, V8_TAG_NULL); return true;
+    case kTypeBool: put_u8(s, value == Ant_Value_True ? V8_TAG_TRUE : V8_TAG_FALSE); return true;
+    case kTypeNumber: put_number(s, Ant_Value_AsNumberUnchecked(value)); return true;
+    case kTypeString: put_string_value(s, value); return true;
+    case kTypeBigInt:
+      put_u8(s, V8_TAG_BIGINT);
+      put_bigint(s, value);
+      return true;
+    default: return false;
+  }
+}
 
-  put_u8(s, V8_TAG_BEGIN_MAP);
-  if (map) for (uint32_t index = 0;;) {
-    map_entry_t *entry = collections_map_next(map, &index);
+static ant_value_t ser_snapshot(ser_t *s, collection_table_t *table, bool map, uint32_t start, uint32_t skip, uint32_t *count) {
+  gc_temp_root_scope_t roots;
+  gc_temp_root_scope_begin(s->js, &roots);
+  
+  uint32_t len = 0;
+  uint32_t remaining = table->size - *count / (map ? 2 : 1);
+  
+  ant_value_t *items = collections_snapshot(&roots, (collections_snapshot_t){
+    .table = table, .start = start, 
+    .limit = remaining, .map = map
+  }, &len);
+  
+  ant_value_t result = items ? Ant_Value_Undefined : Ant_Error_CreateOutOfMemory(s->js);
+  for (uint32_t i = skip; i < len && !is_err(result); i++) result = ser_value(s, items[i]);
+  
+  *count += len;
+  gc_temp_root_scope_end(&roots);
+  
+  return result;
+}
+
+static ant_value_t ser_entries(ser_t *s, collection_table_t *table, bool map, uint32_t *count) {
+  if (!table) return Ant_Value_Undefined;
+  
+  if (map) for (uint32_t index = 0, at = 0;; at = index) {
+    map_entry_t *entry = collections_map_next(table, &index);
     if (!entry) break;
-    ant_value_t entry_value = entry->value;
-    ant_value_t r = ser_value(s, entry->key);
-    if (is_err(r) || is_err(r = ser_value(s, entry_value))) return r;
-    count += 2;
+    if (!ser_primitive(s, entry->key)) return ser_snapshot(s, table, map, at, 0, count);
+    if (!ser_primitive(s, entry->value)) return ser_snapshot(s, table, map, at, 1, count);
+    *count += 2;
+  } else for (uint32_t index = 0, at = 0;; at = index) {
+    set_entry_t *entry = collections_set_next(table, &index);
+    if (!entry) break;
+    if (!ser_primitive(s, entry->key)) return ser_snapshot(s, table, map, at, 0, count);
+    *count += 1;
   }
   
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t ser_map(ser_t *s, ant_value_t value) {
+  uint32_t count = 0;
+  put_u8(s, V8_TAG_BEGIN_MAP);
+  
+  ant_value_t r = ser_entries(s, get_map_from_obj(value), true, &count);
+  if (is_err(r)) return r;
+
   put_u8(s, V8_TAG_END_MAP);
   put_varint(s, count);
   
@@ -408,18 +456,12 @@ static ant_value_t ser_map(ser_t *s, ant_value_t value) {
 }
 
 static ant_value_t ser_set(ser_t *s, ant_value_t value) {
-  collection_table_t *set = get_set_from_obj(value);
   uint32_t count = 0;
-
   put_u8(s, V8_TAG_BEGIN_SET);
-  if (set) for (uint32_t index = 0;;) {
-    set_entry_t *entry = collections_set_next(set, &index);
-    if (!entry) break;
-    ant_value_t r = ser_value(s, entry->key);
-    if (is_err(r)) return r;
-    count++;
-  }
   
+  ant_value_t r = ser_entries(s, get_set_from_obj(value), false, &count);
+  if (is_err(r)) return r;
+
   put_u8(s, V8_TAG_END_SET);
   put_varint(s, count);
   
@@ -477,22 +519,10 @@ static ant_value_t ser_object(ser_t *s, ant_value_t value) {
 }
 
 ant_value_t ser_value(ser_t *s, ant_value_t value) {
-  switch (vtype(value)) {
-    case kTypeUndefined: put_u8(s, V8_TAG_UNDEFINED); break;
-    case kTypeNull: put_u8(s, V8_TAG_NULL); break;
-    case kTypeBool: put_u8(s, value == Ant_Value_True ? V8_TAG_TRUE : V8_TAG_FALSE); break;
-    case kTypeNumber: put_number(s, Ant_Value_AsNumberUnchecked(value)); break;
-    case kTypeString: put_string_value(s, value); break;
-    case kTypeBigInt:
-      put_u8(s, V8_TAG_BIGINT);
-      put_bigint(s, value);
-      break;
-    default:
-      if (!is_object_type(value) && vtype(value) != kTypeTypedArray) return ser_uncloneable(s, value);
-      if (sv_check_c_stack_overflow(s->js)) return js_mkerr_typed(s->js, JS_ERR_RANGE, "Maximum call stack size exceeded");
-      return ser_object(s, value);
-  }
-  return Ant_Value_Undefined;
+  if (ser_primitive(s, value)) return Ant_Value_Undefined;
+  if (!is_object_type(value) && vtype(value) != kTypeTypedArray) return ser_uncloneable(s, value);
+  if (sv_check_c_stack_overflow(s->js)) return js_mkerr_typed(s->js, JS_ERR_RANGE, "Maximum call stack size exceeded");
+  return ser_object(s, value);
 }
 
 static ser_t *ser_enter(ant_t *js, ant_value_t self) {

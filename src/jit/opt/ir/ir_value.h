@@ -8,13 +8,15 @@
 
 static constexpr uint64_t IR_VALUE_UNDEFINED = NANBOX_TAG(kTypeUndefined);
 static constexpr uint64_t IR_VALUE_NULL = NANBOX_TAG(kTypeNull);
+
 static constexpr uint64_t IR_VALUE_FALSE = ANT_BOOL_TAG;
 static constexpr uint64_t IR_VALUE_TRUE = ANT_BOOL_TAG | 1;
-static constexpr uint64_t IR_VALUE_EMPTY = ANT_SENTINEL_TAG | 0xDEADu;
+
+static constexpr uint64_t IR_VALUE_EMPTY = Ant_SentinelTag("EMPT");
 static constexpr uint64_t IR_VALUE_CANONICAL_NAN = UINT64_C(0x7FF8000000000000);
 
-static constexpr uint64_t IR_VALUE_VIRTUAL_UNMAPPED_ARGUMENTS = ANT_SENTINEL_TAG | 0xA6A0u;
-static constexpr uint64_t IR_VALUE_VIRTUAL_MAPPED_ARGUMENTS = ANT_SENTINEL_TAG | 0xA6A1u;
+static constexpr uint64_t IR_VALUE_VIRTUAL_UNMAPPED_ARGUMENTS = Ant_SentinelTag("VUAR");
+static constexpr uint64_t IR_VALUE_VIRTUAL_MAPPED_ARGUMENTS = Ant_SentinelTag("VMAR");
 
 static constexpr uint32_t IR_VALUE_OBJECT_TYPES =
   (1u << kTypeObject) | (1u << kTypeArray) | (1u << kTypeFunction) | (1u << kTypePromise) | (1u << kTypeGenerator);

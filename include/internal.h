@@ -57,12 +57,16 @@ static_assert(T_MASK(kTypeObject) == T_FLAG_FIND(kTypeObject));
 #define is_non_numeric(v)    ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
 #define is_object_type(v)    ((1u << vtype(v)) & T_OBJECT_MASK)
 #define is_special_object(v) ((1u << vtype(v)) & T_SPECIAL_OBJECT_MASK)
+#define is_clone_identity(v) ((1u << vtype(v)) & T_CLONE_IDENTITY_MASK)
 
 static constexpr uint32_t T_SPECIAL_OBJECT_MASK =
   T_MASK(kTypeObject, kTypeArray);
 
 static constexpr uint32_t T_BOXABLE_PRIMITIVE_MASK =
   T_MASK(kTypeString, kTypeNumber, kTypeBool, kTypeBigInt, kTypeSymbol);
+
+static constexpr uint32_t T_CLONE_IDENTITY_MASK =
+  T_MASK(kTypeUndefined, kTypeNull, kTypeBool, kTypeNumber, kTypeBigInt, kTypeString);
 
 static constexpr uint32_t T_NEEDS_PROTO_FALLBACK =
   T_MASK(kTypeFunction, kTypeArray, kTypePromise, kTypeGenerator);
@@ -91,16 +95,16 @@ static_assert(
 );
 
 enum: ant_value_t {
-  T_EMPTY              = ANT_SENTINEL_TAG | 0xDEADULL,
+  T_EMPTY              = Ant_SentinelTag("EMPT"),
   SV_LITERAL_CHILD_TAG = ANT_SENTINEL_TAG | (0x517ULL << 32),
-  SV_JIT_BAILOUT       = ANT_SENTINEL_TAG | 0xBA110ULL,
-  SV_JIT_AWAIT_PARKED  = ANT_SENTINEL_TAG | 0xBA111ULL,
-  SV_AITER_ARRAY_TAG   = ANT_SENTINEL_TAG | 0xFA1ULL,
-  SV_AITER_AWAIT_MARK  = ANT_SENTINEL_TAG | 0xFA2ULL,
-  SV_AITER_STEP_MARK   = ANT_SENTINEL_TAG | 0xFA3ULL,
-  SV_AITER_CLOSE_SKIP  = ANT_SENTINEL_TAG | 0xFA4ULL,
-  PROMISE_ALL_ELEMENT  = ANT_SENTINEL_TAG | 0xA11ULL,
-  PROMISE_AWAIT_DEFER  = ANT_SENTINEL_TAG | 0xA12ULL,
+  SV_JIT_BAILOUT       = Ant_SentinelTag("BAIL"),
+  SV_JIT_AWAIT_PARKED  = Ant_SentinelTag("PARK"),
+  SV_AITER_ARRAY_TAG   = Ant_SentinelTag("AIAR"),
+  SV_AITER_AWAIT_MARK  = Ant_SentinelTag("AIAW"),
+  SV_AITER_STEP_MARK   = Ant_SentinelTag("AIST"),
+  SV_AITER_CLOSE_SKIP  = Ant_SentinelTag("AICS"),
+  PROMISE_ALL_ELEMENT  = Ant_SentinelTag("PALL"),
+  PROMISE_AWAIT_DEFER  = Ant_SentinelTag("PDEF"),
 };
 
 static constexpr ant_value_t SV_LITERAL_CHILD_MASK = ~(ant_value_t)UINT32_MAX;

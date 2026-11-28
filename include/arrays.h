@@ -11,7 +11,7 @@
   } while (0)
 
 static constexpr ant_offset_t ARRAY_DENSE_GAP = 1024;
-static constexpr ant_value_t JS_SETPROP_ARRAY_NOT_HANDLED = ANT_SENTINEL_TAG | 0xA551ULL;
+static constexpr ant_value_t JS_SETPROP_ARRAY_NOT_HANDLED = Ant_SentinelTag("SPNH");
 
 typedef enum {
   OBJECT_FILL_NONE,

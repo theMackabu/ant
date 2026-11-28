@@ -6,6 +6,7 @@
 #include "cfunc.h"
 #include "errors.h"
 #include "internal.h"
+#include "gc/roots.h"
 #include "descriptors.h"
 #include "silver/call.h"
 #include "arrays.h"
@@ -201,7 +202,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   uint8_t t = vtype(val);
   TypedArrayData *ta_data = NULL;
 
-  if (t == kTypeUndefined || t == kTypeNull || t == kTypeBool || t == kTypeNumber || t == kTypeBigInt || t == kTypeString) return val;
+  if (is_clone_identity(val)) return val;
   if (t == kTypeSymbol) return js_throw(js, make_dom_exception(js, "Symbol cannot be serialized", "DataCloneError"));
   if (sv_check_c_stack_overflow(js)) return js_mkerr_typed(js, JS_ERR_RANGE, "Maximum call stack size exceeded");
 
@@ -268,21 +269,33 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     sc_add(seen, val, clone);
     
     collection_table_t *src_map = get_map_from_obj(val);
-    if (src_map) for (uint32_t index = 0;;) {
-      map_entry_t *e = collections_map_next(src_map, &index);
-      if (!e) break;
-      ant_value_t value = e->value;
-      ant_value_t kc = sc_clone_rec(js, e->key, seen, transfer);
-      if (is_err(kc)) return kc;
+    if (!src_map) return clone;
+    if (collections_is_primitive(src_map, true))
+      return collections_copy(js, new_map, src_map, true) ? clone : Ant_Error_CreateOutOfMemory(js);
 
-      ant_value_t vc = sc_clone_rec(js, value, seen, transfer);
-      if (is_err(vc)) return vc;
-
-      if (!collections_map_store_cloned_entry(js, new_map, kc, vc))
-        return Ant_Error_CreateOutOfMemory(js);
-    }
+    gc_temp_root_scope_t roots;
+    gc_temp_root_scope_begin(js, &roots);
+    uint32_t len = 0;
     
-    return clone;
+    ant_value_t *items = collections_snapshot(&roots, (collections_snapshot_t){ .table = src_map, .map = true }, &len);
+    ant_value_t result = items ? clone : Ant_Error_CreateOutOfMemory(js);
+    ant_value_t kc = Ant_Value_Undefined;
+    
+    GC_ROOT_SAVE(mark, js);
+    GC_ROOT_PIN(js, kc);
+
+    for (uint32_t i = 0; i < len && !is_err(result); i += 2) {
+      kc = sc_clone_rec(js, items[i], seen, transfer);
+      if (is_err(kc)) { result = kc; break; }
+      ant_value_t vc = sc_clone_rec(js, items[i + 1], seen, transfer);
+      if (is_err(vc)) result = vc;
+      else if (!collections_map_store_cloned_entry(js, new_map, kc, vc)) result = Ant_Error_CreateOutOfMemory(js);
+    }
+
+    GC_ROOT_RESTORE(js, mark);
+    gc_temp_root_scope_end(&roots);
+    
+    return result;
   }
 
   if (obj_ptr->type_tag == kTypeSet) {
@@ -292,15 +305,25 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     sc_add(seen, val, clone);
 
     collection_table_t *src_set = get_set_from_obj(val);
-    if (src_set) for (uint32_t index = 0;;) {
-      set_entry_t *e = collections_set_next(src_set, &index);
-      if (!e) break;
-      ant_value_t vc = sc_clone_rec(js, e->key, seen, transfer);
-      if (is_err(vc)) return vc;
-      if (!collections_set_store_cloned_entry(js, new_set, vc)) return Ant_Error_CreateOutOfMemory(js);
+    if (!src_set) return clone;
+    if (collections_is_primitive(src_set, false))
+      return collections_copy(js, new_set, src_set, false) ? clone : Ant_Error_CreateOutOfMemory(js);
+
+    gc_temp_root_scope_t roots;
+    gc_temp_root_scope_begin(js, &roots);
+    uint32_t len = 0;
+    
+    ant_value_t *items = collections_snapshot(&roots, (collections_snapshot_t){ .table = src_set }, &len);
+    ant_value_t result = items ? clone : Ant_Error_CreateOutOfMemory(js);
+
+    for (uint32_t i = 0; i < len && !is_err(result); i++) {
+      ant_value_t vc = sc_clone_rec(js, items[i], seen, transfer);
+      if (is_err(vc)) result = vc;
+      else if (!collections_set_store_cloned_entry(js, new_set, vc)) result = Ant_Error_CreateOutOfMemory(js);
     }
 
-    return clone;
+    gc_temp_root_scope_end(&roots);
+    return result;
   }
 
   if (js_get_slot(val, SLOT_ERROR_BRAND) == Ant_Value_True) {

@@ -4,6 +4,7 @@
 #include "types.h"
 #include "value.h"
 #include "native_tag.h"
+#include "gc/roots.h"
 
 typedef struct set_entry {
   ant_value_t key;
@@ -18,7 +19,7 @@ typedef struct map_entry {
   ant_value_t value;
 } map_entry_t;
 
-static constexpr ant_value_t COLLECTION_HOLE = ANT_SENTINEL_TAG | 0xC0DEULL;
+static constexpr ant_value_t COLLECTION_HOLE = Ant_SentinelTag("HOLE");
 static constexpr uint32_t COLLECTION_END = UINT32_MAX;
 
 static_assert(offsetof(map_entry_t, key) == offsetof(set_entry_t, key), "map and set entries share a prefix");
@@ -47,8 +48,6 @@ typedef struct weakref_state {
   ant_value_t target;
   bool notifies_registry;
 } weakref_state_t;
-
-void js_finalization_run(ant_t *js);
 
 typedef enum {
   ITER_TYPE_MAP_VALUES,
@@ -83,16 +82,18 @@ struct collection_iter_state {
 typedef collection_iter_state_t map_iterator_state_t;
 typedef collection_iter_state_t set_iterator_state_t;
 
-static inline ant_value_t collections_iter_slot(collection_iter_state_t *st) {
-  return Ant_Value_FromNumber((double)(uintptr_t)st);
-}
+typedef struct {
+  const collection_table_t *table;
+  uint32_t start;
+  uint32_t limit;
+  bool map;
+} collections_snapshot_t;
 
-static inline collection_iter_state_t *collections_iter_from_slot(ant_value_t slot) {
-  return (collection_iter_state_t *)(uintptr_t)Ant_Value_AsNumberUnchecked(slot);
-}
-
-void collections_iter_finish(collection_iter_state_t *st);
 ant_value_t collections_entry_pair(ant_t *js, ant_value_t first, ant_value_t second);
+ant_value_t *collections_snapshot(gc_temp_root_scope_t *scope, collections_snapshot_t snap, uint32_t *out_len);
+
+bool collections_is_primitive(const collection_table_t *table, bool map);
+bool collections_copy(ant_t *js, collection_table_t *dst, const collection_table_t *src, bool map);
 
 static inline map_entry_t *collections_map_next(const collection_table_t *table, uint32_t *index) {
   map_entry_t *entries = (map_entry_t *)table->entries;
@@ -112,22 +113,6 @@ static inline set_entry_t *collections_set_next(const collection_table_t *table,
   }
   *index = table->used;
   return NULL;
-}
-
-static inline map_entry_t *map_iter_take(map_iterator_state_t *st) {
-  collection_table_t *table = st->table;
-  if (!table) return NULL;
-  map_entry_t *entry = collections_map_next(table, &st->index);
-  if (!entry) collections_iter_finish(st);
-  return entry;
-}
-
-static inline set_entry_t *set_iter_take(set_iterator_state_t *st) {
-  collection_table_t *table = st->table;
-  if (!table) return NULL;
-  set_entry_t *entry = collections_set_next(table, &st->index);
-  if (!entry) collections_iter_finish(st);
-  return entry;
 }
 
 static inline ant_value_t map_iter_value(ant_t *js, const map_iterator_state_t *st, const map_entry_t *entry) {
@@ -153,8 +138,10 @@ static constexpr uint32_t SET_ITER_NATIVE_TAG = Ant_NativeTag("SITR");
 
 __attribute__((cold)) 
 void init_collections_module(ant_t *js);
+void js_finalization_run(ant_t *js);
 void weakmap_table_free(weakmap_table_t *table);
 void weakmap_table_finish_prune(weakmap_table_t *table);
+void collections_iter_finish(collection_iter_state_t *st);
 
 collection_table_t *get_map_from_obj(ant_value_t obj);
 collection_table_t *get_set_from_obj(ant_value_t obj);
@@ -189,24 +176,27 @@ ant_value_t collections_set_create(ant_t *js, collection_table_t **out_set);
 ant_value_t collections_map_get(ant_t *js, ant_value_t map, ant_value_t key);
 ant_value_t collections_map_has(ant_t *js, ant_value_t map, ant_value_t key);
 ant_value_t collections_set_has(ant_t *js, ant_value_t set, ant_value_t value);
-bool collections_set_store_cloned_entry(ant_t *js, collection_table_t *set, ant_value_t value);
 
-bool collections_map_store_cloned_entry(
-  ant_t *js, collection_table_t *map,
-  ant_value_t key, ant_value_t value
-);
+bool collections_set_store_cloned_entry(ant_t *js, collection_table_t *set, ant_value_t value);
+bool collections_map_store_cloned_entry(ant_t *js, collection_table_t *map, ant_value_t key, ant_value_t value);
 
 ant_value_t collections_map_numeric_template(
   ant_t *js, ant_value_t map, bool return_presence,
-  const ant_value_t *substitutions,
-  const sv_map_template_desc_t *desc
+  const ant_value_t *substitutions, const sv_map_template_desc_t *desc
 );
 
 ant_value_t collections_map_get_numeric_pair(
   ant_t *js, ant_value_t map,
-  ant_value_t left, const char *separator, size_t separator_len,
-  ant_value_t right
+  ant_value_t left, const char *separator, size_t separator_len, ant_value_t right
 );
+
+static inline ant_value_t collections_iter_slot(collection_iter_state_t *st) {
+  return Ant_Value_FromNumber((double)(uintptr_t)st);
+}
+
+static inline collection_iter_state_t *collections_iter_from_slot(ant_value_t slot) {
+  return (collection_iter_state_t *)(uintptr_t)Ant_Value_AsNumberUnchecked(slot);
+}
 
 // key_obj 0 is an empty slot; key_obj 1 is a tombstone.
 static inline bool weakmap_entry_is_occupied(const weakmap_entry_t *entry) {
@@ -217,4 +207,24 @@ static inline uint32_t weak_collection_key_hash(ant_value_t key) {
   uint32_t hash = (uint32_t)key ^ (uint32_t)(key >> 32);
   hash = ((hash >> 16) ^ hash) * UINT32_C(0x45d9f3b);
   return (hash >> 16) ^ hash;
+}
+
+static inline map_entry_t *map_iter_take(map_iterator_state_t *st) {
+  collection_table_t *table = st->table;
+  if (!table) return NULL;
+  
+  map_entry_t *entry = collections_map_next(table, &st->index);
+  if (!entry) collections_iter_finish(st);
+  
+  return entry;
+}
+
+static inline set_entry_t *set_iter_take(set_iterator_state_t *st) {
+  collection_table_t *table = st->table;
+  if (!table) return NULL;
+  
+  set_entry_t *entry = collections_set_next(table, &st->index);
+  if (!entry) collections_iter_finish(st);
+  
+  return entry;
 }

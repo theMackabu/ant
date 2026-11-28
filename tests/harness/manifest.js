@@ -170,6 +170,7 @@ export function targets() {
     'test_code_unit_minor.cjs',
     'test_collections_args_receivers.cjs',
     'test_collections_ordered_table.cjs',
+    'test_collections_reentrancy.cjs',
     'test_class_field_builtin_identity.cjs',
     'test_commonjs_pending_exception.cjs',
     'test_compile_basic.cjs',

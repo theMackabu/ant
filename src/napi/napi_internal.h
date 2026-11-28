@@ -171,7 +171,7 @@ struct napi_threadsafe_function__ {
 };
 
 static constexpr uint32_t NAPI_CALLBACK_NATIVE_TAG = Ant_NativeTag("NCBK");
-static constexpr ant_value_t NAPI_ZERO_HANDLE = ANT_SENTINEL_TAG | 0x4E0ULL;
+static constexpr ant_value_t NAPI_ZERO_HANDLE = Ant_SentinelTag("NZRO");
 static constexpr size_t NAPI_INLINE_ARGS = 8;
 
 static inline napi_value Napi_Encode(ant_value_t value) {

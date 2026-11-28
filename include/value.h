@@ -2,6 +2,7 @@
 
 #include "cage.h"
 #include "types.h"
+#include "native_tag.h" // IWYU pragma: export
 
 #include <math.h>
 #include <stdbool.h>

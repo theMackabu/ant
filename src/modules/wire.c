@@ -5,6 +5,7 @@
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
+#include "gc/roots.h"
 #include "silver/vm.h"
 
 #include "modules/blob.h"
@@ -412,6 +413,26 @@ static bool wire_add_blob(ant_wire_t *wire, blob_storage_t *storage) {
   return true;
 }
 
+static ant_value_t wire_write_entries(wire_writer_t *w, collection_table_t *table, bool map) {
+  ant_t *js = w->js;
+  if (!table) return Ant_Value_Undefined;
+
+  gc_temp_root_scope_t roots;
+  gc_temp_root_scope_begin(js, &roots);
+  uint32_t len = 0;
+  
+  ant_value_t *items = collections_snapshot(&roots, (collections_snapshot_t){ .table = table, .map = map }, &len);
+  ant_value_t r = items ? Ant_Value_Undefined : wire_oom(js);
+
+  for (uint32_t i = 0; i < len && !is_err(r); i += map ? 2 : 1) {
+    r = put_u8(w, WIRE_PROP) ? wire_write(w, items[i]) : wire_oom(js);
+    if (map && !is_err(r)) r = wire_write(w, items[i + 1]);
+  }
+
+  gc_temp_root_scope_end(&roots);
+  return r;
+}
+
 static ant_value_t wire_write_object(wire_writer_t *w, ant_value_t value) {
   ant_t *js = w->js;
   uint32_t id = 0;
@@ -493,33 +514,15 @@ static ant_value_t wire_write_object(wire_writer_t *w, ant_value_t value) {
 
   if (ptr->type_tag == kTypeMap) {
     if (!put_u8(w, WIRE_MAP) || !wire_remember(w, value)) return wire_oom(js);
-    collection_table_t *map = get_map_from_obj(value);
-    
-    if (map) for (uint32_t index = 0;;) {
-      map_entry_t *e = collections_map_next(map, &index);
-      if (!e) break;
-      ant_value_t entry_value = e->value;
-      if (!put_u8(w, WIRE_PROP)) return wire_oom(js);
-      ant_value_t r = wire_write(w, e->key);
-      if (is_err(r)) return r;
-      r = wire_write(w, entry_value);
-      if (is_err(r)) return r;
-    }
-    
+    ant_value_t r = wire_write_entries(w, get_map_from_obj(value), true);
+    if (is_err(r)) return r;
     return put_u8(w, WIRE_END) ? Ant_Value_Undefined : wire_oom(js);
   }
 
   if (ptr->type_tag == kTypeSet) {
     if (!put_u8(w, WIRE_SET) || !wire_remember(w, value)) return wire_oom(js);
-    collection_table_t *set = get_set_from_obj(value);
-    if (set) for (uint32_t index = 0;;) {
-      set_entry_t *e = collections_set_next(set, &index);
-      if (!e) break;
-      if (!put_u8(w, WIRE_PROP)) return wire_oom(js);
-      ant_value_t r = wire_write(w, e->key);
-      if (is_err(r)) return r;
-    }
-    
+    ant_value_t r = wire_write_entries(w, get_set_from_obj(value), false);
+    if (is_err(r)) return r;
     return put_u8(w, WIRE_END) ? Ant_Value_Undefined : wire_oom(js);
   }
 

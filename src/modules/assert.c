@@ -745,51 +745,60 @@ static bool deep_match_candidate(
 
 static bool deep_set_equal(deep_equal_t *ctx, ant_value_t a, ant_value_t b) {
   ant_t *js = ctx->js;
+  
   collection_table_t *sa = get_set_from_obj(js_as_obj(a)), *sb = get_set_from_obj(js_as_obj(b));
   if (!sa || !sb) return false;
 
-  size_t count = sb->size, n = 0;
-  ant_value_t *candidates = malloc((count ? count : 1) * sizeof(*candidates));
-  bool *used = calloc(count ? count : 1, sizeof(*used));
-  bool ok = candidates && used;
+  gc_temp_root_scope_t candidates;
+  gc_temp_root_scope_begin(js, &candidates);
+  bool ok = true;
 
   set_entry_t *entry;
-  for (uint32_t index = 0; ok && n < count && (entry = collections_set_next(sb, &index));) {
+  for (uint32_t index = 0; ok && (entry = collections_set_next(sb, &index));) {
     if (Ant_Set_Find(js, sa, entry->key)) continue;
     if (ctx->strict && !deep_is_object(entry->key)) ok = false;
-    else candidates[n++] = entry->key;
+    else ok = gc_temp_root_push(&candidates, entry->key);
   }
+
+  size_t n = candidates.len;
+  bool *used = ok && n ? calloc(n, sizeof(*used)) : NULL;
+  ok = ok && (n == 0 || used);
 
   for (uint32_t index = 0; ok && n > 0 && (entry = collections_set_next(sa, &index));) {
     if (Ant_Set_Find(js, sb, entry->key)) continue;
-    ok = deep_match_candidate(ctx, candidates, used, n, entry->key, Ant_Value_Undefined, NULL);
+    ok = deep_match_candidate(ctx, candidates.items, used, n, entry->key, Ant_Value_Undefined, NULL);
   }
 
-  free(candidates);
+  gc_temp_root_scope_end(&candidates);
   free(used);
+  
   return ok;
 }
 
 static bool deep_map_equal(deep_equal_t *ctx, ant_value_t a, ant_value_t b) {
   ant_t *js = ctx->js;
+  
   collection_table_t *ma = get_map_from_obj(js_as_obj(a)), *mb = get_map_from_obj(js_as_obj(b));
   if (!ma || !mb) return false;
 
-  size_t count = mb->size, n = 0;
-  ant_value_t *candidates = malloc((count ? count : 1) * sizeof(*candidates));
-  bool *used = calloc(count ? count : 1, sizeof(*used));
-  bool ok = candidates && used;
+  gc_temp_root_scope_t candidates;
+  gc_temp_root_scope_begin(js, &candidates);
+  bool ok = true;
 
   map_entry_t *entry;
-  for (uint32_t index = 0; ok && n < count && (entry = collections_map_next(mb, &index));) {
+  for (uint32_t index = 0; ok && (entry = collections_map_next(mb, &index));) {
     ant_value_t key = entry->key, value = entry->value;
     if (!deep_is_object(key)) {
       map_entry_t *other = Ant_Map_Find(js, ma, key);
       if (other && deep_equal_values(ctx, other->value, value)) continue;
       if (ctx->strict) { ok = false; break; }
     }
-    candidates[n++] = key;
+    ok = gc_temp_root_push(&candidates, key);
   }
+
+  size_t n = candidates.len;
+  bool *used = ok && n ? calloc(n, sizeof(*used)) : NULL;
+  ok = ok && (n == 0 || used);
 
   for (uint32_t index = 0; ok && n > 0 && (entry = collections_map_next(ma, &index));) {
     ant_value_t key = entry->key, value = entry->value;
@@ -797,11 +806,12 @@ static bool deep_map_equal(deep_equal_t *ctx, ant_value_t a, ant_value_t b) {
       map_entry_t *other = Ant_Map_Find(js, mb, key);
       if (other && deep_equal_values(ctx, value, other->value)) continue;
     }
-    ok = deep_match_candidate(ctx, candidates, used, n, key, value, mb);
+    ok = deep_match_candidate(ctx, candidates.items, used, n, key, value, mb);
   }
 
-  free(candidates);
+  gc_temp_root_scope_end(&candidates);
   free(used);
+  
   return ok;
 }
 
@@ -811,6 +821,7 @@ static bool deep_key_check(deep_equal_t *ctx, ant_value_t a, ant_value_t b, deep
   
   ant_value_t ka = js_own_property_keys(js, a, ctx->strict, true);
   GC_ROOT_PIN(js, ka);
+  
   ant_value_t kb = js_own_property_keys(js, b, ctx->strict, true);
   GC_ROOT_PIN(js, kb);
 
@@ -840,6 +851,7 @@ static bool deep_key_check(deep_equal_t *ctx, ant_value_t a, ant_value_t b, deep
 
   if (is_err(ka) || is_err(kb)) Ant_Exception_Clear(js);
   GC_ROOT_RESTORE(js, mark);
+  
   return ok;
 }
 
