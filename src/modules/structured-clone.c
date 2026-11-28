@@ -141,8 +141,19 @@ static ant_value_t sc_clone_packed_array(ant_t *js, ant_value_t val, ant_offset_
 
   ant_object_t *dst = js_obj_ptr(clone);
   for (ant_offset_t i = 0; i < len; i++) {
-    ant_value_t item = Ant_Value_Undefined;
-    if (!array_dense_read(js_obj_ptr(val), i, &item)) item = js_arr_get(js, val, i);
+    ant_value_t item;
+    
+    if (!array_dense_read(js_obj_ptr(val), i, &item)) {
+      ant_value_t own = Ant_Object_HasOwn(js, val, Ant_Value_FromNumber((double)i));
+      if (is_err(own)) return own;
+      if (own != Ant_Value_True) {
+        dst->u.array.data[i] = T_EMPTY;
+        array_mark_may_have_holes(clone);
+        continue;
+      }
+      item = js_arr_get(js, val, i);
+    }
+    
     if (!is_clone_identity(item) && is_err(item = sc_clone_rec(js, item, sc))) return item;
 
     dst->u.array.data[i] = item;
@@ -152,7 +163,7 @@ static ant_value_t sc_clone_packed_array(ant_t *js, ant_value_t val, ant_offset_
   return clone;
 }
 
-static ant_value_t sc_clone_array_keys(ant_t *js, ant_value_t val, ant_value_t clone, sc_t *sc) {
+static ant_value_t sc_clone_keys(ant_t *js, ant_value_t val, ant_value_t clone, sc_t *sc) {
   ant_value_t keys = js_own_property_keys(js, val, false, true);
   if (is_err(keys)) return keys;
 
@@ -161,7 +172,13 @@ static ant_value_t sc_clone_array_keys(ant_t *js, ant_value_t val, ant_value_t c
   ant_value_t result = Ant_Value_Undefined;
   ant_offset_t count = js_arr_len(js, keys);
 
+  bool is_array = vtype(clone) == kTypeArray;
+
   for (ant_offset_t i = 0; i < count && !is_err(result); i++) {
+    ant_value_t own = Ant_Object_HasOwn(js, val, js_arr_get(js, keys, i));
+    if (is_err(own)) { result = own; break; }
+    if (own != Ant_Value_True) continue;
+    
     size_t key_len = 0;
     const char *key = js_getstr(js, js_arr_get(js, keys, i), &key_len);
     if (!key) continue;
@@ -171,7 +188,7 @@ static ant_value_t sc_clone_array_keys(ant_t *js, ant_value_t val, ant_value_t c
 
     key = js_getstr(js, js_arr_get(js, keys, i), &key_len);
     unsigned long index = 0;
-    if (own_key_is_array_index(key, key_len, &index)) js_arr_set_index(js, clone, (ant_offset_t)index, item);
+    if (is_array && own_key_is_array_index(key, key_len, &index)) js_arr_set_index(js, clone, (ant_offset_t)index, item);
     else result = js_mkprop_fast(js, clone, key, key_len, item);
   }
 
@@ -186,7 +203,7 @@ static ant_value_t sc_clone_array(ant_t *js, ant_value_t val, sc_t *sc) {
   ant_value_t clone = sc_remember(js, sc, val, Ant_Array_Create(js));
   if (is_err(clone)) return clone;
 
-  ant_value_t status = sc_clone_array_keys(js, val, clone, sc);
+  ant_value_t status = sc_clone_keys(js, val, clone, sc);
   if (is_err(status)) return status;
 
   if (js_arr_len(js, clone) < len) {
@@ -342,9 +359,10 @@ static ant_value_t sc_clone_plain(ant_t *js, ant_value_t val, ant_object_t *src,
   bool missing = false;
 
   for (uint32_t i = 0; i < count; i++) {
-    ant_value_t item = ant_object_prop_get_unchecked(src, i);
+    ant_value_t item;
 
-    if (src->shape != shape) {
+    if (src->shape == shape) item = ant_object_prop_get_unchecked(src, i);
+    else {
       const char *key = ant_shape_prop_at(shape, i)->key.interned;
       if (ant_shape_lookup_interned(src->shape, key) < 0) {
         ant_object_prop_set_unchecked(dst, i, T_EMPTY);
@@ -363,33 +381,47 @@ static ant_value_t sc_clone_plain(ant_t *js, ant_value_t val, ant_object_t *src,
   return missing ? sc_drop_missing(js, clone, shape) : clone;
 }
 
+static bool sc_shape_walkable(const ant_object_t *ptr) {
+  return
+    ptr->shape && !ptr->flags.is_exotic && !ant_shape_may_have_index_keys(ptr->shape) &&
+    ant_shape_count(ptr->shape) <= ptr->prop_count;
+}
+
+static ant_value_t sc_clone_shape_props(ant_t *js, ant_value_t val, ant_object_t *src, ant_value_t clone, sc_t *sc) {
+  ant_shape_t *shape = src->shape;
+  ant_value_t result = clone;
+  ant_shape_retain(shape);
+
+  for (uint32_t i = 0, count = ant_shape_count(shape); i < count && !is_err(result); i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(shape, i);
+    if (!prop || prop->type != ANT_SHAPE_KEY_STRING || !(ant_shape_get_attrs(shape, i) & ANT_PROP_ATTR_ENUMERABLE)) continue;
+    
+    const char *key = prop->key.interned;
+    size_t key_len = intern_length(key);
+    ant_value_t item;
+    
+    if (src->shape != shape && ant_shape_lookup_interned(src->shape, key) < 0) continue;
+    if (src->shape == shape && !prop->has_getter && !prop->has_setter) item = ant_object_prop_get_unchecked(src, i);
+    else item = js_getprop_fallback_len(js, val, key, key_len);
+    
+    if (is_err(item) || (!is_clone_identity(item) && is_err(item = sc_clone_rec(js, item, sc)))) result = item;
+    else if (is_err(item = js_mkprop_fast(js, clone, key, key_len, item))) result = item;
+  }
+
+  ant_shape_release(shape);
+  return result;
+}
+
 static ant_value_t sc_clone_object(ant_t *js, ant_value_t val, ant_object_t *ptr, sc_t *sc) {
   ant_value_t clone = sc_remember(js, sc, val, Ant_Object_Create(js));
   if (is_err(clone)) return clone;
 
-  if (js_proxy_is_host(val)) {
-    ant_value_t copied = js_copy_data_props(js, clone, val, NULL, 0);
-    return is_err(copied) ? copied : clone;
-  }
-
-  ant_iter_t iter = js_prop_iter_begin(js, val);
-  ant_iter_key_t key;
-  ant_value_t item;
-  ant_value_t result = clone;
-
-  while (!is_err(result) && js_prop_iter_next_key(&iter, &key, &item)) {
-    if (key.is_symbol || !js_is_own_enumerable_prop(js, val, ptr, &key)) continue;
-    const ant_shape_prop_t *meta = ant_shape_prop_at(ptr->shape, key.slot);
-
-    if (ptr->flags.is_exotic || !meta || meta->has_getter || meta->has_setter)
-      item = js_getprop_fallback_len(js, val, key.str, key.key_len);
-
-    if (is_err(item) || is_err(item = sc_clone_rec(js, item, sc))) result = item;
-    else if (is_err(item = js_mkprop_fast(js, clone, key.str, key.key_len, item))) result = item;
-  }
-
-  js_prop_iter_end(&iter);
-  return result;
+  ant_value_t status =
+    js_proxy_is_host(val) ? js_copy_data_props(js, clone, val, NULL, 0) :
+    sc_shape_walkable(ptr) ? sc_clone_shape_props(js, val, ptr, clone, sc) :
+    sc_clone_keys(js, val, clone, sc);
+  
+  return is_err(status) ? status : clone;
 }
 
 static ant_value_t sc_clone_special(ant_t *js, ant_value_t val, ant_object_t *ptr, sc_t *sc) {

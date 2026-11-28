@@ -59,6 +59,49 @@ function mutationDuringClone() {
 
   const later = { a: { get g() { delete later.b; throw new Error('after delete'); } }, b: 1 };
   assert.throws(() => structuredClone(later), { message: 'after delete' });
+
+  const wide = { first: { get g() { for (let i = 1; i < 60; i++) if (i !== 30) delete wide['k' + i]; return 0; } } };
+  for (let i = 1; i < 60; i++) wide['k' + i] = { i };
+  const wideCopy = structuredClone(wide);
+  assert.deepEqual(Object.keys(wideCopy), ['first', 'k30']);
+  assert.deepEqual(wideCopy.k30, { i: 30 });
+
+  const selfAdd = { a: 1, get b() { selfAdd.c = 'added'; return 2; } };
+  assert.deepEqual(structuredClone(selfAdd), { a: 1, b: 2 });
+
+  const selfDelete = { get a() { delete selfDelete.b; return 1; }, b: 2, c: 3 };
+  assert.deepEqual(structuredClone(selfDelete), { a: 1, c: 3 });
+
+  class Holder { constructor() { this.x = 1; this.y = { get g() { delete holder.z; holder.w = 1; return 0; } }; this.z = 2; } }
+  const holder = new Holder();
+  assert.deepEqual(structuredClone(holder), { x: 1, y: { g: 0 } });
+}
+
+function arrayElementsChangedDuringClone() {
+  const holes = value => [...Array(value.length).keys()].filter(i => !(i in value));
+
+  const packed = [{ get g() { packed.pop(); delete packed[1]; return 0; } }, 'b', 'c', 'd'];
+  const packedCopy = structuredClone(packed);
+  assert.equal(packedCopy.length, 4);
+  assert.deepEqual(holes(packedCopy), [1, 3]);
+  assert.equal(packedCopy[2], 'c');
+
+  const shrink = [{ get g() { shrink.length = 1; return 0; } }, 2, 3];
+  const shrinkCopy = structuredClone(shrink);
+  assert.equal(shrinkCopy.length, 3);
+  assert.deepEqual(holes(shrinkCopy), [1, 2]);
+
+  const grow = [{ get g() { grow.push('x'); return 0; } }, 2];
+  assert.deepEqual(structuredClone(grow), [{ g: 0 }, 2]);
+
+  const sparse = [];
+  sparse[0] = { get g() { delete sparse[5]; sparse[7] = 'new'; return 0; } };
+  sparse[5] = 'five';
+  sparse[6] = 'six';
+  const sparseCopy = structuredClone(sparse);
+  assert.equal(sparseCopy.length, 7);
+  assert.deepEqual(holes(sparseCopy), [1, 2, 3, 4, 5]);
+  assert.equal(sparseCopy[6], 'six');
 }
 
 function nonPlainObjectsKeepTheirPath() {
@@ -145,6 +188,7 @@ sharedShapeIndependence();
 identityAndCycles();
 mutationDuringClone();
 nonPlainObjectsKeepTheirPath();
+arrayElementsChangedDuringClone();
 packedArrays();
 transferWithPrimitiveRoot();
 survivesCollectionsMidClone();
