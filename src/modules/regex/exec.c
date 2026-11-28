@@ -151,6 +151,94 @@ double regexp_advance_string_index(
   return index + (pair ? 2 : 1);
 }
 
+static ant_value_t regexp_code_unit_view_build(ant_t *js, ant_value_t str, size_t pairs) {
+  ant_offset_t len;
+  regexp_vstr(js, str, &len);
+  char *out;
+  ant_value_t view = js_mkstr_utf8_reserve(js, (size_t)len + 2 * pairs, &out);
+  if (is_err(view)) return view;
+
+  const char *bytes = (const char *)(uintptr_t)regexp_vstr(js, str, &len);
+  size_t written = wtf8_split_pairs_into(bytes, (size_t)len, out);
+  Ant_Assert(written == (size_t)len + 2 * pairs, "regexp code unit view length");
+
+  bool wtf8 = str_is_valid_wtf8(bytes);
+  ant_offset_t units_len = str_flat_cached_utf16_len(str_flat_from_bytes(bytes));
+  ant_flat_string_t *flat = ant_str_flat_ptr(view);
+  str_flat_init_meta(flat, STR_ASCII_NO);
+  str_flat_set_utf_valid_state(flat, STR_UTF_INVALID);
+  flat->meta |= STR_META_WTF8_CHECKED | (wtf8 ? STR_META_WTF8_VALID : 0);
+  if (units_len != STR_UTF16_LEN_UNKNOWN) str_flat_set_utf16_len(flat, units_len);
+  return view;
+}
+
+ant_value_t regexp_code_unit_view(ant_t *js, ant_value_t str) {
+  ant_offset_t len;
+  const char *bytes = (const char *)(uintptr_t)regexp_vstr(js, str, &len);
+  ant_flat_string_t *flat = str_flat_from_bytes(bytes);
+  if (str_is_ascii(bytes) || (flat->meta & STR_META_NO_SUPPLEMENTARY)) return str;
+
+  ant_regex_state_t *state = js->regex_state;
+  regexp_code_unit_entry_t *victim = NULL;
+  uint64_t epoch = gc_strings_sweep_epoch();
+  for (size_t i = 0; state && i < REGEXP_CODE_UNIT_CACHE_SIZE; i++) {
+    regexp_code_unit_entry_t *entry = &state->code_units[i];
+    if (entry->epoch != epoch) entry->used = 0;
+    else if (entry->bytes == bytes && entry->len == (size_t)len) {
+      entry->used = ++state->code_units_clock;
+      return entry->view;
+    }
+    if (!victim || entry->used < victim->used) victim = entry;
+  }
+
+  size_t pairs = wtf8_supplementary_count(bytes, (size_t)len);
+  if (!pairs) {
+    flat->meta |= STR_META_NO_SUPPLEMENTARY;
+    return str;
+  }
+  ant_value_t view = regexp_code_unit_view_build(js, str, pairs);
+  if (is_err(view) || !victim) return view;
+  // Once every entry was used since the last major GC, new subjects take turns
+  // in the last entry, so a stream of them cannot evict the views still in use.
+  if (victim->used > state->code_units_gc_clock) victim = &state->code_units[REGEXP_CODE_UNIT_CACHE_SIZE - 1];
+
+  bytes = (const char *)(uintptr_t)regexp_vstr(js, str, &len);
+  *victim = (regexp_code_unit_entry_t){
+    .bytes = bytes, .len = (size_t)len,
+    .epoch = gc_strings_sweep_epoch(),
+    .used = ++state->code_units_clock,
+    .view = view,
+  };
+  return view;
+}
+
+// Runs in a major GC between marking and the string sweep. An entry used since
+// the previous major GC whose subject is marked keeps its view alive and stays
+// valid in the epoch the sweep begins.
+void regexp_code_units_gc(ant_t *js, ant_regex_state_t *state) {
+  uint64_t epoch = gc_strings_sweep_epoch();
+  for (size_t i = 0; i < REGEXP_CODE_UNIT_CACHE_SIZE; i++) {
+    regexp_code_unit_entry_t *entry = &state->code_units[i];
+    if (entry->epoch != epoch || entry->used <= state->code_units_gc_clock) continue;
+    if (!gc_strings_is_marked(js, str_flat_from_bytes(entry->bytes))) continue;
+    gc_strings_mark(js, ant_str_flat_ptr(entry->view));
+    entry->epoch = epoch + 1;
+  }
+  state->code_units_gc_clock = state->code_units_clock;
+}
+
+ant_value_t regexp_exec_run_code_units(
+  ant_t *js, ant_value_t regexp, const regexp_fast_t *fast,
+  double last_index, ant_value_t str_arg, bool truthy_only
+) {
+  regexp_subject_scope_t scope;
+  ant_value_t subject = regexp_subject_begin(js, &scope, fast->flags, str_arg);
+  if (is_err(subject)) return subject;
+  ant_value_t result = regexp_exec_run_subject(js, regexp, fast, last_index, str_arg, subject, truthy_only);
+  regexp_subject_end(js, &scope);
+  return result;
+}
+
 static ant_value_t regexp_build_indices_pair(ant_t *js, utf16_pos_t *pos, PCRE2_SIZE start, PCRE2_SIZE end) {
   if (start == PCRE2_UNSET) return Ant_Value_Undefined;
 

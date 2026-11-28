@@ -9,6 +9,7 @@
 #include "ant.h"
 #include "cfunc.h"
 #include "ascii.h"
+#include "convert.h"
 #include "errors.h"
 #include "internal.h"
 
@@ -505,6 +506,163 @@ static ant_value_t intl_segmenter_constructor(ant_params_t) {
   return obj;
 }
 
+static const char *const intl_lf_types[] = { "conjunction", "disjunction", "unit" };
+static const char *const intl_lf_styles[] = { "long", "short", "narrow" };
+
+// separators indexed [type][style] -> { pair, middle, end }
+static const char *const intl_lf_patterns[3][3][3] = {
+  { { " and ", ", ", ", and " }, { " & ", ", ", ", & " }, { ", ", ", ", ", " } },
+  { { " or ", ", ", ", or " }, { " or ", ", ", ", or " }, { " or ", ", ", ", or " } },
+  { { ", ", ", ", ", " }, { ", ", ", ", ", " }, { " ", " ", " " } },
+};
+
+static ant_value_t intl_lf_get_option(ant_t *js, ant_value_t options, const char *key, const char *const *allowed, int n, int fallback, int *out) {
+  *out = fallback;
+  if (vtype(options) == kTypeUndefined) return Ant_Value_Undefined;
+
+  ant_value_t value = js_get(js, options, key);
+  if (is_err(value)) return value;
+  if (vtype(value) == kTypeUndefined) return Ant_Value_Undefined;
+
+  ant_value_t str = coerce_to_str_hint(js, value, 1);
+  if (is_err(str)) return str;
+
+  size_t len = 0;
+  const char *ptr = js_getstr(js, str, &len);
+  for (int i = 0; i < n; i++) {
+    if (strlen(allowed[i]) == len && memcmp(allowed[i], ptr, len) == 0) { *out = i; return Ant_Value_Undefined; }
+  }
+  return js_mkerr_typed(js, JS_ERR_RANGE, "Value %.*s out of range for Intl.ListFormat options property %s", (int)len, ptr, key);
+}
+
+static ant_value_t intl_listformat_constructor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Constructor Intl.ListFormat requires 'new'");
+
+  ant_value_t locale = intl_resolve_locale(js, nargs > 0 ? args[0] : Ant_Value_Undefined);
+  if (is_err(locale)) return locale;
+
+  ant_value_t options = nargs > 1 ? args[1] : Ant_Value_Undefined;
+  if (vtype(options) != kTypeUndefined && !is_object_type(options))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Incorrect ListFormat configuration");
+
+  static const char *const matchers[] = { "lookup", "best fit" };
+  int matcher = 0, type = 0, style = 0;
+  ant_value_t st = intl_lf_get_option(js, options, "localeMatcher", matchers, 2, 1, &matcher);
+  if (is_err(st)) return st;
+  st = intl_lf_get_option(js, options, "type", intl_lf_types, 3, 0, &type);
+  if (is_err(st)) return st;
+  st = intl_lf_get_option(js, options, "style", intl_lf_styles, 3, 0, &style);
+  if (is_err(st)) return st;
+
+  ant_value_t obj = intl_create_instance(js, js->builtins.intl_listformat_proto, call_new_target);
+  js_set_slot_wb(js, obj, SLOT_AUX, locale);
+  js_set_slot(obj, SLOT_BRAND, Ant_Value_FromNumber(BRAND_INTL_LISTFORMAT));
+  js_set_slot(obj, SLOT_DATA, Ant_Value_FromNumber(type * 3 + style));
+  return obj;
+}
+
+// type and style live in an internal slot so a plain object can't pose as a
+// ListFormat or steer the pattern table index out of bounds
+static bool intl_lf_load(ant_value_t self, int *type, int *style) {
+  if (!js_check_brand(self, BRAND_INTL_LISTFORMAT)) return false;
+  ant_value_t data = js_get_slot(self, SLOT_DATA);
+  if (vtype(data) != kTypeNumber) return false;
+
+  double bits = Ant_Value_AsNumberUnchecked(data);
+  if (!(bits >= 0 && bits < 9)) return false;
+  *type = (int)bits / 3;
+  *style = (int)bits % 3;
+  return true;
+}
+
+static iter_action_t intl_lf_collect(ant_t *js, ant_value_t value, void *ctx, ant_value_t *out) {
+  if (vtype(value) != kTypeString) {
+    *out = js_mkerr_typed(js, JS_ERR_TYPE, "Iterable yielded a value of type %s which is not a string", typestr(vtype(value)));
+    return ITER_ERROR;
+  }
+  js_arr_push(js, *(ant_value_t *)ctx, value);
+  return ITER_CONTINUE;
+}
+
+static ant_value_t intl_lf_read_list(ant_t *js, ant_value_t list) {
+  ant_value_t items = Ant_Array_Create(js);
+  if (is_err(items) || vtype(list) == kTypeUndefined) return items;
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, items);
+  ant_value_t r = js_iter_foreach(js, list, intl_lf_collect, &items);
+  GC_ROOT_RESTORE(js, mark);
+  return is_err(r) ? r : items;
+}
+
+static ant_value_t intl_lf_run(ant_t *js, ant_value_t self, ant_value_t list, bool parts) {
+  int type = 0, style = 0;
+  if (!intl_lf_load(self, &type, &style))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Method called on incompatible receiver");
+  const char *const *pat = intl_lf_patterns[type][style];
+
+  ant_value_t items = intl_lf_read_list(js, list);
+  if (is_err(items)) return items;
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, items);
+  ant_offset_t n = js_arr_len(js, items);
+  ant_value_t out = parts ? Ant_Array_Create(js) : Ant_Value_Undefined;
+  GC_ROOT_PIN(js, out);
+  size_t used = 0;
+  char *buf = NULL;
+
+  for (ant_offset_t i = 0; i < n; i++) {
+    ant_value_t item = js_arr_get(js, items, i);
+    const char *sep = i == 0 ? "" : n == 2 ? pat[0] : i == n - 1 ? pat[2] : pat[1];
+    if (parts) {
+      if (*sep) js_arr_push(js, out, intl_dtf_make_part(js, "literal", sep));
+      ant_value_t o = Ant_Object_Create(js);
+      js_set(js, o, "type", js_mkstr(js, "element", 7));
+      js_set(js, o, "value", item);
+      js_arr_push(js, out, o);
+      continue;
+    }
+    size_t sl = strlen(sep), il = 0;
+    const char *ip = js_getstr(js, item, &il);
+    char *nb = realloc(buf, used + sl + il + 1);
+    if (!nb) { free(buf); GC_ROOT_RESTORE(js, mark); return js_mkerr(js, "oom"); }
+    buf = nb;
+    memcpy(buf + used, sep, sl);
+    memcpy(buf + used + sl, ip, il);
+    used += sl + il;
+  }
+  if (!parts) {
+    out = js_mkstr(js, buf ? buf : "", used);
+    free(buf);
+  }
+  GC_ROOT_RESTORE(js, mark);
+  return out;
+}
+
+static ant_value_t intl_listformat_format(ant_params_t) {
+  return intl_lf_run(js, call_this, nargs > 0 ? args[0] : Ant_Value_Undefined, false);
+}
+
+static ant_value_t intl_listformat_format_to_parts(ant_params_t) {
+  return intl_lf_run(js, call_this, nargs > 0 ? args[0] : Ant_Value_Undefined, true);
+}
+
+static ant_value_t intl_listformat_resolved_options(ant_params_t) {
+  int type = 0, style = 0;
+  if (!intl_lf_load(call_this, &type, &style))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Method called on incompatible receiver");
+  const char *ts = intl_lf_types[type];
+  const char *ss = intl_lf_styles[style];
+
+  ant_value_t obj = Ant_Object_Create(js);
+  js_set(js, obj, "locale", js_get_slot(call_this, SLOT_AUX));
+  js_set(js, obj, "type", js_mkstr(js, ts, strlen(ts)));
+  js_set(js, obj, "style", js_mkstr(js, ss, strlen(ss)));
+  return obj;
+}
+
 void init_intl_module(ant_t *js) {
   ant_value_t intl = Ant_Object_CreateBare(js);
   ant_value_t object_proto = js->sym.object_proto;
@@ -541,7 +699,15 @@ void init_intl_module(ant_t *js) {
   ant_value_t segmenter_ctor = Ant_Function_CreateIntrinsicConstructor(js, intl_segmenter_constructor, js->builtins.intl_segmenter_proto, "Segmenter", 0);
   defhidden(js, intl, "Segmenter", 9, segmenter_ctor);
 
-  ant_value_t locale_ctors[] = { collator_ctor, numberformat_ctor, dtf_ctor, segmenter_ctor };
+  js->builtins.intl_listformat_proto = Ant_Object_Create(js);
+  defmethod(js, js->builtins.intl_listformat_proto, "format", 6, Ant_Function_CreateWithArity(intl_listformat_format, 1));
+  defmethod(js, js->builtins.intl_listformat_proto, "formatToParts", 13, Ant_Function_CreateWithArity(intl_listformat_format_to_parts, 1));
+  defmethod(js, js->builtins.intl_listformat_proto, "resolvedOptions", 15, Ant_Function_Create(intl_listformat_resolved_options));
+  js_set_tostringtag(js, js->builtins.intl_listformat_proto, js_mkstr(js, "Intl.ListFormat", 15));
+  ant_value_t listformat_ctor = Ant_Function_CreateIntrinsicConstructor(js, intl_listformat_constructor, js->builtins.intl_listformat_proto, "ListFormat", 0);
+  defhidden(js, intl, "ListFormat", 10, listformat_ctor);
+
+  ant_value_t locale_ctors[] = { collator_ctor, numberformat_ctor, dtf_ctor, segmenter_ctor, listformat_ctor };
   for (size_t i = 0; i < sizeof(locale_ctors) / sizeof(locale_ctors[0]); i++)
     defmethod(js, locale_ctors[i], "supportedLocalesOf", 18, Ant_Function_CreateWithArity(intl_get_canonical_locales, 1));
   defmethod(js, intl, "getCanonicalLocales", 19, Ant_Function_CreateWithArity(intl_get_canonical_locales, 1));

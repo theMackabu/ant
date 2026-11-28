@@ -1772,30 +1772,53 @@ bool wtf8_has_supplementary(const char *str, size_t len) {
   return false;
 }
 
-char *wtf8_split_pairs_dup(const char *str, size_t len, size_t *out_len) {
-  const unsigned char *s = (const unsigned char *)str;
-  char *out = malloc(len + len / 2 + 1);
-  if (!out) return NULL;
-
-  size_t w = 0;
-  for (size_t r = 0; r < len;) {
-    if (s[r] < 0xF0 || r + 4 > len) {
-      out[w++] = (char)s[r++];
-      continue;
+// The offset of the first well-formed supplementary character at or after i,
+// or len when there is none.
+static size_t wtf8_next_supplementary(const unsigned char *s, size_t len, size_t i, uint32_t *cp) {
+  for (;; i++) {
+    for (uint64_t word; len - i >= 8; i += 8) {
+      memcpy(&word, s + i, sizeof(word));
+      if (word & (word << 1) & (word << 2) & (word << 3) & UINT64_C(0x8080808080808080)) break;
     }
-    uint32_t cp = ((uint32_t)(s[r] & 0x07) << 18) | ((uint32_t)(s[r + 1] & 0x3F) << 12) |
-      ((uint32_t)(s[r + 2] & 0x3F) << 6) | (uint32_t)(s[r + 3] & 0x3F);
+    while (i < len && s[i] < 0xF0) i++;
+    if (i == len || utf8_supplementary_at(s, len, i, cp)) return i;
+  }
+}
+
+size_t wtf8_supplementary_count(const char *str, size_t len) {
+  const unsigned char *s = (const unsigned char *)str;
+  uint32_t cp;
+  size_t count = 0;
+  for (size_t i = wtf8_next_supplementary(s, len, 0, &cp); i < len; i = wtf8_next_supplementary(s, len, i + 4, &cp)) count++;
+  return count;
+}
+
+// Copies str with each supplementary character split into its two surrogates,
+// 6 bytes in all; out needs room for len + 2 * wtf8_supplementary_count bytes.
+size_t wtf8_split_pairs_into(const char *str, size_t len, char *out) {
+  const unsigned char *s = (const unsigned char *)str;
+  size_t w = 0;
+  for (size_t r = 0;;) {
+    uint32_t cp;
+    size_t at = wtf8_next_supplementary(s, len, r, &cp);
+    memcpy(out + w, str + r, at - r);
+    w += at - r;
+    if (at == len) return w;
     uint32_t units[2] = { 0xD800 + ((cp - 0x10000) >> 10), 0xDC00 + ((cp - 0x10000) & 0x3FF) };
     for (int i = 0; i < 2; i++) {
       out[w++] = (char)0xED;
       out[w++] = (char)(0x80 | ((units[i] >> 6) & 0x3F));
       out[w++] = (char)(0x80 | (units[i] & 0x3F));
     }
-    r += 4;
+    r = at + 4;
   }
+}
 
-  out[w] = '\0';
-  *out_len = w;
+char *wtf8_split_pairs_dup(const char *str, size_t len, size_t *out_len) {
+  char *out = malloc(len + len / 2 + 1);
+  if (!out) return NULL;
+  *out_len = wtf8_split_pairs_into(str, len, out);
+  out[*out_len] = '\0';
   return out;
 }
 

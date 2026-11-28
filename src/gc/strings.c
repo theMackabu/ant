@@ -307,6 +307,27 @@ void gc_strings_mark_shared(ant_t *js, const void *ptr) {
   gc_strings_mark_impl(js, ptr, true);
 }
 
+// Whether the major GC in progress has marked the pooled or large string at
+// ptr; false for any string it does not track.
+bool gc_strings_is_marked(ant_t *js, const void *ptr) {
+  uintptr_t p = (uintptr_t)ptr;
+  for (size_t lo = 0, hi = js->gc.string_mark_len; lo < hi;) {
+    size_t mid = lo + (hi - lo) / 2;
+    const gc_block_mark_t *m = &js->gc.string_marks[mid];
+    if (p < m->base) hi = mid;
+    else if (p >= m->end) lo = mid + 1;
+    else return (p - m->base) % m->stride == 0 && bitmap_get(&m->bitmap, (p - m->base) / m->stride);
+  }
+  for (size_t lo = 0, hi = js->gc.large_string_mark_len; lo < hi;) {
+    size_t mid = lo + (hi - lo) / 2;
+    const gc_large_string_mark_t *m = &js->gc.large_string_marks[mid];
+    if (p < m->ptr) hi = mid;
+    else if (p > m->ptr) lo = mid + 1;
+    else return m->alloc->marked != 0;
+  }
+  return false;
+}
+
 void gc_strings_sweep(ant_t *js) {
   for (size_t i = 0; i < js->gc.string_mark_len; i++) {
     gc_block_mark_t *m = &js->gc.string_marks[i];
@@ -726,8 +747,12 @@ ant_value_t js_mkstr_int32(ant_t *js, int32_t value) {
 }
 
 ant_value_t js_mkstr_byte_range(ant_t *js, const char *parent, size_t start, size_t len) {
-  bool known_ascii = str_flat_ascii_state(str_flat_from_bytes(parent)) == STR_ASCII_YES;
-  return mkstr_with_ascii(js, parent + start, len, known_ascii);
+  const ant_flat_string_t *src = str_flat_from_bytes(parent);
+  ant_value_t str = mkstr_with_ascii(js, parent + start, len, str_flat_ascii_state(src) == STR_ASCII_YES);
+  // A slice that joined no surrogate pairs only holds characters of its parent.
+  ant_flat_string_t *flat = ant_str_flat_ptr(str);
+  if ((src->meta & STR_META_NO_SUPPLEMENTARY) && flat && (size_t)flat->len == len) flat->meta |= STR_META_NO_SUPPLEMENTARY;
+  return str;
 }
 
 void *js_permanent_alloc(ant_t *js, size_t size, size_t align) {

@@ -67,7 +67,7 @@ pcre2_match_context *regex_get_match_context(ant_t *js) {
   state->match_ctx = pcre2_match_context_create(NULL);
   if (!state->match_ctx) return NULL;
 
-  state->jit_stack = pcre2_jit_stack_create(32 * 1024, 512 * 1024, NULL);
+  state->jit_stack = pcre2_jit_stack_create(32 * 1024, 64 * 1024 * 1024, NULL);
   if (state->jit_stack) {
     pcre2_jit_stack_assign(state->match_ctx, NULL, state->jit_stack);
   }
@@ -261,7 +261,7 @@ static void regexp_keep_required_literal(
   entry->required_literal_len = (uint8_t)length;
 }
 
-static bool regex_source_literal(const char *source, size_t len, char *out, uint8_t *out_len) {
+static bool regex_source_literal(const char *source, size_t len, bool code_units, char *out, uint8_t *out_len) {
   size_t n = 0;
   
   for (size_t i = 0; i < len; i++) {
@@ -284,6 +284,9 @@ static bool regex_source_literal(const char *source, size_t len, char *out, uint
         }
         break;
       default:
+        // Without u or v the subject is matched as code units, where a
+        // supplementary character no longer appears as its UTF-8 bytes.
+        if (code_units && c >= 0xF0) return false;
         break;
     }
     
@@ -392,8 +395,11 @@ static pcre2_code *regexp_compile_code(
   pcre2_compile_context *compile_ctx = pcre2_compile_context_create(NULL);
   if (compile_ctx) {
     pcre2_set_newline(compile_ctx, PCRE2_NEWLINE_LF);
-    if ((flags_mask & REGEXP_FLAG_IGNORE_CASE) && !(flags_mask & (REGEXP_FLAG_UNICODE | REGEXP_FLAG_UNICODE_SET)))
-      pcre2_set_compile_extra_options(compile_ctx, PCRE2_EXTRA_CASELESS_RESTRICT);
+    // Lone surrogates are code units JS strings can hold, and without u or v
+    // the subject's surrogate pairs are matched as two of them.
+    uint32_t extra = PCRE2_EXTRA_ALLOW_SURROGATE_ESCAPES;
+    if ((flags_mask & REGEXP_FLAG_IGNORE_CASE) && regexp_matches_code_units(flags_mask)) extra |= PCRE2_EXTRA_CASELESS_RESTRICT;
+    pcre2_set_compile_extra_options(compile_ctx, extra);
   }
   pcre2_code *re = pcre2_compile(
     (PCRE2_SPTR)pcre2_pattern.ptr, pcre2_pattern.len,
@@ -478,10 +484,11 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_get_or_compile(
   entry->flags_mask = flags_mask;
   
   if (!(flags_mask & REGEXP_PLAIN_LITERAL_EXCLUDED_FLAGS)) {
+    bool code_units = regexp_matches_code_units(flags_mask);
     if (pattern_len > 1 && pattern[0] == '^')
       entry->anchored_literal = !(flags_mask & REGEXP_FLAG_MULTILINE) &&
-        regex_source_literal(pattern + 1, pattern_len - 1, entry->literal, &entry->literal_len);
-    else entry->plain_literal = regex_source_literal(pattern, pattern_len, entry->literal, &entry->literal_len);
+        regex_source_literal(pattern + 1, pattern_len - 1, code_units, entry->literal, &entry->literal_len);
+    else entry->plain_literal = regex_source_literal(pattern, pattern_len, code_units, entry->literal, &entry->literal_len);
   }
   
   entry->code = re;

@@ -98,6 +98,7 @@ void gc_age_regex_cache(ant_t *js, bool minor) {
   ant_gc_shapes_mark(js, state->instance_shape.base);
   regexp_sites_clear(state);
   compiled_regex_cache_rotate(state);
+  regexp_code_units_gc(js, state);
 }
 
 void cleanup_regex_module(ant_t *js) {

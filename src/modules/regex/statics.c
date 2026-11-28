@@ -1,10 +1,19 @@
 #include "regex_internal.h"
 
+// A non-unicode match records its code unit view as the subject; RegExp.input
+// must hand back the normalized string instead.
+static ant_value_t regexp_static_input(ant_t *js, ant_value_t subject) {
+  ant_offset_t len;
+  const char *bytes = (const char *)(uintptr_t)vstr(js, subject, &len);
+  if (str_is_ascii(bytes) || !wtf8_has_surrogate(bytes, (size_t)len)) return subject;
+  return js_mkstr(js, bytes, (size_t)len);
+}
+
 static ant_value_t regexp_static_compute(
   ant_t *js, size_t idx, ant_value_t subject,
   const PCRE2_SIZE *ovector, uint32_t last_group, const PCRE2_SIZE *paren
 ) {
-  if (idx == REGEXP_STATIC_INDEX_INPUT) return subject;
+  if (idx == REGEXP_STATIC_INDEX_INPUT) return regexp_static_input(js, subject);
 
   ant_offset_t subject_len;
   const char *subject_ptr = (const char *)(uintptr_t)vstr(js, subject, &subject_len);

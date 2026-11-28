@@ -167,7 +167,7 @@ static __attribute__((noinline)) bool regexp_replace_append_template(
   repl_named_t named = { regexp_named_capture, &named_ctx };
   bool ok = repl_template(
     repl_ptr, repl_len, scan->str_ptr + start, ovector[1] - start,
-    scan->str_ptr, (size_t)scan->str_len, start, captures, capture_count,
+    scan->str_ptr, (size_t)scan->str_len, start, ovector[1], captures, capture_count,
     fast->compiled->namecount ? &named : NULL, &out->buf, &out->len, &out->cap
   );
   if (captures != captures_inline) free(captures);
@@ -178,8 +178,12 @@ static __attribute__((always_inline)) inline ant_value_t regexp_replace_fast_str
   ant_t *js, const regexp_fast_t *fast, ant_value_t str,
   const char *repl_ptr, ant_offset_t repl_len, bool literal, bool literal_pattern
 ) {
+  regexp_subject_scope_t subject_scope;
+  ant_value_t subject = regexp_subject_begin(js, &subject_scope, fast->flags, str);
+  if (is_err(subject)) return subject;
+
   regexp_fast_scan_t scan;
-  regexp_fast_scan_begin(js, &scan, fast, str);
+  regexp_fast_scan_begin(js, &scan, fast, subject);
 
   regexp_out_t out = {0};
   PCRE2_SIZE next_src_pos = 0;
@@ -213,12 +217,15 @@ static __attribute__((always_inline)) inline ant_value_t regexp_replace_fast_str
   }
 
   regexp_fast_scan_end(js, &scan);
+  if (next_src_pos > (PCRE2_SIZE)scan.str_len) next_src_pos = (PCRE2_SIZE)scan.str_len;
+  ant_value_t result = str;
   if (is_err(error)) {
     if (out.buf) regexp_out_end(js, &out);
-    return error;
-  }
-  if (scan.count == 0) return str;
-  return regexp_out_finish(js, &out, scan.str_ptr + next_src_pos, (size_t)scan.str_len - next_src_pos);
+    result = error;
+  } else if (scan.count != 0)
+    result = regexp_out_finish(js, &out, scan.str_ptr + next_src_pos, (size_t)scan.str_len - next_src_pos);
+  regexp_subject_end(js, &subject_scope);
+  return result;
 }
 
 ant_value_t regexp_replace_fast_string(
@@ -232,11 +239,11 @@ ant_value_t regexp_replace_fast_string(
     : regexp_replace_fast_string_scan(js, fast, str, repl_ptr, repl_len, literal, false);
 }
 
-ant_value_t regexp_replace_fast_function(
-  ant_t *js, const regexp_fast_t *fast, ant_value_t str, ant_value_t replace_fn
+static ant_value_t regexp_replace_fast_function_subject(
+  ant_t *js, const regexp_fast_t *fast, ant_value_t str, ant_value_t subject, ant_value_t replace_fn
 ) {
   regexp_fast_scan_t scan;
-  regexp_fast_scan_begin(js, &scan, fast, str);
+  regexp_fast_scan_begin(js, &scan, fast, subject);
 
   utf16_pos_t pos;
   utf16_pos_init(&pos, scan.str_ptr, scan.str_len);
@@ -283,7 +290,7 @@ ant_value_t regexp_replace_fast_function(
 
   for (size_t m = 0; m < scan.count; m++) {
     const PCRE2_SIZE *ovector = matches.items + m * stride;
-    ant_offset_t str_len, str_off = regexp_vstr(js, str, &str_len);
+    ant_offset_t str_len, str_off = regexp_vstr(js, subject, &str_len);
     const char *str_ptr = (const char *)(uintptr_t)str_off;
     int ca = 0;
     for (uint32_t i = 0; i < ovcount; i++) {
@@ -308,7 +315,7 @@ ant_value_t regexp_replace_fast_function(
     ant_value_t rep_str = js_tostring_val(js, replacement);
     if (is_err(rep_str)) { result = rep_str; goto done; }
 
-    str_off = regexp_vstr(js, str, &str_len);
+    str_off = regexp_vstr(js, subject, &str_len);
     str_ptr = (const char *)(uintptr_t)str_off;
     ant_offset_t rep_len, rep_off = vstr(js, rep_str, &rep_len);
     if (!out.buf) {
@@ -327,7 +334,8 @@ ant_value_t regexp_replace_fast_function(
   }
 
   {
-    ant_offset_t str_len, str_off = regexp_vstr(js, str, &str_len);
+    ant_offset_t str_len, str_off = regexp_vstr(js, subject, &str_len);
+    if (next_src_pos > (PCRE2_SIZE)str_len) next_src_pos = (PCRE2_SIZE)str_len;
     result = regexp_out_finish(js, &out, (const char *)(uintptr_t)str_off + next_src_pos, (size_t)str_len - next_src_pos);
   }
 
@@ -336,6 +344,17 @@ done:
   if (call_args != call_args_inline) free(call_args);
   free(matches.items);
   compiled_regex_cache_release(compiled);
+  return result;
+}
+
+ant_value_t regexp_replace_fast_function(
+  ant_t *js, const regexp_fast_t *fast, ant_value_t str, ant_value_t replace_fn
+) {
+  regexp_subject_scope_t subject_scope;
+  ant_value_t subject = regexp_subject_begin(js, &subject_scope, fast->flags, str);
+  if (is_err(subject)) return subject;
+  ant_value_t result = regexp_replace_fast_function_subject(js, fast, str, subject, replace_fn);
+  regexp_subject_end(js, &subject_scope);
   return result;
 }
 
@@ -357,6 +376,163 @@ static bool regexp_named_object_capture(void *ctx, const char *name, size_t len,
   ant_offset_t value_len, value_off = vstr(named->js, value, &value_len);
   *out = (repl_capture_t){ (const char *)(uintptr_t)value_off, (size_t)value_len };
   return true;
+}
+
+// Builds the result of the generic RegExp.prototype[@@replace] path. Match
+// positions are UTF-16 offsets that can fall between the halves of a surrogate
+// pair, so the source is sliced through its code unit view (units).
+static ant_value_t regexp_replace_accumulate(
+  ant_t *js, ant_value_t str, ant_value_t units, ant_value_t results, ant_offset_t nresults,
+  ant_value_t replace_value, ant_value_t replace_str, bool func_replace
+) {
+  ant_offset_t str_len, str_off = vstr(js, units, &str_len);
+  ant_offset_t str_units_len = str_utf16_len(js, str);
+  size_t buf_cap = str_len + 256;
+  char *buf = malloc(buf_cap);
+  if (!buf) return js_mkerr(js, "oom");
+  size_t buf_len = 0;
+  ant_offset_t next_src_pos = 0;
+
+#define SB_APPEND(data, dlen) do { \
+  if (buf_len + (dlen) >= buf_cap) { \
+    buf_cap = (buf_len + (dlen) + 1) * 2; \
+    char *nb = realloc(buf, buf_cap); \
+    if (!nb) { free(buf); return js_mkerr(js, "oom"); } \
+    buf = nb; \
+  } \
+  memcpy(buf + buf_len, data, dlen); buf_len += (dlen); \
+} while(0)
+
+  for (ant_offset_t i = 0; i < nresults; i++) {
+    ant_value_t result = js_arr_get(js, results, i);
+    ant_value_t matched = js_tostring_val(js, js_arr_get(js, result, 0));
+    if (is_err(matched)) { free(buf); return matched; }
+
+    ant_value_t pos_val = js_getprop_fallback(js, result, "index");
+    if (is_err(pos_val)) { free(buf); return pos_val; }
+    if (is_object_type(pos_val) || vtype(pos_val) == kTypeBuiltin) {
+      pos_val = js_to_primitive(js, pos_val, 2);
+      if (is_err(pos_val)) { free(buf); return pos_val; }
+    }
+    if (vtype(pos_val) == kTypeBigInt || vtype(pos_val) == kTypeSymbol) {
+      free(buf);
+      return js_mkerr_typed(
+        js, JS_ERR_TYPE, "Cannot convert a %s value to a number",
+        vtype(pos_val) == kTypeSymbol ? "Symbol" : "BigInt");
+    }
+
+    double position_units = js_to_number(js, pos_val);
+    position_units = isnan(position_units) ? 0 : trunc(position_units);
+    if (position_units < 0) position_units = 0;
+    if (position_units > (double)str_units_len)
+      position_units = (double)str_units_len;
+
+    str_off = vstr(js, units, &str_len);
+    int position_bytes = utf16_index_to_byte_offset(
+      (const char *)(uintptr_t)str_off, (size_t)str_len,
+      (size_t)position_units, NULL
+    );
+    ant_offset_t position = position_bytes < 0
+      ? str_len
+      : (ant_offset_t)position_bytes;
+
+    ant_value_t named_captures = js_getprop_fallback(js, result, "groups");
+    if (is_err(named_captures)) { free(buf); return named_captures; }
+    bool has_named = vtype(named_captures) != kTypeUndefined;
+
+    ant_value_t replacement;
+    if (func_replace) {
+      ant_offset_t ncaptures = js_arr_len(js, result);
+      if (ncaptures > INT_MAX - 3) {
+        free(buf);
+        return js_mkerr(js, "too many regexp captures");
+      }
+      int call_capacity = (int)ncaptures + 3;
+      ant_value_t call_args_inline[REGEXP_INLINE_CAPTURES];
+      ant_value_t *call_args = call_capacity <= REGEXP_INLINE_CAPTURES
+        ? call_args_inline
+        : malloc(sizeof(*call_args) * (size_t)call_capacity);
+      if (!call_args) {
+        free(buf);
+        return js_mkerr(js, "oom");
+      }
+      int ca = 0;
+      for (ant_offset_t c = 0; c < ncaptures; c++)
+        call_args[ca++] = js_arr_get(js, result, c);
+      call_args[ca++] = Ant_Value_FromNumber(position_units);
+      call_args[ca++] = str;
+      if (has_named) call_args[ca++] = named_captures;
+      replacement = sv_vm_call(js->vm, js, replace_value, Ant_Value_Undefined, call_args, ca, NULL, Ant_Value_Undefined);
+      if (call_args != call_args_inline) free(call_args);
+    } else {
+      replacement = replace_str;
+    }
+    if (is_err(replacement)) { free(buf); return replacement; }
+    ant_value_t rep_str = js_tostring_val(js, replacement);
+    if (is_err(rep_str)) { free(buf); return rep_str; }
+
+    if (position >= next_src_pos) {
+      double match_end_units = position_units + (double)str_utf16_len(js, matched);
+      if (match_end_units > (double)str_units_len)
+        match_end_units = (double)str_units_len;
+      str_off = vstr(js, units, &str_len);
+      int match_end_bytes = utf16_index_to_byte_offset(
+        (const char *)(uintptr_t)str_off, (size_t)str_len,
+        (size_t)match_end_units, NULL
+      );
+      ant_offset_t match_end = match_end_bytes < 0 ? str_len : (ant_offset_t)match_end_bytes;
+      if (position > next_src_pos)
+        SB_APPEND((const char *)(uintptr_t)(str_off + next_src_pos), position - next_src_pos);
+      ant_offset_t rep_len, rep_off = vstr(js, rep_str, &rep_len);
+      if (func_replace) {
+        SB_APPEND((const char *)(uintptr_t)(rep_off), rep_len);
+      } else {
+        ant_offset_t ncap = js_arr_len(js, result);
+        int num_caps = ncap > 1 ? (int)(ncap - 1) : 0;
+        repl_capture_t caps_buf[16], *caps = num_caps <= 16 ? caps_buf : malloc(sizeof(repl_capture_t) * (size_t)num_caps);
+        if (num_caps > 16 && !caps) {
+          free(buf);
+          return js_mkerr(js, "oom");
+        }
+        for (int ci = 0; ci < num_caps; ci++) {
+          ant_value_t cap = js_arr_get(js, result, (ant_offset_t)(ci + 1));
+          if (vtype(cap) == kTypeString) { ant_offset_t cl, co = vstr(js, cap, &cl); caps[ci] = (repl_capture_t){ (const char *)(uintptr_t)(co), cl }; }
+          else caps[ci] = (repl_capture_t){ NULL, 0 };
+        }
+        ant_offset_t mlen, moff = vstr(js, matched, &mlen);
+        str_off = vstr(js, units, &str_len);
+        if (has_named && vtype(named_captures) == kTypeNull) {
+          if (caps != caps_buf) free(caps);
+          free(buf);
+          return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp result groups is not an object");
+        }
+        regexp_named_object_ctx_t named_ctx = { js, named_captures, Ant_Value_Undefined };
+        repl_named_t named = { regexp_named_object_capture, &named_ctx };
+        bool ok = repl_template(
+          (const char *)(uintptr_t)(rep_off), rep_len,
+          (const char *)(uintptr_t)(moff), mlen,
+          (const char *)(uintptr_t)(str_off), str_len, position, match_end,
+          caps, num_caps, has_named ? &named : NULL, &buf, &buf_len, &buf_cap
+        );
+        if (caps != caps_buf) free(caps);
+        if (!ok) {
+          free(buf);
+          return is_err(named_ctx.error) ? named_ctx.error : js_mkerr(js, "oom");
+        }
+      }
+      next_src_pos = match_end;
+    }
+  }
+
+  str_off = vstr(js, units, &str_len);
+  if (next_src_pos < str_len)
+    SB_APPEND((const char *)(uintptr_t)(str_off + next_src_pos), str_len - next_src_pos);
+
+#undef SB_APPEND
+
+  ant_value_t ret = js_mkstr(js, buf, buf_len);
+  free(buf);
+  return ret;
 }
 
 ant_value_t regexp_symbol_replace_impl(
@@ -413,155 +589,13 @@ ant_value_t regexp_symbol_replace_impl(
     }
   }
 
-  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
-  ant_offset_t str_units_len = str_utf16_len(js, str);
-  size_t buf_cap = str_len + 256;
-  char *buf = malloc(buf_cap);
-  if (!buf) return js_mkerr(js, "oom");
-  size_t buf_len = 0;
-  ant_offset_t next_src_pos = 0;
-
-#define SB_APPEND(data, dlen) do { \
-  if (buf_len + (dlen) >= buf_cap) { \
-    buf_cap = (buf_len + (dlen) + 1) * 2; \
-    char *nb = realloc(buf, buf_cap); \
-    if (!nb) { free(buf); return js_mkerr(js, "oom"); } \
-    buf = nb; \
-  } \
-  memcpy(buf + buf_len, data, dlen); buf_len += (dlen); \
-} while(0)
-
-  for (ant_offset_t i = 0; i < nresults; i++) {
-    ant_value_t result = js_arr_get(js, results, i);
-    ant_value_t matched = js_tostring_val(js, js_arr_get(js, result, 0));
-    if (is_err(matched)) { free(buf); return matched; }
-
-    ant_value_t pos_val = js_getprop_fallback(js, result, "index");
-    if (is_err(pos_val)) { free(buf); return pos_val; }
-    if (is_object_type(pos_val) || vtype(pos_val) == kTypeBuiltin) {
-      pos_val = js_to_primitive(js, pos_val, 2);
-      if (is_err(pos_val)) { free(buf); return pos_val; }
-    }
-    if (vtype(pos_val) == kTypeBigInt || vtype(pos_val) == kTypeSymbol) {
-      free(buf);
-      return js_mkerr_typed(
-        js, JS_ERR_TYPE, "Cannot convert a %s value to a number",
-        vtype(pos_val) == kTypeSymbol ? "Symbol" : "BigInt");
-    }
-
-    double position_units = js_to_number(js, pos_val);
-    position_units = isnan(position_units) ? 0 : trunc(position_units);
-    if (position_units < 0) position_units = 0;
-    if (position_units > (double)str_units_len)
-      position_units = (double)str_units_len;
-
-    str_off = vstr(js, str, &str_len);
-    int position_bytes = utf16_index_to_byte_offset(
-      (const char *)(uintptr_t)str_off, (size_t)str_len,
-      (size_t)position_units, NULL
-    );
-    ant_offset_t position = position_bytes < 0
-      ? str_len
-      : (ant_offset_t)position_bytes;
-
-    ant_value_t named_captures = js_getprop_fallback(js, result, "groups");
-    if (is_err(named_captures)) { free(buf); return named_captures; }
-    bool has_named = vtype(named_captures) != kTypeUndefined;
-
-    ant_value_t replacement;
-    if (func_replace) {
-      ant_offset_t ncaptures = js_arr_len(js, result);
-      if (ncaptures > INT_MAX - 3) {
-        free(buf);
-        return js_mkerr(js, "too many regexp captures");
-      }
-      int call_capacity = (int)ncaptures + 3;
-      ant_value_t call_args_inline[REGEXP_INLINE_CAPTURES];
-      ant_value_t *call_args = call_capacity <= REGEXP_INLINE_CAPTURES
-        ? call_args_inline
-        : malloc(sizeof(*call_args) * (size_t)call_capacity);
-      if (!call_args) {
-        free(buf);
-        return js_mkerr(js, "oom");
-      }
-      int ca = 0;
-      for (ant_offset_t c = 0; c < ncaptures; c++)
-        call_args[ca++] = js_arr_get(js, result, c);
-      call_args[ca++] = Ant_Value_FromNumber(position_units);
-      call_args[ca++] = str;
-      if (has_named) call_args[ca++] = named_captures;
-      replacement = sv_vm_call(js->vm, js, replace_value, Ant_Value_Undefined, call_args, ca, NULL, Ant_Value_Undefined);
-      if (call_args != call_args_inline) free(call_args);
-    } else {
-      replacement = replace_str;
-    }
-    if (is_err(replacement)) { free(buf); return replacement; }
-    ant_value_t rep_str = js_tostring_val(js, replacement);
-    if (is_err(rep_str)) { free(buf); return rep_str; }
-
-    if (position >= next_src_pos) {
-      str_off = vstr(js, str, &str_len);
-      if (position > next_src_pos)
-        SB_APPEND((const char *)(uintptr_t)(str_off + next_src_pos), position - next_src_pos);
-      ant_offset_t rep_len, rep_off = vstr(js, rep_str, &rep_len);
-      if (func_replace) {
-        SB_APPEND((const char *)(uintptr_t)(rep_off), rep_len);
-      } else {
-        ant_offset_t ncap = js_arr_len(js, result);
-        int num_caps = ncap > 1 ? (int)(ncap - 1) : 0;
-        repl_capture_t caps_buf[16], *caps = num_caps <= 16 ? caps_buf : malloc(sizeof(repl_capture_t) * (size_t)num_caps);
-        if (num_caps > 16 && !caps) {
-          free(buf);
-          return js_mkerr(js, "oom");
-        }
-        for (int ci = 0; ci < num_caps; ci++) {
-          ant_value_t cap = js_arr_get(js, result, (ant_offset_t)(ci + 1));
-          if (vtype(cap) == kTypeString) { ant_offset_t cl, co = vstr(js, cap, &cl); caps[ci] = (repl_capture_t){ (const char *)(uintptr_t)(co), cl }; }
-          else caps[ci] = (repl_capture_t){ NULL, 0 };
-        }
-        ant_offset_t mlen, moff = vstr(js, matched, &mlen);
-        str_off = vstr(js, str, &str_len);
-        if (has_named && vtype(named_captures) == kTypeNull) {
-          if (caps != caps_buf) free(caps);
-          free(buf);
-          return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp result groups is not an object");
-        }
-        regexp_named_object_ctx_t named_ctx = { js, named_captures, Ant_Value_Undefined };
-        repl_named_t named = { regexp_named_object_capture, &named_ctx };
-        bool ok = repl_template(
-          (const char *)(uintptr_t)(rep_off), rep_len,
-          (const char *)(uintptr_t)(moff), mlen,
-          (const char *)(uintptr_t)(str_off), str_len, position,
-          caps, num_caps, has_named ? &named : NULL, &buf, &buf_len, &buf_cap
-        );
-        if (caps != caps_buf) free(caps);
-        if (!ok) {
-          free(buf);
-          return is_err(named_ctx.error) ? named_ctx.error : js_mkerr(js, "oom");
-        }
-      }
-      double match_end_units = position_units + (double)str_utf16_len(js, matched);
-      if (match_end_units > (double)str_units_len)
-        match_end_units = (double)str_units_len;
-      str_off = vstr(js, str, &str_len);
-      int match_end_bytes = utf16_index_to_byte_offset(
-        (const char *)(uintptr_t)str_off, (size_t)str_len,
-        (size_t)match_end_units, NULL
-      );
-      next_src_pos = match_end_bytes < 0
-        ? str_len
-        : (ant_offset_t)match_end_bytes;
-    }
-  }
-
-  str_off = vstr(js, str, &str_len);
-  if (next_src_pos < str_len)
-    SB_APPEND((const char *)(uintptr_t)(str_off + next_src_pos), str_len - next_src_pos);
-
-#undef SB_APPEND
-
-  ant_value_t ret = js_mkstr(js, buf, buf_len);
-  free(buf);
+  regexp_subject_scope_t units_scope;
+  ant_value_t units = regexp_subject_begin(js, &units_scope, 0, str);
+  if (is_err(units)) return units;
+  ant_value_t ret = regexp_replace_accumulate(
+    js, str, units, results, nresults, replace_value, replace_str, func_replace
+  );
+  regexp_subject_end(js, &units_scope);
   return ret;
 }
 

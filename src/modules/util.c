@@ -198,13 +198,17 @@ static ant_value_t util_parse_args(ant_params_t) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "parseArgs(config) requires an options object");
   }
 
+  ant_offset_t arg_start = 0;
   ant_value_t args_list = js_get(js, config, "args");
   if (is_err(args_list)) return args_list;
-  if (vtype(args_list) == kTypeUndefined) {
+  if (is_nullish(args_list)) {
     ant_value_t process_obj = js_get(js, js_glob(js), "process");
     if (is_err(process_obj)) return process_obj;
     args_list = js_get(js, process_obj, "argv");
     if (is_err(args_list)) return args_list;
+
+    // node getMainArgs(): skip [execPath, script]; in -e mode there is no script entry.
+    arg_start = (js->runtime.flags & ANT_RUNTIME_EVAL) ? 1 : 2;
   }
 
   ant_value_t options_obj = js_get(js, config, "options");
@@ -214,11 +218,11 @@ static ant_value_t util_parse_args(ant_params_t) {
   ant_value_t strict_value = js_get(js, config, "strict");
   if (is_err(strict_value)) return strict_value;
 
-  bool strict = is_undefined(strict_value) || js_truthy(js, strict_value);
+  bool strict = is_nullish(strict_value) || js_truthy(js, strict_value);
   ant_value_t allow_positionals_value = js_get(js, config, "allowPositionals");
 
   if (is_err(allow_positionals_value)) return allow_positionals_value;
-  bool allow_positionals = js_truthy(js, allow_positionals_value);
+  bool allow_positionals = is_nullish(allow_positionals_value) ? !strict : js_truthy(js, allow_positionals_value);
 
   size_t option_count = 0; {
     ant_iter_t iter = js_prop_iter_begin(js, options_obj);
@@ -297,7 +301,7 @@ option_error:
   ant_offset_t arg_len = js_arr_len(js, args_list);
   bool stop_parsing = false;
 
-  for (ant_offset_t i = 0; i < arg_len; i++) {
+  for (ant_offset_t i = arg_start; i < arg_len; i++) {
     ant_value_t arg_val = js_arr_get(js, args_list, i);
     if (vtype(arg_val) != kTypeString) continue;
     

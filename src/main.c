@@ -232,6 +232,7 @@ static int run_runtime(const ant_cli_t *cli, run_plan_t *plan, bool crash_report
   ant_runtime_init(js, proc.argc, proc.argv, cli->localstorage_file);
 
   if (cli->web_compat) js->runtime.flags |= ANT_RUNTIME_WEB_COMPAT;
+  if (plan->mode == RUN_EVAL) js->runtime.flags |= ANT_RUNTIME_EVAL;
   if (cli->location) js->runtime.location = cli->location;
 #ifdef ANT_HAVE_SANDBOX
   if (plan->mode == RUN_SANDBOX) ant_cli_daemon_terminal(js, &plan->sandbox);

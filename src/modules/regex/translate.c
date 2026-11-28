@@ -203,6 +203,24 @@ static uint8_t regexp_legacy_class_extras(const char *src, size_t src_len, size_
   return (uint8_t)(partners & ~present);
 }
 
+// Rewrites a pattern character PCRE2 cannot take as is: a lone surrogate, which
+// is not valid UTF-8, and, when the RegExp matches code units, a supplementary
+// character, which then stands for its two surrogate halves. Returns the bytes
+// consumed, or 0 to copy the character unchanged.
+static size_t regexp_pattern_char_escape(const char *src, size_t src_len, size_t at, bool code_units, char out[24]) {
+  const unsigned char *s = (const unsigned char *)src;
+  uint32_t cp;
+  if (code_units && utf8_supplementary_at(s, src_len, at, &cp)) {
+    snprintf(out, 24, "\\x{%x}\\x{%x}", 0xD800 + ((cp - 0x10000) >> 10), 0xDC00 + ((cp - 0x10000) & 0x3FF));
+    return 4;
+  }
+  if (s[at] == 0xED && src_len - at >= 3 && (s[at + 1] & 0xE0) == 0xA0 && (s[at + 2] & 0xC0) == 0x80) {
+    snprintf(out, 24, "\\x{%x}", 0xD000 | ((uint32_t)(s[at + 1] & 0x3F) << 6) | (uint32_t)(s[at + 2] & 0x3F));
+    return 3;
+  }
+  return 0;
+}
+
 static size_t regexp_group_name_end(const char *src, size_t src_len, size_t open) {
   size_t end = open;
   while (end < src_len && src[end] != '>') end++;
@@ -345,6 +363,7 @@ static void js_to_pcre2_pattern_append(
   bool v_flag,
   uint8_t flags
 ) {
+  bool code_units = regexp_matches_code_units(flags);
   bool unicode_ignore_case = (flags & REGEXP_FLAG_IGNORE_CASE) && (flags & (REGEXP_FLAG_UNICODE | REGEXP_FLAG_UNICODE_SET));
   bool legacy_ignore_case = (flags & REGEXP_FLAG_IGNORE_CASE) && !(flags & (REGEXP_FLAG_UNICODE | REGEXP_FLAG_UNICODE_SET));
   size_t legacy_class_close = 0;
@@ -465,10 +484,7 @@ static void js_to_pcre2_pattern_append(
       continue;
     }
 
-    if (src[si] != '\\' || si + 1 >= src_len) {
-      OUT(src[si]);
-      continue;
-    }
+    if (src[si] != '\\' || si + 1 >= src_len) goto plain_char;
 
     char next = src[si + 1];
 
@@ -478,7 +494,7 @@ static void js_to_pcre2_pattern_append(
       continue;
     }
 
-    if (next == 'u' && si + 2 < src_len && src[si + 2] == '{') {
+    if (next == 'u' && !code_units && si + 2 < src_len && src[si + 2] == '{') {
       size_t brace_start = si + 3;
       size_t brace_end = brace_start;
       while (brace_end < src_len && src[brace_end] != '}' && ant_ascii_is_xdigit(src[brace_end])) brace_end++;
@@ -494,6 +510,18 @@ static void js_to_pcre2_pattern_append(
     if (next == 'u' && si + 5 < src_len &&
         ant_ascii_is_xdigit(src[si+2]) && ant_ascii_is_xdigit(src[si+3]) &&
         ant_ascii_is_xdigit(src[si+4]) && ant_ascii_is_xdigit(src[si+5])) {
+      uint32_t lead, trail;
+      if (
+        !code_units && regexp_hex_value(src, src_len, si + 2, 4, &lead) && lead >= 0xD800 && lead <= 0xDBFF &&
+        si + 7 < src_len && src[si + 6] == '\\' && src[si + 7] == 'u' &&
+        regexp_hex_value(src, src_len, si + 8, 4, &trail) && trail >= 0xDC00 && trail <= 0xDFFF
+      ) {
+        char escaped[16];
+        snprintf(escaped, sizeof(escaped), "\\x{%x}", 0x10000 + ((lead - 0xD800) << 10) + (trail - 0xDC00));
+        OUTS(escaped);
+        si += 11;
+        continue;
+      }
       OUT('\\'); OUT('x'); OUT('{');
       OUT(src[si+2]); OUT(src[si+3]); OUT(src[si+4]); OUT(src[si+5]);
       OUT('}');
@@ -778,7 +806,16 @@ static void js_to_pcre2_pattern_append(
     }
 
     si++;
-    OUT(next);
+  plain_char: {
+      char escaped[24];
+      size_t consumed = regexp_pattern_char_escape(src, src_len, si, code_units, escaped);
+      if (consumed) {
+        OUTS(escaped);
+        si += consumed - 1;
+        continue;
+      }
+    }
+    OUT(src[si]);
     next_char:;
   }
 
@@ -839,10 +876,4 @@ js_cstr_t regexp_translate_cstr(
   result.len = translated;
   result.needs_free = true;
   return result;
-}
-
-js_cstr_t js_to_pcre2_pattern_cstr(
-  const char *src, size_t src_len, char *stack_buf, size_t stack_size, uint8_t flags
-) {
-  return regexp_translate_cstr(src, src_len, stack_buf, stack_size, flags, false, NULL);
 }
