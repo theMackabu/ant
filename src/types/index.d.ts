@@ -1,5 +1,6 @@
 /// <reference path="ant.d.ts" />
 /// <reference path="buffer.d.ts" />
+/// <reference path="eventsource.d.ts" />
 /// <reference path="fetch.d.ts" />
 /// <reference path="process.d.ts" />
 /// <reference path="import.d.ts" />

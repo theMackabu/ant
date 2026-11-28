@@ -187,12 +187,13 @@ static ant_value_t js_cs_ctor(ant_params_t) {
   if (parse_format(js, args[0], &fmt) < 0)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'CompressionStream': Unsupported compression format");
 
-  zstate_t *st = calloc(1, sizeof(zstate_t));
+  zstate_t *st = NULL;
   brotli_stream_state_t *brotli = NULL;
   if (fmt == ZFMT_BROTLI) {
     brotli = brotli_stream_state_new(false);
     if (!brotli) return js_mkerr(js, "Failed to initialize compression");
   } else {
+    st = calloc(1, sizeof(zstate_t));
     if (!st) return Ant_Error_CreateOutOfMemory(js);
     st->format = fmt;
     int ret = deflateInit2(&st->strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
@@ -309,12 +310,13 @@ static ant_value_t js_ds_ctor(ant_params_t) {
   if (parse_format(js, args[0], &fmt) < 0)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'DecompressionStream': Unsupported compression format");
 
-  zstate_t *st = calloc(1, sizeof(zstate_t));
+  zstate_t *st = NULL;
   brotli_stream_state_t *brotli = NULL;
   if (fmt == ZFMT_BROTLI) {
     brotli = brotli_stream_state_new(true);
     if (!brotli) return js_mkerr(js, "Failed to initialize decompression");
   } else {
+    st = calloc(1, sizeof(zstate_t));
     if (!st) return Ant_Error_CreateOutOfMemory(js);
     st->format = fmt;
     int ret = inflateInit2(&st->strm, zfmt_window_bits(fmt, true));

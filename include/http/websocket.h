@@ -48,7 +48,7 @@ void ant_ws_unmask(uint8_t *data, size_t len, const uint8_t mask[4]);
 ant_ws_frame_result_t ant_ws_parse_frame(
   uint8_t *data,
   size_t len,
-  bool require_mask,
+  bool expect_mask,
   bool allow_rsv1,
   bool inplace,
   size_t max_payload,

@@ -36,16 +36,17 @@ struct eventsource_state_s {
   uint64_t network_request_id;
   size_t network_encoded_length;
   ant_sse_parser_t parser;
+  size_t max_event_size;
   char *url;
   char *last_event_id;
   eventsource_state_t *next;
   eventsource_state_t **pprev;
   uint32_t retry_ms;
   uint8_t ready_state;
-  bool with_credentials : 1;
-  bool closed : 1;
-  bool opened_request : 1;
-  bool error_emitted_for_request : 1;
+  bool with_credentials: 1;
+  bool closed: 1;
+  bool opened_request: 1;
+  bool error_emitted_for_request: 1;
 };
 
 static constexpr uint32_t ES_NATIVE_TAG = Ant_NativeTag("EVSR");
@@ -261,9 +262,10 @@ static void eventsource_http_on_complete(
     if (result != ANT_HTTP_RESULT_ABORTED) eventsource_emit_error_once(js, es);
     es->error_emitted_for_request = false;
     ant_sse_parser_free(&es->parser);
-    ant_sse_parser_init(&es->parser);
+    ant_sse_parser_init(&es->parser, es->max_event_size);
     eventsource_schedule_reconnect(js, es);
   }
+  
   eventsource_maybe_unroot(es);
 }
 
@@ -392,6 +394,19 @@ static ant_value_t js_eventsource_ctor(ant_params_t) {
   if (nargs > 1 && is_object_type(args[1])) {
     ant_value_t with_credentials = js_get(js, args[1], "withCredentials");
     if (vtype(with_credentials) != kTypeUndefined) es->with_credentials = js_truthy(js, with_credentials);
+
+    ant_value_t max_event_size = js_get(js, args[1], "maxEventSize");
+    if (vtype(max_event_size) != kTypeUndefined) {
+      double size = vtype(max_event_size) == kTypeNumber ? Ant_Value_AsNumberUnchecked(max_event_size) : 0;
+      if (!(size >= 1)) {
+        free(es->url);
+        free(es->last_event_id);
+        free(es);
+        return js_mkerr_typed(js, JS_ERR_RANGE, "Failed to construct 'EventSource': maxEventSize must be a positive number");
+      }
+      
+      if (size < (double)ANT_SSE_DEFAULT_MAX_EVENT_SIZE) es->max_event_size = (size_t)size;
+    }
   }
   
   if (!es->url || !es->last_event_id) {
@@ -401,7 +416,7 @@ static ant_value_t js_eventsource_ctor(ant_params_t) {
     return Ant_Error_CreateOutOfMemory(js);
   }
 
-  ant_sse_parser_init(&es->parser);
+  ant_sse_parser_init(&es->parser, es->max_event_size);
   js_set_native(obj, es, ES_NATIVE_TAG);
   js_set(js, obj, "url", url_val);
   js_set(js, obj, "withCredentials", Ant_Value_FromBool(es->with_credentials));

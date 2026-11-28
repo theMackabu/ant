@@ -12,11 +12,16 @@ typedef struct {
   bool has_retry;
 } ant_sse_message_t;
 
+static constexpr size_t ANT_SSE_DEFAULT_MAX_EVENT_SIZE = 536870888;
+
 typedef struct {
   char *line;
   size_t line_len;
   size_t line_cap;
+  size_t max_event_size;
   char *data;
+  size_t data_len;
+  size_t data_cap;
   char *event;
   char *id;
   char *last_event_id;
@@ -30,7 +35,7 @@ typedef bool (*ant_sse_message_cb)(
 );
 
 void ant_sse_message_clear(ant_sse_message_t *message);
-void ant_sse_parser_init(ant_sse_parser_t *parser);
+void ant_sse_parser_init(ant_sse_parser_t *parser, size_t max_event_size);
 void ant_sse_parser_free(ant_sse_parser_t *parser);
 
 char *ant_sse_format_comment(

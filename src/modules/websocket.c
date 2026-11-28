@@ -12,6 +12,7 @@
 
 #include "ant.h"
 #include "cfunc.h"
+#include "utf8.h"
 #include "ptr.h"
 #include "list.h"
 #include "loop.h"
@@ -21,13 +22,14 @@
 #include "internal.h"
 #include "descriptors.h"
 
+#include "net/listener.h"
 #include "http/websocket.h"
+
+#include "modules/url.h"
 #include "modules/blob.h"
 #include "modules/buffer.h"
 #include "modules/events.h"
 #include "modules/websocket.h"
-#include "modules/url.h"
-#include "net/listener.h"
 
 struct websocket_state_s {
   ant_value_t obj;
@@ -41,16 +43,22 @@ struct websocket_state_s {
   uint8_t *fragment_buf;
   size_t fragment_len;
   size_t fragment_cap;
+  uint8_t *read_buf;
+  size_t read_len;
+  size_t read_cap;
   size_t max_payload_len;
   z_stream deflate_strm;
   z_stream inflate_strm;
   ant_ws_opcode_t fragment_opcode;
-  uint16_t client_close_code;
+  uint16_t close_code;
   uint8_t ready_state;
+  char close_reason[124];
   bool is_client: 1;
   bool close_emitted: 1;
+  bool close_sent: 1;
+  bool close_received: 1;
+  bool read_stopped: 1;
   bool client_close_started: 1;
-  bool client_close_was_clean: 1;
   bool fragmenting: 1;
   bool fragment_compressed: 1;
   bool per_message_deflate: 1;
@@ -71,6 +79,7 @@ enum {
 
 static constexpr uint32_t WS_NATIVE_TAG = Ant_NativeTag("WSOB");
 static constexpr uint32_t WS_DEFAULT_MAX_PAYLOAD_LEN = 16u * 1024u * 1024u;
+static constexpr uint32_t WS_CLIENT_MAX_PAYLOAD_LEN = UINT32_MAX;
 
 static websocket_state_t *websocket_data(ant_value_t value) {
   return (websocket_state_t *)js_get_native(value, WS_NATIVE_TAG);
@@ -96,30 +105,34 @@ static void websocket_fragment_clear(websocket_state_t *ws) {
   ws->fragment_cap = 0;
 }
 
-static bool websocket_fragment_append(websocket_state_t *ws, const uint8_t *data, size_t len) {
-  if (!ws) return false;
-  if (len > SIZE_MAX - ws->fragment_len) return false;
-  size_t need = ws->fragment_len + len;
-  if (need > ws->fragment_cap) {
-    size_t cap = ws->fragment_cap ? ws->fragment_cap : 1024;
+static bool websocket_buf_append(uint8_t **buf, size_t *buf_len, size_t *buf_cap, const uint8_t *data, size_t len) {
+  if (len > SIZE_MAX - *buf_len) return false;
+  size_t need = *buf_len + len;
+  if (need > *buf_cap) {
+    size_t cap = *buf_cap ? *buf_cap : 1024;
     while (cap < need) {
       if (cap > SIZE_MAX / 2) { cap = need; break; }
       cap *= 2;
     }
-    uint8_t *next = realloc(ws->fragment_buf, cap);
+    uint8_t *next = realloc(*buf, cap);
     if (!next) return false;
-    ws->fragment_buf = next;
-    ws->fragment_cap = cap;
+    *buf = next;
+    *buf_cap = cap;
   }
-  if (len > 0) memcpy(ws->fragment_buf + ws->fragment_len, data, len);
-  ws->fragment_len = need;
+  if (len > 0) memcpy(*buf + *buf_len, data, len);
+  *buf_len = need;
   return true;
+}
+
+static bool websocket_fragment_append(websocket_state_t *ws, const uint8_t *data, size_t len) {
+  return websocket_buf_append(&ws->fragment_buf, &ws->fragment_len, &ws->fragment_cap, data, len);
 }
 
 static void websocket_free_state(websocket_state_t *ws) {
   if (!ws) return;
   Ant_List_Remove(ws);
   websocket_fragment_clear(ws);
+  free(ws->read_buf);
   if (ws->deflate_ready) deflateEnd(&ws->deflate_strm);
   if (ws->inflate_ready) inflateEnd(&ws->inflate_strm);
   free(ws);
@@ -329,15 +342,22 @@ static void websocket_emit_close(ant_t *js, websocket_state_t *ws, uint16_t code
 static void websocket_client_close_cb(uv_handle_t *handle) {
   ant_t *js = Ant_Loop_Isolate(handle->loop);
   websocket_state_t *ws = websocket_from_client((tlsuv_websocket_t *)handle);
-  websocket_emit_close(js, ws, ws->client_close_code, "", ws->client_close_was_clean);
+  
+  if (ws->close_received) websocket_emit_close(js, ws, ws->close_code, ws->close_reason, ws->close_sent);
+  else if (!ws->close_emitted) {
+    ws->ready_state = WS_CLOSED;
+    websocket_sync_state(js, ws);
+    websocket_emit_simple(js, ws, WS_HANDLER_ERROR);
+    websocket_emit_close(js, ws, 1006, "", false);
+  }
+  
   Ant_List_Remove(ws);
 }
 
-static void websocket_close_client(websocket_state_t *ws, uint16_t code, bool was_clean) {
+static void websocket_close_client(websocket_state_t *ws) {
   if (!ws || ws->client_close_started) return;
   ws->client_close_started = true;
-  ws->client_close_code = code;
-  ws->client_close_was_clean = was_clean;
+  ws->read_stopped = true;
   tlsuv_websocket_close(&ws->client, websocket_client_close_cb);
 }
 
@@ -359,35 +379,8 @@ static void websocket_client_connect_cb(uv_connect_t *req, int status) {
     return;
   }
 
-  ws->ready_state = WS_CLOSED;
   ant_inspector_websocket_error(ws->inspector_request_id, uv_strerror(status));
-  
-  websocket_sync_state(js, ws);
-  websocket_emit_simple(js, ws, WS_HANDLER_ERROR);
-  websocket_close_client(ws, 1006, false);
-}
-
-static void websocket_client_read_cb(uv_stream_t *handle, ssize_t nread, const uv_buf_t *buf) {
-  ant_t *js = Ant_Loop_Isolate(handle->loop);
-  websocket_state_t *ws = websocket_from_client((tlsuv_websocket_t *)handle);
-  if (!ws) return;
-
-  if (nread > 0) {
-    bool binary = ws->client.last_frame_binary;
-    ant_inspector_websocket_frame_received(ws->inspector_request_id, (const uint8_t *)buf->base, (size_t)nread, binary);
-    websocket_emit_message(js, ws, (const uint8_t *)buf->base, (size_t)nread, binary);
-    return;
-  }
-
-  if (nread < 0) {
-    if (nread != UV_EOF) {
-      ant_inspector_websocket_error(ws->inspector_request_id, uv_strerror((int)nread));
-      websocket_emit_simple(js, ws, WS_HANDLER_ERROR);
-    }
-    ws->ready_state = WS_CLOSING;
-    websocket_sync_state(js, ws);
-    websocket_close_client(ws, nread == UV_EOF ? 1000 : 1006, nread == UV_EOF);
-  }
+  websocket_close_client(ws);
 }
 
 static void websocket_write_cb(uv_write_t *req, int status) {
@@ -395,7 +388,16 @@ static void websocket_write_cb(uv_write_t *req, int status) {
   free(req);
 }
 
-static int websocket_client_write_frame(websocket_state_t *ws, ant_ws_opcode_t opcode, const uint8_t *bytes, size_t len) {
+static void websocket_close_write_cb(uv_write_t *req, int status) {
+  websocket_state_t *ws = websocket_from_client((tlsuv_websocket_t *)req->handle->data);
+  websocket_write_cb(req, status);
+  websocket_close_client(ws);
+}
+
+static int websocket_client_write_frame(
+  websocket_state_t *ws, ant_ws_opcode_t opcode,
+  const uint8_t *bytes, size_t len, uv_write_cb cb
+) {
   if (!ws || !ws->client.tr || !ws->client.tr_write) return UV_ENOTCONN;
 
   size_t frame_len = 0;
@@ -410,7 +412,7 @@ static int websocket_client_write_frame(websocket_state_t *ws, ant_ws_opcode_t o
 
   wr->data = frame;
   uv_buf_t buf = uv_buf_init((char *)frame, (unsigned int)frame_len);
-  int rc = ws->client.tr_write(wr, ws->client.tr, &buf, 1, websocket_write_cb);
+  int rc = ws->client.tr_write(wr, ws->client.tr, &buf, 1, cb);
   if (rc != 0) {
     free(frame);
     free(wr);
@@ -419,11 +421,234 @@ static int websocket_client_write_frame(websocket_state_t *ws, ant_ws_opcode_t o
   return rc;
 }
 
+static void websocket_client_send_close(websocket_state_t *ws, const uint8_t *payload, size_t len, bool then_close) {
+  int rc = websocket_client_write_frame(
+    ws, ANT_WS_OPCODE_CLOSE, payload, len,
+    then_close ? websocket_close_write_cb : websocket_write_cb
+  );
+  if (rc == 0) ws->close_sent = true;
+  else websocket_close_client(ws);
+}
+
 static void websocket_server_close_with_code(websocket_state_t *ws, ant_conn_t *conn, uint16_t code, const char *reason) {
   size_t frame_len = 0;
   uint8_t *frame = ant_ws_encode_close_frame(code, reason, false, &frame_len);
   if (frame && conn && !ant_conn_is_closing(conn)) ant_conn_write(conn, (char *)frame, frame_len, NULL, NULL);
   if (conn) ant_conn_shutdown(conn);
+}
+
+static void websocket_send_control(websocket_state_t *ws, ant_ws_opcode_t opcode, const uint8_t *payload, size_t len) {
+  if (ws->is_client) {
+    websocket_client_write_frame(ws, opcode, payload, len, websocket_write_cb);
+    return;
+  }
+
+  ant_conn_t *conn = ws->server_conn;
+  if (!conn || ant_conn_is_closing(conn)) return;
+  
+  size_t out_len = 0;
+  uint8_t *out = ant_ws_encode_frame(opcode, payload, len, false, false, &out_len);
+  if (out && ant_conn_write(conn, (char *)out, out_len, NULL, NULL) != 0) free(out);
+}
+
+static bool websocket_fail(ant_t *js, websocket_state_t *ws, uint16_t code, const char *reason) {
+  websocket_fragment_clear(ws);
+  ws->read_stopped = true;
+
+  if (ws->is_client) {
+    uint8_t payload[2] = { (uint8_t)(code >> 8), (uint8_t)(code & 0xffu) };
+    ws->ready_state = WS_CLOSING;
+    websocket_sync_state(js, ws);
+    websocket_client_send_close(ws, payload, sizeof(payload), true);
+    return false;
+  }
+
+  ant_conn_t *conn = ws->server_conn;
+  if (code != 1002) websocket_server_close_with_code(ws, conn, code, reason);
+  else {
+    websocket_emit_simple(js, ws, WS_HANDLER_ERROR);
+    if (conn) ant_conn_close(conn);
+  }
+  
+  return false;
+}
+
+static bool websocket_fail_parse(ant_t *js, websocket_state_t *ws, ant_ws_frame_result_t result) {
+  if (result == ANT_WS_FRAME_TOO_BIG) return websocket_fail(js, ws, 1009, "Message Too Big");
+  return websocket_fail(js, ws, 1002, "Protocol Error");
+}
+
+static ant_ws_frame_result_t websocket_parse_frame(websocket_state_t *ws, uint8_t *data, size_t len, ant_ws_frame_t *frame) {
+  size_t budget = ws->max_payload_len;
+  if (ws->fragmenting && len > 0 && (data[0] & 0x0fu) == ANT_WS_OPCODE_CONTINUATION)
+    budget = ws->fragment_len < budget ? budget - ws->fragment_len : 0;
+  return ant_ws_parse_frame(data, len, !ws->is_client, ws->per_message_deflate, true, budget, frame);
+}
+
+static bool websocket_deliver_message(
+  ant_t *js, websocket_state_t *ws,
+  const uint8_t *data, size_t len, ant_ws_opcode_t opcode, bool compressed
+) {
+  bool binary = opcode == ANT_WS_OPCODE_BINARY;
+  uint8_t *inflated = NULL;
+
+  if (compressed) {
+    size_t inflated_len = 0;
+    if (!websocket_inflate_message(ws, data, len, ws->max_payload_len, &inflated, &inflated_len))
+      return websocket_fail(js, ws, 1002, "Protocol Error");
+    data = inflated;
+    len = inflated_len;
+  }
+
+  if (!binary && !utf8_validate_bytes((const char *)data, len)) {
+    free(inflated);
+    return websocket_fail(js, ws, 1007, "Invalid frame payload data");
+  }
+
+  if (!ws->is_client) websocket_emit_message(js, ws, data, len, binary);
+  else if (ws->ready_state == WS_OPEN) {
+    ant_inspector_websocket_frame_received(ws->inspector_request_id, data, len, binary);
+    websocket_emit_message(js, ws, data, len, binary);
+  }
+
+  free(inflated);
+  return !ws->read_stopped;
+}
+
+static bool websocket_close_code_valid(uint16_t code) {
+  if (code >= 1000 && code <= 1014) return code != 1004 && code != 1005 && code != 1006;
+  return code >= 3000 && code <= 4999;
+}
+
+static bool websocket_handle_close(ant_t *js, websocket_state_t *ws, const ant_ws_frame_t *frame) {
+  uint16_t code = ws->is_client ? 1005 : 1000;
+  size_t reason_len = 0;
+
+  if (frame->payload_len == 1) return websocket_fail(js, ws, 1002, "Protocol Error");
+  if (frame->payload_len >= 2) {
+    code = (uint16_t)(((uint16_t)frame->payload[0] << 8) | frame->payload[1]);
+    reason_len = frame->payload_len - 2;
+    if (!websocket_close_code_valid(code)) return websocket_fail(js, ws, 1002, "Protocol Error");
+    if (reason_len >= sizeof(ws->close_reason)) return websocket_fail(js, ws, 1002, "Protocol Error");
+    if (!utf8_validate_bytes((const char *)frame->payload + 2, reason_len))
+      return websocket_fail(js, ws, 1007, "Invalid frame payload data");
+  }
+
+  if (reason_len > 0) memcpy(ws->close_reason, frame->payload + 2, reason_len);
+  ws->close_reason[reason_len] = '\0';
+  ws->close_code = code;
+  ws->close_received = true;
+  ws->read_stopped = true;
+
+  if (ws->is_client) {
+    ws->ready_state = WS_CLOSING;
+    websocket_sync_state(js, ws);
+    if (ws->close_sent) websocket_close_client(ws);
+    else websocket_client_send_close(ws, frame->payload, frame->payload_len >= 2 ? 2 : 0, true);
+    return false;
+  }
+
+  ant_conn_t *conn = ws->server_conn;
+  websocket_send_control(ws, ANT_WS_OPCODE_CLOSE, frame->payload, frame->payload_len);
+  websocket_emit_close(js, ws, code, ws->close_reason, true);
+  if (conn) ant_conn_shutdown(conn);
+  
+  return false;
+}
+
+static bool websocket_handle_frame(ant_t *js, websocket_state_t *ws, const ant_ws_frame_t *frame) {
+  switch (frame->opcode) {
+    case ANT_WS_OPCODE_TEXT:
+    case ANT_WS_OPCODE_BINARY:
+      if (ws->fragmenting) return websocket_fail(js, ws, 1002, "Protocol Error");
+      if (frame->fin) return websocket_deliver_message(js, ws, frame->payload, frame->payload_len, frame->opcode, frame->rsv1);
+      ws->fragmenting = true;
+      ws->fragment_opcode = frame->opcode;
+      ws->fragment_compressed = frame->rsv1;
+      if (!websocket_fragment_append(ws, frame->payload, frame->payload_len)) return websocket_fail(js, ws, 1009, "Message Too Big");
+      return true;
+
+    case ANT_WS_OPCODE_CONTINUATION: {
+      if (!ws->fragmenting || frame->rsv1) return websocket_fail(js, ws, 1002, "Protocol Error");
+      if (!websocket_fragment_append(ws, frame->payload, frame->payload_len)) return websocket_fail(js, ws, 1009, "Message Too Big");
+      if (!frame->fin) return true;
+      bool more = websocket_deliver_message(js, ws, ws->fragment_buf, ws->fragment_len, ws->fragment_opcode, ws->fragment_compressed);
+      websocket_fragment_reset(ws);
+      return more;
+    }
+
+    case ANT_WS_OPCODE_PING:
+      websocket_send_control(ws, ANT_WS_OPCODE_PONG, frame->payload, frame->payload_len);
+      return true;
+
+    case ANT_WS_OPCODE_CLOSE:
+      return websocket_handle_close(js, ws, frame);
+
+    default:
+      return true;
+  }
+}
+
+static size_t websocket_client_feed(ant_t *js, websocket_state_t *ws, uint8_t *data, size_t len) {
+  size_t used = 0;
+  
+  while (used < len && !ws->read_stopped) {
+    ant_ws_frame_t frame = {0};
+    ant_ws_frame_result_t result = websocket_parse_frame(ws, data + used, len - used, &frame);
+    if (result == ANT_WS_FRAME_INCOMPLETE) break;
+    if (result != ANT_WS_FRAME_OK) {
+      websocket_fail_parse(js, ws, result);
+      break;
+    }
+    used += frame.consumed_len;
+    if (!websocket_handle_frame(js, ws, &frame)) break;
+  }
+  
+  return used;
+}
+
+static void websocket_client_read_cb(uv_stream_t *handle, ssize_t nread, const uv_buf_t *buf) {
+  ant_t *js = Ant_Loop_Isolate(handle->loop);
+  websocket_state_t *ws = websocket_from_client((tlsuv_websocket_t *)handle);
+  if (!ws) return;
+
+  if (nread < 0) {
+    if (nread != UV_EOF) ant_inspector_websocket_error(ws->inspector_request_id, uv_strerror((int)nread));
+    ws->ready_state = WS_CLOSING;
+    websocket_sync_state(js, ws);
+    websocket_close_client(ws);
+    return;
+  }
+
+  if (ws->read_stopped || nread == 0) return;
+  
+  uint8_t *data = (uint8_t *)buf->base;
+  size_t len = (size_t)nread;
+  bool buffered = ws->read_len > 0;
+
+  if (buffered) {
+    if (!websocket_buf_append(&ws->read_buf, &ws->read_len, &ws->read_cap, data, len)) goto oom;
+    data = ws->read_buf;
+    len = ws->read_len;
+  }
+
+  size_t used = websocket_client_feed(js, ws, data, len);
+  if (ws->read_stopped) {
+    ws->read_len = 0;
+    return;
+  }
+
+  if (!buffered) {
+    if (used < len && !websocket_buf_append(&ws->read_buf, &ws->read_len, &ws->read_cap, data + used, len - used)) goto oom;
+    return;
+  }
+
+  if (used > 0) memmove(ws->read_buf, ws->read_buf + used, len - used);
+  ws->read_len = len - used;
+  return;
+
+oom:
+  websocket_fail(js, ws, 1009, "Message Too Big");
 }
 
 static void websocket_finalize(ant_t *js, ant_object_t *obj) {
@@ -520,6 +745,7 @@ static ant_value_t js_websocket_ctor(ant_params_t) {
   if (!ws) return Ant_Error_CreateOutOfMemory(js);
   
   ws->is_client = true;
+  ws->max_payload_len = WS_CLIENT_MAX_PAYLOAD_LEN;
   js_set_native(obj, ws, WS_NATIVE_TAG);
   js_set(js, obj, "url", url_val);
   websocket_sync_state(js, ws);
@@ -541,12 +767,8 @@ static ant_value_t js_websocket_ctor(ant_params_t) {
   );
   
   if (rc != 0) {
-    ws->ready_state = WS_CLOSED;
     ant_inspector_websocket_error(ws->inspector_request_id, uv_strerror(rc));
-    
-    websocket_sync_state(js, ws);
-    websocket_emit_simple(js, ws, WS_HANDLER_ERROR);
-    websocket_close_client(ws, 1006, false);
+    websocket_close_client(ws);
   }
 
   return obj;
@@ -601,7 +823,7 @@ static ant_value_t js_websocket_send(ant_params_t) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WebSocket message");
 
   if (ws->is_client) {
-    int rc = websocket_client_write_frame(ws, binary ? ANT_WS_OPCODE_BINARY : ANT_WS_OPCODE_TEXT, bytes, len);
+    int rc = websocket_client_write_frame(ws, binary ? ANT_WS_OPCODE_BINARY : ANT_WS_OPCODE_TEXT, bytes, len, websocket_write_cb);
     if (rc != 0) return js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));
     ant_inspector_websocket_frame_sent(ws->inspector_request_id, bytes, len, binary);
     return Ant_Value_Undefined;
@@ -637,7 +859,8 @@ static ant_value_t js_websocket_send(ant_params_t) {
 
 static ant_value_t js_websocket_close(ant_params_t) {
   websocket_state_t *ws = websocket_data(call_this);
-  uint16_t code = nargs > 0 && vtype(args[0]) == kTypeNumber ? (uint16_t)Ant_Value_AsNumberUnchecked(args[0]) : 1000;
+  bool has_code = nargs > 0 && vtype(args[0]) == kTypeNumber;
+  uint16_t code = has_code ? (uint16_t)Ant_Value_AsNumberUnchecked(args[0]) : 1000;
   const char *reason = NULL;
 
   if (!ws) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WebSocket");
@@ -648,10 +871,23 @@ static ant_value_t js_websocket_close(ant_params_t) {
     reason = js_getstr(js, reason_val, NULL);
   }
 
+  bool connecting = ws->ready_state == WS_CONNECTING;
   ws->ready_state = WS_CLOSING;
   websocket_sync_state(js, ws);
-  if (ws->is_client) {
-    websocket_close_client(ws, 1000, true);
+  
+  if (ws->is_client && connecting) websocket_close_client(ws);
+  else if (ws->is_client) {
+    uint8_t payload[125];
+    size_t len = 0;
+    if (has_code || reason) {
+      size_t reason_len = reason ? strlen(reason) : 0;
+      if (reason_len > sizeof(payload) - 2) reason_len = sizeof(payload) - 2;
+      payload[0] = (uint8_t)(code >> 8);
+      payload[1] = (uint8_t)(code & 0xffu);
+      if (reason_len > 0) memcpy(payload + 2, reason, reason_len);
+      len = 2 + reason_len;
+    }
+    websocket_client_send_close(ws, payload, len, false);
   } else if (ws->server_conn) {
     size_t frame_len = 0;
     uint8_t *frame = ant_ws_encode_close_frame(code, reason, false, &frame_len);
@@ -766,125 +1002,28 @@ void ant_websocket_server_open(ant_t *js, ant_value_t socket_obj) {
 }
 
 void ant_websocket_server_on_read(ant_t *js, ant_value_t socket_obj, ant_conn_t *conn) {
-  static const void *dispatch[] = {
-    [ANT_WS_OPCODE_CONTINUATION] = &&l_continuation,
-    [ANT_WS_OPCODE_TEXT]         = &&l_message,
-    [ANT_WS_OPCODE_BINARY]       = &&l_message,
-    [ANT_WS_OPCODE_CLOSE]        = &&l_close,
-    [ANT_WS_OPCODE_PING]         = &&l_ping,
-  };
-
   websocket_state_t *ws = websocket_data(socket_obj);
   if (!ws || !conn) return;
 
   while (ant_conn_buffer_len(conn) > 0) {
+    if (ws->read_stopped) {
+      ant_conn_consume(conn, ant_conn_buffer_len(conn));
+      return;
+    }
+
     ant_ws_frame_t frame = {0};
-    
-    size_t budget = ws->fragmenting ? ws->max_payload_len - ws->fragment_len : ws->max_payload_len;
-    ant_ws_frame_result_t result = ant_ws_parse_frame(
-      (uint8_t *)(uintptr_t)ant_conn_buffer(conn),
-      ant_conn_buffer_len(conn), true,
-      ws->per_message_deflate, true, budget, &frame
+    ant_ws_frame_result_t result = websocket_parse_frame(
+      ws, (uint8_t *)(uintptr_t)ant_conn_buffer(conn), ant_conn_buffer_len(conn), &frame
     );
     
     if (result == ANT_WS_FRAME_INCOMPLETE) return;
-    
-    if (result == ANT_WS_FRAME_TOO_BIG) {
-      websocket_fragment_clear(ws);
-      websocket_server_close_with_code(ws, conn, 1009, "Message Too Big");
-      return;
-    }
-    
-    if (result == ANT_WS_FRAME_PROTOCOL_ERROR) {
-      websocket_emit_simple(js, ws, WS_HANDLER_ERROR);
-      ant_conn_close(conn);
+    if (result != ANT_WS_FRAME_OK) {
+      websocket_fail_parse(js, ws, result);
       return;
     }
 
     ant_conn_consume(conn, frame.consumed_len);
-    if (frame.opcode < sizeof(dispatch) / sizeof(*dispatch) && dispatch[frame.opcode])
-      goto *dispatch[frame.opcode];
-    goto l_done;
-
-    l_message:
-      if (ws->fragmenting) goto l_protocol_error;
-      if (frame.payload_len > ws->max_payload_len) goto l_too_big;
-      if (frame.fin) {
-        if (frame.rsv1) {
-          uint8_t *inflated = NULL;
-          size_t inflated_len = 0;
-          if (!websocket_inflate_message(ws, frame.payload, frame.payload_len, ws->max_payload_len, &inflated, &inflated_len))
-            goto l_protocol_error;
-          websocket_emit_message(js, ws, inflated, inflated_len, frame.opcode == ANT_WS_OPCODE_BINARY);
-          free(inflated);
-        } else websocket_emit_message(js, ws, frame.payload, frame.payload_len, frame.opcode == ANT_WS_OPCODE_BINARY);
-      } else {
-        ws->fragmenting = true;
-        ws->fragment_opcode = frame.opcode;
-        ws->fragment_compressed = frame.rsv1;
-        if (!websocket_fragment_append(ws, frame.payload, frame.payload_len)) goto l_protocol_error;
-      }
-      goto l_done;
-
-    l_continuation:
-      if (!ws->fragmenting) goto l_protocol_error;
-      if (frame.rsv1) goto l_protocol_error;
-      if (!websocket_fragment_append(ws, frame.payload, frame.payload_len)) goto l_protocol_error;
-      if (ws->fragment_len > ws->max_payload_len) goto l_too_big;
-      if (frame.fin) {
-        if (ws->fragment_compressed) {
-          uint8_t *inflated = NULL;
-          size_t inflated_len = 0;
-          if (!websocket_inflate_message(ws, ws->fragment_buf, ws->fragment_len, ws->max_payload_len, &inflated, &inflated_len))
-            goto l_protocol_error;
-          websocket_emit_message(js, ws, inflated, inflated_len, ws->fragment_opcode == ANT_WS_OPCODE_BINARY);
-          free(inflated);
-        } else websocket_emit_message(js, ws, ws->fragment_buf, ws->fragment_len, ws->fragment_opcode == ANT_WS_OPCODE_BINARY);
-        websocket_fragment_reset(ws);
-      }
-      goto l_done;
-
-    l_ping: {
-      size_t out_len = 0;
-      uint8_t *out = ant_ws_encode_frame(ANT_WS_OPCODE_PONG, frame.payload, frame.payload_len, false, false, &out_len);
-      if (out) ant_conn_write(conn, (char *)out, out_len, NULL, NULL);
-      goto l_done;
-    }
-
-    l_close: {
-      uint16_t code = 1000;
-      const char *reason = "";
-      char reason_buf[124];
-      if (frame.payload_len >= 2) {
-        code = (uint16_t)(((uint16_t)frame.payload[0] << 8) | frame.payload[1]);
-        size_t reason_len = frame.payload_len - 2;
-        if (reason_len > sizeof(reason_buf) - 1) reason_len = sizeof(reason_buf) - 1;
-        if (reason_len > 0) memcpy(reason_buf, frame.payload + 2, reason_len);
-        reason_buf[reason_len] = '\0';
-        reason = reason_buf;
-      }
-      size_t out_len = 0;
-      uint8_t *out = ant_ws_encode_frame(ANT_WS_OPCODE_CLOSE, frame.payload, frame.payload_len, false, false, &out_len);
-      if (out) ant_conn_write(conn, (char *)out, out_len, NULL, NULL);
-      websocket_emit_close(js, ws, code, reason, true);
-      ant_conn_shutdown(conn);
-      goto l_done;
-    }
-
-    l_protocol_error:
-      websocket_emit_simple(js, ws, WS_HANDLER_ERROR);
-      ant_ws_frame_clear(&frame);
-      ant_conn_close(conn);
-      return;
-
-    l_too_big:
-      websocket_fragment_clear(ws);
-      ant_ws_frame_clear(&frame);
-      websocket_server_close_with_code(ws, conn, 1009, "Message Too Big");
-      return;
-
-    l_done:
-    ant_ws_frame_clear(&frame);
+    if (!websocket_handle_frame(js, ws, &frame)) return;
   }
 }
 
@@ -951,7 +1090,7 @@ void cleanup_websocket_module(ant_t *js) {
     next = ws->next;
     if (!ws->is_client) continue;
     ws->close_emitted = true;
-    websocket_close_client(ws, 1001, false);
+    websocket_close_client(ws);
   }
 }
 

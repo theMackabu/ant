@@ -113,7 +113,7 @@ static void test_eventsource_format_and_parse(void) {
   ant_sse_parser_t parser;
   sse_capture_t capture = {0};
   const char first[] = "event: greeting\nid: 7\nretry: 1500\ndata: hello\n";
-  ant_sse_parser_init(&parser);
+  ant_sse_parser_init(&parser, 0);
   check_bool("sse parser feed first chunk", ant_sse_parser_feed(&parser, first, strlen(first), capture_sse_message, &capture), true);
   const char second[] = "data: world\n\n";
   check_bool("sse parser feed second chunk", ant_sse_parser_feed(&parser, second, strlen(second), capture_sse_message, &capture), true);
@@ -121,6 +121,22 @@ static void test_eventsource_format_and_parse(void) {
   check_str("sse parser last event id", parser.last_event_id, "7");
   check_bool("sse parser reconnect retry flag", parser.has_retry, true);
   check_size("sse parser reconnect retry", parser.retry, 1500);
+  ant_sse_parser_free(&parser);
+
+  sse_capture_t ignored = {0};
+  const char long_line[] = "data: 0123456789abcdef";
+  ant_sse_parser_init(&parser, 16);
+  check_bool("sse parser rejects an unfinished line over the limit", ant_sse_parser_feed(&parser, long_line, strlen(long_line), NULL, &ignored), false);
+  ant_sse_parser_free(&parser);
+
+  const char many_lines[] = "data: 01234\ndata: 56789\ndata: abcde\n";
+  ant_sse_parser_init(&parser, 16);
+  check_bool("sse parser rejects accumulated data over the limit", ant_sse_parser_feed(&parser, many_lines, strlen(many_lines), NULL, &ignored), false);
+  ant_sse_parser_free(&parser);
+
+  const char short_events[] = "data: 01234\n\ndata: 56789\n\ndata: abcde\n\n";
+  ant_sse_parser_init(&parser, 16);
+  check_bool("sse parser accepts events under the limit", ant_sse_parser_feed(&parser, short_events, strlen(short_events), NULL, &ignored), true);
   ant_sse_parser_free(&parser);
 }
 

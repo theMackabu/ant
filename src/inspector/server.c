@@ -1,16 +1,16 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+
 #include "ascii.h"
 #include "bind.h"
+#include "reactor.h"
 #include "isolate.h"
 #include "inspector.h"
 #include "http/http1_parser.h"
 #include "http/websocket.h"
 #include "modules/crypto.h"
-#include "reactor.h"
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <strings.h>
 
 static void inspector_process_ws(inspector_client_t *client) {
   ant_conn_t *conn = client->conn;
@@ -23,9 +23,17 @@ static void inspector_process_ws(inspector_client_t *client) {
     );
     
     if (r == ANT_WS_FRAME_INCOMPLETE) return;
-    if (r != ANT_WS_FRAME_OK || frame.opcode == ANT_WS_OPCODE_CLOSE) {
-      ant_ws_frame_clear(&frame);
+    if (r != ANT_WS_FRAME_OK) {
       ant_conn_close(conn);
+      return;
+    }
+    
+    if (frame.opcode == ANT_WS_OPCODE_CLOSE) {
+      size_t len = 0;
+      uint8_t *close = ant_ws_encode_frame(ANT_WS_OPCODE_CLOSE, frame.payload, frame.payload_len >= 2 ? 2 : 0, false, false, &len);
+      if (close && ant_conn_write(conn, (char *)close, len, NULL, NULL) != 0) free(close);
+      ant_ws_frame_clear(&frame);
+      ant_conn_shutdown(conn);
       return;
     }
     

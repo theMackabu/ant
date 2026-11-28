@@ -148,7 +148,7 @@ static uint64_t ant_ws_read_u64_be(const uint8_t *data) {
 ant_ws_frame_result_t ant_ws_parse_frame(
   uint8_t *data,
   size_t len,
-  bool require_mask,
+  bool expect_mask,
   bool allow_rsv1,
   bool inplace,
   size_t max_payload,
@@ -169,7 +169,8 @@ ant_ws_frame_result_t ant_ws_parse_frame(
 
   if ((data[0] & 0x30u) != 0) return ANT_WS_FRAME_PROTOCOL_ERROR;
   if ((data[0] & 0x40u) != 0 && !allow_rsv1) return ANT_WS_FRAME_PROTOCOL_ERROR;
-  if (require_mask && !masked) return ANT_WS_FRAME_PROTOCOL_ERROR;
+  if (masked != expect_mask) return ANT_WS_FRAME_PROTOCOL_ERROR;
+  if (opcode > ANT_WS_OPCODE_PONG || (opcode > ANT_WS_OPCODE_BINARY && opcode < ANT_WS_OPCODE_CLOSE)) return ANT_WS_FRAME_PROTOCOL_ERROR;
   if (opcode >= 0x8 && ((data[0] & 0x80u) == 0 || payload_len > 125)) return ANT_WS_FRAME_PROTOCOL_ERROR;
   if (opcode >= 0x8 && (data[0] & 0x40u) != 0) return ANT_WS_FRAME_PROTOCOL_ERROR;
 

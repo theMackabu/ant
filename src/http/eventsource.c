@@ -14,8 +14,10 @@ void ant_sse_message_clear(ant_sse_message_t *message) {
   memset(message, 0, sizeof(*message));
 }
 
-void ant_sse_parser_init(ant_sse_parser_t *parser) {
-  if (parser) memset(parser, 0, sizeof(*parser));
+void ant_sse_parser_init(ant_sse_parser_t *parser, size_t max_event_size) {
+  if (!parser) return;
+  memset(parser, 0, sizeof(*parser));
+  parser->max_event_size = max_event_size ? max_event_size : ANT_SSE_DEFAULT_MAX_EVENT_SIZE;
 }
 
 static void parser_reset_event(ant_sse_parser_t *parser) {
@@ -24,6 +26,8 @@ static void parser_reset_event(ant_sse_parser_t *parser) {
   free(parser->event);
   free(parser->id);
   parser->data = NULL;
+  parser->data_len = 0;
+  parser->data_cap = 0;
   parser->event = NULL;
   parser->id = NULL;
 }
@@ -66,18 +70,8 @@ static bool set_string(char **slot, const char *value, size_t len) {
 }
 
 static bool append_data_field(ant_sse_parser_t *parser, const char *value, size_t len) {
-  size_t cur_len = parser->data ? strlen(parser->data) : 0;
-  size_t cap = cur_len + len + 2;
-  char *next = realloc(parser->data, cap);
-  
-  if (!next) return false;
-  parser->data = next;
-  
-  if (len > 0) memcpy(parser->data + cur_len, value, len);
-  parser->data[cur_len + len] = '\n';
-  parser->data[cur_len + len + 1] = '\0';
-  
-  return true;
+  if (!append_bytes(&parser->data, &parser->data_len, &parser->data_cap, value, len)) return false;
+  return append_bytes(&parser->data, &parser->data_len, &parser->data_cap, "\n", 1);
 }
 
 static bool parse_retry(const char *value, size_t len, uint32_t *out) {
@@ -101,8 +95,7 @@ static bool dispatch_event(ant_sse_parser_t *parser, ant_sse_message_cb cb, void
     return true;
   }
 
-  size_t data_len = strlen(parser->data);
-  if (data_len > 0 && parser->data[data_len - 1] == '\n') parser->data[data_len - 1] = '\0';
+  if (parser->data_len > 0) parser->data[parser->data_len - 1] = '\0';
 
   ant_sse_message_t message = {
     .data = parser->data,
@@ -116,6 +109,8 @@ static bool dispatch_event(ant_sse_parser_t *parser, ant_sse_message_cb cb, void
   bool ok = cb ? cb(&message, user_data) : true;
   
   parser->data = NULL;
+  parser->data_len = 0;
+  parser->data_cap = 0;
   parser->event = NULL;
   parser->id = NULL;
   ant_sse_message_clear(&message);
@@ -175,6 +170,7 @@ bool ant_sse_parser_feed(
       continue;
     }
     
+    if (parser->line_len >= parser->max_event_size - parser->data_len) return false;
     if (parser->line_len + 2 > parser->line_cap) {
       size_t next_cap = parser->line_cap ? parser->line_cap * 2 : 128;
       char *next = realloc(parser->line, next_cap);
