@@ -20,6 +20,7 @@
 
 void gc_state_init(ant_t *js) {
   js->gc.nursery_threshold = GC_NURSERY_THRESHOLD;
+  js->gc.closure_nursery = GC_CLOSURE_NURSERY_FLOOR;
   js->gc.major_every_n = GC_MAJOR_EVERY_N_MINOR;
   js->gc.major_live_growth_x256 = 384;
   js->gc.major_pool_growth_x256 = 384;
@@ -120,6 +121,29 @@ static void gc_adapt_nursery(ant_t *js, size_t young_before, size_t survivors) {
     js->gc.nursery_threshold -= js->gc.nursery_threshold / 4;
   else if (js->gc.nursery_threshold < GC_NURSERY_THRESHOLD)
     js->gc.nursery_threshold = GC_NURSERY_THRESHOLD;
+}
+
+static size_t gc_root_words(ant_t *js) {
+  uintptr_t base = (uintptr_t)js->cstk.base, sp = gc_native_sp();
+  size_t words = base > sp ? (base - sp) / sizeof(uint64_t) : 0;
+  return words + (js->vm ? (size_t)js->vm->sp : 0);
+}
+
+static void gc_adapt_closure_nursery(ant_t *js, size_t closures, size_t promoted, size_t young, size_t survivors) {
+  bool closure_sample = closures >= GC_CLOSURE_NURSERY_FLOOR / 4;
+  bool object_sample = young >= GC_NURSERY_THRESHOLD / 16;
+  
+  if (closure_sample || object_sample) js->gc.closure_sticky =
+    (closure_sample && promoted >= closures / 4) ||
+    (object_sample && survivors * 256 >= young * GC_SKIP_MINOR_SURVIVAL);
+  
+  size_t limit = js->gc.closure_sticky
+    ? GC_CLOSURE_NURSERY_THRESHOLD
+    : GC_CLOSURE_NURSERY_FLOOR + gc_root_words(js);
+  
+  if (limit > GC_CLOSURE_NURSERY_THRESHOLD) limit = GC_CLOSURE_NURSERY_THRESHOLD;
+  js->gc.closure_nursery = limit;
+  js->young_closure_trigger = limit;
 }
 
 static size_t gc_array_growth(size_t base) {
@@ -410,6 +434,8 @@ void gc_run_minor(ant_t *js) {
   size_t old_before   = js->old_live_count;
   size_t live_before  = js->obj_arena.live_count;
   size_t young_before = live_before > old_before ? live_before - old_before : 0;
+  size_t closures_before = js->young_closure_len;
+  size_t promoted_before = js->gc_closure_promoted_since_major;
   js->gc.alloc_since_major += gc_young_alloc_bytes(js);
 
   for (size_t i = 0; i < js->rope_gc.remembered_builder_len; i++)
@@ -430,6 +456,7 @@ void gc_run_minor(ant_t *js) {
   js->gc.offheap_alloc = 0;
   
   gc_adapt_nursery(js, young_before, survivors);
+  gc_adapt_closure_nursery(js, closures_before, js->gc_closure_promoted_since_major - promoted_before, young_before, survivors);
   js->gc.skip_probe = false;
   
   js->gc.arrays_at_collect = js->alloc_bytes.arrays;
@@ -493,7 +520,7 @@ static void gc_decide(ant_t *js) {
 
   if (
     js->gc.skip_minors &&
-    closure_young < GC_CLOSURE_NURSERY_THRESHOLD &&
+    closure_young < js->gc.closure_nursery &&
     js->gc.offheap_alloc < GC_OFFHEAP_NURSERY_THRESHOLD
   ) 
   { gc_decide_skipping_minors(js); return; }
@@ -501,7 +528,7 @@ static void gc_decide(ant_t *js) {
   if (
     young_count >= js->gc.nursery_threshold              ||
     js->rope_gc.young_alloc >= GC_ROPE_NURSERY_THRESHOLD ||
-    closure_young >= GC_CLOSURE_NURSERY_THRESHOLD        ||
+    closure_young >= js->gc.closure_nursery              ||
     js->gc.offheap_alloc >= GC_OFFHEAP_NURSERY_THRESHOLD ||
     js->alloc_bytes.arrays >= js->gc.array_limit
   ) {

@@ -298,6 +298,7 @@ export function targets() {
     'test_function_kind_constructors.cjs',
     'test_dynamic_import_tla_dependency.mjs',
     'test_gc_array_cards.cjs',
+    'test_gc_closure_nursery.cjs',
     'test_gc_compiled_code.cjs',
     'test_error_cause_proxy_options.cjs',
     'test_gc_import_job_roots.mjs',

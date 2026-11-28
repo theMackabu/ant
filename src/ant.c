@@ -125,7 +125,7 @@ static ant_t *isolate_init(void *buf, size_t len, const ant_isolate_options_t *o
   if (!isolate_arenas_init(js, options)) return NULL;
   if (!Ant_Host_Init(js)) return NULL;
 
-  js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
+  js->young_closure_trigger = GC_CLOSURE_NURSERY_FLOOR;
   js->c_root_cap = 64;
   js->c_roots = calloc(js->c_root_cap, sizeof(*js->c_roots));
   
