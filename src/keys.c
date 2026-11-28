@@ -1584,25 +1584,29 @@ static ant_value_t copy_key_snapshot_props(
   return result;
 }
 
+bool js_shape_is_plain_data(ant_t *js, const ant_shape_t *shape) {
+  if (ant_shape_may_have_index_keys(shape)) return false;
+  for (uint32_t i = 0, count = ant_shape_count(shape); i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(shape, i);
+    if (!prop || prop->type != ANT_SHAPE_KEY_STRING || prop->has_getter || prop->has_setter) return false;
+    if (ant_shape_get_attrs(shape, i) != ANT_PROP_ATTR_DEFAULT || ant_property_key_is_watched(js, prop->key.interned)) return false;
+  }
+  return true;
+}
+
 static bool copy_adopt_shape(ant_t *js, ant_value_t dst, ant_object_t *src, bool via_set) {
   ant_object_t *dst_ptr = vtype(dst) == kTypeObject ? js_obj_ptr(dst) : NULL;
   ant_shape_t *shape = src->shape;
   uint32_t count = ant_shape_count(shape);
   
   if (
-    count == 0 || count > src->prop_count || ant_shape_may_have_index_keys(shape) ||
+    count == 0 || count > src->prop_count ||
     (ant_object_protector_holder(src) & ANT_PROTECTOR_HOLDER_WATCHED) || !dst_ptr ||
     ant_shape_proto(shape) != ant_object_proto(dst_ptr) || !dst_ptr->shape || ant_shape_count(dst_ptr->shape) != 0 || dst_ptr->prop_count != 0 ||
     dst_ptr->flags.is_exotic || !dst_ptr->flags.extensible || dst_ptr->type_tag != kTypeObject ||
     ant_object_inobj_limit(dst_ptr) != ant_shape_get_inobj_limit(shape) ||
-    (via_set && vtype(js_string_wrapper_value(dst)) == kTypeString)
+    (via_set && vtype(js_string_wrapper_value(dst)) == kTypeString) || !js_shape_is_plain_data(js, shape)
   ) return false;
-  
-  for (uint32_t i = 0; i < count; i++) {
-    const ant_shape_prop_t *prop = ant_shape_prop_at(shape, i);
-    if (!prop || prop->type != ANT_SHAPE_KEY_STRING || prop->has_getter || prop->has_setter) return false;
-    if (ant_shape_get_attrs(shape, i) != ANT_PROP_ATTR_DEFAULT || ant_property_key_is_watched(js, prop->key.interned)) return false;
-  }
   
   for (uint32_t i = 0; via_set && i < count; i++)
     if (!chain_lacks_plain_key(ant_object_proto(dst_ptr), ant_shape_prop_at(shape, i)->key.interned)) return false;
@@ -1630,14 +1634,8 @@ static bool copy_same_shape(ant_t *js, ant_value_t dst, ant_object_t *src) {
   
   if (
     !dst_ptr || dst_ptr->shape != shape || count == 0 || count > src->prop_count || count > dst_ptr->prop_count ||
-    ant_shape_may_have_index_keys(shape) || dst_ptr->flags.is_exotic || dst_ptr->type_tag != kTypeObject
+    dst_ptr->flags.is_exotic || dst_ptr->type_tag != kTypeObject || !js_shape_is_plain_data(js, shape)
   ) return false;
-  
-  for (uint32_t i = 0; i < count; i++) {
-    const ant_shape_prop_t *prop = ant_shape_prop_at(shape, i);
-    if (!prop || prop->type != ANT_SHAPE_KEY_STRING || prop->has_getter || prop->has_setter) return false;
-    if (ant_shape_get_attrs(shape, i) != ANT_PROP_ATTR_DEFAULT || ant_property_key_is_watched(js, prop->key.interned)) return false;
-  }
   
   for (uint32_t i = 0; i < count; i++) {
     ant_value_t val = ant_object_prop_get_unchecked(src, i);

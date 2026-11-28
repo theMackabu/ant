@@ -147,6 +147,7 @@ collection_table_t *get_map_from_obj(ant_value_t obj);
 collection_table_t *get_set_from_obj(ant_value_t obj);
 
 collection_table_t *collections_table_attach(ant_t *js, ant_value_t obj, uint8_t type);
+collection_table_t *collections_table_create(void);
 void collections_table_free(collection_table_t *table);
 
 map_iterator_state_t *get_map_iter_state(ant_value_t obj);

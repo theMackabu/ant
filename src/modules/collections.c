@@ -452,6 +452,10 @@ static collection_table_t *collection_table_new(ant_object_t *owner) {
   return table;
 }
 
+collection_table_t *collections_table_create(void) {
+  return collection_table_new(NULL);
+}
+
 void collections_table_free(collection_table_t *table) {
   if (!table || table == &collection_empty_table) return;
   for (collection_iter_state_t *it = table->iters, *next; it; it = next) {

@@ -38,6 +38,7 @@ bool own_writable_data_slot(const ant_object_t *ptr, int32_t slot);
 bool own_index_list_push(own_index_list_t *list, uint32_t slot, unsigned long index);
 bool chain_lacks_plain_keys(ant_value_t start, const char *first, const char *second);
 bool chain_plain_get_interned(ant_value_t start, const char *interned, ant_value_t *out);
+bool js_shape_is_plain_data(ant_t *js, const ant_shape_t *shape);
 
 void own_index_list_init(own_index_list_t *list);
 void own_index_list_free(own_index_list_t *list);
